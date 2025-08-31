@@ -90,11 +90,6 @@ func (d *QuarkShare) getShareInfo(shareId, pwd string) (string, error) {
 
 func (d *QuarkShare) getShareFiles(ctx context.Context, virtualFile model.VirtualFile, dir model.Obj) ([]FileObj, error) {
 
-	err := limiter.WaitN(ctx, 1)
-	if err != nil {
-		return nil, err
-	}
-
 	stToken, err := d.getShareInfo(virtualFile.ShareID, virtualFile.SharePwd)
 	if err != nil {
 		return nil, err
@@ -117,6 +112,11 @@ func (d *QuarkShare) getShareFiles(ctx context.Context, virtualFile model.Virtua
 		cacheKey := buildCacheKeyFunc()
 		if cacheResp, exist := fileListRespCache.Get(cacheKey); exist {
 			return cacheResp
+		}
+
+		err = limiter.WaitN(ctx, 1)
+		if err != nil {
+			return fileResp
 		}
 
 		_, err = d.request("/1/clouddrive/share/sharepage/detail", http.MethodGet, func(req *resty.Request) {
