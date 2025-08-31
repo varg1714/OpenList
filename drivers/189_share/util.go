@@ -156,8 +156,20 @@ func (d *Cloud189Share) getShareFiles(ctx context.Context, virtualFile model.Vir
 }
 
 var regExpirationTime = regexp.MustCompile(`Expires=(\d+)`)
+var regAmzExpirationTime = regexp.MustCompile(`X-Amz-Expires=(\d+)`)
 
 func GetExpirationTime(url string) (etime time.Duration) {
+
+	amzExps := regAmzExpirationTime.FindStringSubmatch(url)
+	if len(amzExps) >= 2 {
+		timestamp, err := strconv.ParseInt(amzExps[1], 10, 64)
+		if err != nil {
+			return
+		}
+		etime = time.Duration(timestamp) * time.Second
+		return
+	}
+
 	exps := regExpirationTime.FindStringSubmatch(url)
 	if len(exps) < 2 {
 		return
