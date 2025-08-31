@@ -12,6 +12,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	"path/filepath"
+	"time"
 )
 
 type QuarkShare struct {
@@ -105,7 +106,12 @@ func (d *QuarkShare) Link(ctx context.Context, file model.Obj, args model.LinkAr
 
 	if link.URL != "" {
 		expirationTime := GetExpirationTime(link.URL)
-		link.Expiration = &expirationTime
+		if expirationTime == 0 && d.LinkCacheTime > 0 {
+			expirationTime = time.Duration(d.LinkCacheTime) * time.Second
+		}
+		if expirationTime > 0 {
+			link.Expiration = &expirationTime
+		}
 	}
 
 	go func() {

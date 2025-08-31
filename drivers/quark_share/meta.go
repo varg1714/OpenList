@@ -10,6 +10,7 @@ type Addition struct {
 	Cookie          string `json:"cookie" required:"true"`
 	QuarkDriverPath string `json:"QuarkDriverPath"`
 	TransferPath    string `json:"transferPath"`
+	LinkCacheTime   int    `json:"linkCacheTime" type:"number"`
 }
 
 var config = driver.Config{
