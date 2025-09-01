@@ -6,6 +6,7 @@ import (
 	"fmt"
 	stdpath "path"
 	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -148,10 +149,12 @@ func (d *Strm) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]
 }
 
 func (d *Strm) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	expiration := time.Duration(d.CacheExpiration) * time.Minute
 	if file.GetID() == "strm" {
 		link := d.getLink(ctx, file.GetPath())
 		return &model.Link{
-			MFile: strings.NewReader(link),
+			MFile:      strings.NewReader(link),
+			Expiration: &expiration,
 		}, nil
 	}
 	// ftp,s3

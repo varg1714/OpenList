@@ -17,7 +17,7 @@ type Addition struct {
 var config = driver.Config{
 	Name:          "Strm",
 	LocalSort:     true,
-	NoCache:       true,
+	NoCache:       false,
 	NoUpload:      true,
 	DefaultRoot:   "/",
 	OnlyLinkMFile: true,
