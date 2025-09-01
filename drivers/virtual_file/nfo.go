@@ -1,0 +1,294 @@
+package virtual_file
+
+import (
+	"encoding/xml"
+	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+)
+
+func CacheImageAndNfo(mediaInfo MediaInfo) int {
+
+	actorNfo := cacheActorNfo(mediaInfo)
+	if actorNfo == Exist {
+		return Exist
+	}
+
+	return CacheImage(mediaInfo)
+
+}
+
+func DeleteImageAndNfo(source, dir, fileName string) error {
+
+	sourceName := fileName[0:strings.LastIndex(fileName, ".")]
+
+	nameRegexp, _ := regexp.Compile("(.*?)(-cd\\d+)")
+
+	if nameRegexp.MatchString(sourceName) {
+
+		// 有多个文件
+		sourceName = nameRegexp.ReplaceAllString(sourceName, "$1")
+
+		filePath := filepath.Join(flags.DataDir, "emby", source, dir, fmt.Sprintf("%s-cd1.nfo", sourceName))
+		for i := 1; utils.Exists(filePath); {
+			err := os.Remove(filePath)
+			if err != nil {
+				return err
+			}
+			i++
+			filePath = filepath.Join(flags.DataDir, "emby", source, dir, fmt.Sprintf("%s-cd%d.nfo", sourceName, i))
+		}
+
+		filePath = filepath.Join(flags.DataDir, "emby", source, dir, fmt.Sprintf("%s-cd1.jpg", sourceName))
+		for i := 1; utils.Exists(filePath); {
+			err := os.Remove(filePath)
+			if err != nil {
+				return err
+			}
+			i++
+			filePath = filepath.Join(flags.DataDir, "emby", source, dir, fmt.Sprintf("%s-cd%d.jpg", sourceName, i))
+		}
+
+	} else {
+		// 删除nfo文件
+		filePath := filepath.Join(flags.DataDir, "emby", source, dir, sourceName+".nfo")
+		if utils.Exists(filePath) {
+			err := os.Remove(filePath)
+			if err != nil {
+				return err
+			}
+		}
+
+		// 删除img文件
+		filePath = filepath.Join(flags.DataDir, "emby", source, dir, sourceName+".jpg")
+		if utils.Exists(filePath) {
+			err := os.Remove(filePath)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+
+}
+
+func CacheImage(mediaInfo MediaInfo) int {
+
+	if mediaInfo.ImgUrl == "" {
+		return CreatedFailed
+	}
+
+	filePath := filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, mediaInfo.FileName)
+	if utils.Exists(filePath) {
+		return Exist
+	}
+
+	imgResp, err := base.RestyClient.R().SetHeaders(mediaInfo.ImgUrlHeaders).Get(mediaInfo.ImgUrl)
+	if err != nil {
+		utils.Log.Info("图片下载失败", err)
+		return CreatedFailed
+	}
+
+	err = os.MkdirAll(filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir), 0777)
+	if err != nil {
+		utils.Log.Info("图片缓存文件夹创建失败", err)
+		return CreatedFailed
+	}
+
+	err = os.WriteFile(filePath, imgResp.Body(), 0777)
+	if err != nil {
+		utils.Log.Info("图片缓存失败", err)
+		return CreatedFailed
+	}
+
+	return CreatedSuccess
+}
+
+func UpdateNfo(mediaInfo MediaInfo) {
+
+	cacheResult := cacheActorNfo(mediaInfo)
+	if cacheResult != Exist {
+		return
+	}
+
+	filePath := filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, clearFileName(mediaInfo.FileName)+".nfo")
+
+	file, err := os.ReadFile(filePath)
+	if err != nil {
+		utils.Log.Warnf("failed to read file:[%s], error message:%s", filePath, err.Error())
+		return
+	}
+
+	var media Media
+
+	err = xml.Unmarshal(file, &media)
+	if err != nil {
+		utils.Log.Warnf("failed to parse file[%s], error message:%s", filePath, err.Error())
+
+		utils.Log.Infof("try to delete the old nfo file: %s, and regenerate a new one", filePath)
+		err1 := os.Remove(filePath)
+		if err1 != nil {
+			utils.Log.Warnf("failed to delete the file:[%s], error message:%s", filePath, err.Error())
+		} else {
+			cacheActorNfo(mediaInfo)
+		}
+
+		return
+	}
+	if len(mediaInfo.Actors) > 0 {
+
+		actorSet := make(map[string]bool)
+		for _, actor := range mediaInfo.Actors {
+			actorSet[actor] = true
+		}
+		for _, actor := range media.Actor {
+			actorSet[actor.Name] = true
+		}
+
+		var actorInfos []Actor
+		for actor := range actorSet {
+			actorInfos = append(actorInfos, Actor{
+				Name: actor,
+			})
+		}
+		media.Actor = actorInfos
+	}
+
+	if mediaInfo.Release.Year() != 1 {
+		media.Release = mediaInfo.Release.Format(time.DateOnly)
+		media.Premiered = media.Release
+		media.Year = mediaInfo.Release.Format("2006")
+		media.Month = mediaInfo.Release.Format("01")
+	}
+
+	if mediaInfo.Title != "" {
+		media.Title.Inner = fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)
+		media.Plot.Inner = fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)
+	}
+
+	if len(mediaInfo.Tags) > 0 {
+		tagSet := make(map[string]bool)
+		for _, tag := range mediaInfo.Tags {
+			tagSet[tag] = true
+		}
+		for _, tag := range media.Tag {
+			tagSet[tag.Inner] = true
+		}
+
+		var tags []Inner
+		for tag := range tagSet {
+			tags = append(tags, Inner{
+				Inner: tag,
+			})
+		}
+		media.Tag = tags
+		media.Genre = tags
+
+	}
+
+	mediaXml, err := mediaToXML(&media)
+	if err != nil {
+		utils.Log.Infof("failed to parse media info:[%v] to xml, error message:%s", media, err.Error())
+		return
+	}
+	err = os.WriteFile(filePath, mediaXml, 0777)
+	if err != nil {
+		utils.Log.Infof("failed to write faile:[%v],error message:%s", mediaInfo, err.Error())
+	}
+
+}
+
+func ClearUnUsedFiles(source, dir string, fileNames []string) {
+
+	fileNamesSet := make(map[string]bool, len(fileNames))
+	for _, name := range fileNames {
+		fileNamesSet[clearFileName(name)] = true
+	}
+
+	parentDir := filepath.Join(flags.DataDir, "emby", source, dir)
+	readFiles, err := os.ReadDir(parentDir)
+	if err != nil {
+		utils.Log.Warnf("failed to read files:%s", err.Error())
+		return
+	}
+
+	for _, file := range readFiles {
+		ext := filepath.Ext(file.Name())
+		if !file.IsDir() && (ext == "nfo" || ext == "jpg") || !fileNamesSet[clearFileName(filepath.Base(file.Name()))] {
+			err1 := os.Remove(filepath.Join(parentDir, file.Name()))
+			if err1 != nil {
+				utils.Log.Warnf("failed to remove file:%s", file.Name())
+			} else {
+				utils.Log.Infof("file:%s has been deleted", file.Name())
+			}
+		}
+	}
+
+}
+
+func cacheActorNfo(mediaInfo MediaInfo) int {
+
+	fileName := mediaInfo.FileName
+	if fileName == "" {
+		return CreatedFailed
+	}
+
+	source := mediaInfo.Source
+	filePath := filepath.Join(flags.DataDir, "emby", source, mediaInfo.Dir, clearFileName(fileName)+".nfo")
+	if utils.Exists(filePath) {
+		return Exist
+	}
+
+	err := os.MkdirAll(filepath.Join(flags.DataDir, "emby", source, mediaInfo.Dir), 0777)
+	if err != nil {
+		utils.Log.Info("nfo缓存文件夹创建失败", err)
+		return CreatedFailed
+	}
+
+	var actorInfos []Actor
+	for _, actor := range mediaInfo.Actors {
+		actorInfos = append(actorInfos, Actor{
+			Name: actor,
+		})
+	}
+
+	var tags []Inner
+	for _, tag := range mediaInfo.Tags {
+		tags = append(tags, Inner{
+			Inner: tag,
+		})
+	}
+
+	releaseTime := mediaInfo.Release.Format(time.DateOnly)
+	media := Media{
+		Plot:      Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)},
+		Title:     Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)},
+		Actor:     actorInfos,
+		Release:   releaseTime,
+		Premiered: releaseTime,
+		Year:      mediaInfo.Release.Format("2006"),
+		Month:     mediaInfo.Release.Format("01"),
+		Tag:       tags,
+		Genre:     tags,
+	}
+
+	xml, err := mediaToXML(&media)
+	if err != nil {
+		utils.Log.Info("xml格式转换失败", err)
+		return CreatedFailed
+	}
+	err = os.WriteFile(filePath, xml, 0777)
+	if err != nil {
+		utils.Log.Infof("文件:%s的xml缓存失败:%v", fileName, err)
+	}
+
+	return CreatedSuccess
+
+}
