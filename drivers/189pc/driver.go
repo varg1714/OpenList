@@ -183,17 +183,10 @@ func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkAr
 			"User-Agent": []string{base.UserAgent},
 		},
 	}
-	/*
-		// 获取链接有效时常
-		strs := regexp.MustCompile(`(?i)expire[^=]*=([0-9]*)`).FindStringSubmatch(downloadUrl.URL)
-		if len(strs) == 2 {
-			timestamp, err := strconv.ParseInt(strs[1], 10, 64)
-			if err == nil {
-				expired := time.Duration(timestamp-time.Now().Unix()) * time.Second
-				like.Expiration = &expired
-			}
-		}
-	*/
+	expirationTime := GetExpirationTime(like.URL)
+	if expirationTime > 0 {
+		like.Expiration = &expirationTime
+	}
 	return like, nil
 }
 

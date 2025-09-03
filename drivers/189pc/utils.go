@@ -1264,3 +1264,30 @@ func (y *Cloud189PC) getClient() *resty.Client {
 	}
 	return y.client
 }
+
+var regExpirationTime = regexp.MustCompile(`Expires=(\d+)`)
+var regAmzExpirationTime = regexp.MustCompile(`X-Amz-Expires=(\d+)`)
+
+func GetExpirationTime(url string) (etime time.Duration) {
+
+	amzExps := regAmzExpirationTime.FindStringSubmatch(url)
+	if len(amzExps) >= 2 {
+		timestamp, err := strconv.ParseInt(amzExps[1], 10, 64)
+		if err != nil {
+			return
+		}
+		etime = time.Duration(timestamp) * time.Second
+		return
+	}
+
+	exps := regExpirationTime.FindStringSubmatch(url)
+	if len(exps) < 2 {
+		return
+	}
+	timestamp, err := strconv.ParseInt(exps[1], 10, 64)
+	if err != nil {
+		return
+	}
+	etime = time.Duration(timestamp-time.Now().Unix()) * time.Second
+	return
+}
