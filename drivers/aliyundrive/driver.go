@@ -126,7 +126,7 @@ func (d *AliDrive) Link(ctx context.Context, file model.Obj, args model.LinkArgs
 
 	utils.Log.Infof("开始转存文件:[%s]", file.GetName())
 
-	virtualFile := virtual_file.GetVirtualFile(d.ID, file.GetPath())
+	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
 
 	shareFileId, err := d.SaveShare(virtualFile.ShareID, file.GetID(), d.TempFolderPath)
 	if err != nil {

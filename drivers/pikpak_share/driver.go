@@ -107,7 +107,7 @@ func (d *PikPakShare) Link(ctx context.Context, file model.Obj, args model.LinkA
 
 	var resp ShareResp
 
-	virtualFile := virtual_file.GetVirtualFile(d.ID, file.GetPath())
+	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
 
 	sharePassToken, err := d.getSharePassToken(virtualFile)
 

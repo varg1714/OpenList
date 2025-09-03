@@ -89,7 +89,7 @@ func (d *QuarkShare) Link(ctx context.Context, file model.Obj, args model.LinkAr
 		}, nil
 	}
 
-	virtualFile := virtual_file.GetVirtualFile(d.ID, file.GetPath())
+	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
 
 	transformFile, err := d.transformFile(virtualFile, *fileObject)
 	if err != nil {

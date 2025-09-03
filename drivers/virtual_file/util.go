@@ -48,7 +48,7 @@ func List(storageId uint, dir model.Obj, fileFunc func(virtualFile model.Virtual
 		return results, nil
 	}
 
-	virtualFile := GetVirtualFile(storageId, dir.GetPath())
+	virtualFile := GetSubscription(storageId, dir.GetPath())
 
 	if virtualFile.ShareID != "" {
 
@@ -205,7 +205,7 @@ func MakeDir(storageId uint, parentDir model.Obj, param string) error {
 
 }
 
-func GetVirtualFile(storageId uint, path string) model.VirtualFile {
+func GetSubscription(storageId uint, path string) model.VirtualFile {
 
 	virtualMapFunc := func(parent string) map[string]model.VirtualFile {
 
@@ -254,7 +254,7 @@ func DeleteVirtualFile(storageId uint, obj model.Obj) error {
 			}
 		}
 	} else {
-		virtualFile := GetVirtualFile(storageId, obj.GetPath())
+		virtualFile := GetSubscription(storageId, obj.GetPath())
 		// delete file
 		replacement := model.Replacement{
 			StorageId: storageId,
@@ -271,7 +271,7 @@ func DeleteVirtualFile(storageId uint, obj model.Obj) error {
 
 func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 
-	targetVirtualFile := GetVirtualFile(storageId, targetDir.GetPath())
+	targetVirtualFile := GetSubscription(storageId, targetDir.GetPath())
 	if targetVirtualFile.ShareID != "" {
 		return errors.New("仅能移动到虚拟文件夹下")
 	}
@@ -283,7 +283,7 @@ func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 		return db.UpdateVirtualFile(virtualFile)
 	} else {
 		// add moved item
-		sourceVirtualFile := GetVirtualFile(storageId, srcObj.GetPath())
+		sourceVirtualFile := GetSubscription(storageId, srcObj.GetPath())
 
 		existMovedItem, err := db.QueryMovedItemByFileId(srcObj.GetID(), filepath.Dir(srcObj.GetPath()))
 		if err != nil {
@@ -311,16 +311,22 @@ func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 
 func Rename(storageId uint, dir, oldName, newName string) error {
 
-	virtualFile := GetVirtualFile(storageId, dir)
-	if fmt.Sprintf("%d", virtualFile.ID) == oldName {
+	virtualFiles, err := db.QueryVirtualFilesById(storageId, []string{oldName})
+	if err != nil {
+		return err
+	}
+
+	if len(virtualFiles) > 0 {
+		virtualFile := virtualFiles[0]
 		virtualFile.Name = newName
-		err := db.UpdateVirtualFile(virtualFile)
+		err = db.UpdateVirtualFile(virtualFile)
 		if err != nil {
 			return err
 		}
 		return nil
 	}
 
+	virtualFile := GetSubscription(storageId, dir)
 	return db.Rename(storageId, virtualFile.ShareID, oldName, newName)
 }
 
@@ -439,7 +445,7 @@ func getMovedFiles(storageId uint, dir model.Obj, fileFunc func(virtualFile mode
 	}
 
 	for path, parentObjs := range movedPath {
-		virtualFile := GetVirtualFile(storageId, path)
+		virtualFile := GetSubscription(storageId, path)
 		if virtualFile.ShareID == "" {
 			// virtual dir, only need to query subdirectories
 			subFiles, err1 := db.QueryVirtualFilesById(storageId, parentObjs)

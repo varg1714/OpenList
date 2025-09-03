@@ -81,7 +81,7 @@ func (d *Cloud189Share) Link(ctx context.Context, file model.Obj, args model.Lin
 		}, nil
 	}
 
-	virtualFile := virtual_file.GetVirtualFile(d.ID, file.GetPath())
+	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
 	shareInfo, err := d.getShareInfo(virtualFile.ShareID, virtualFile.SharePwd)
 	if err != nil {
 		return nil, err
