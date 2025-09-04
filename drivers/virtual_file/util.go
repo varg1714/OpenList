@@ -10,6 +10,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/dlclark/regexp2"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -311,19 +312,22 @@ func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 
 func Rename(storageId uint, dir, oldName, newName string) error {
 
-	virtualFiles, err := db.QueryVirtualFilesById(storageId, []string{oldName})
-	if err != nil {
-		return err
-	}
-
-	if len(virtualFiles) > 0 {
-		virtualFile := virtualFiles[0]
-		virtualFile.Name = newName
-		err = db.UpdateVirtualFile(virtualFile)
-		if err != nil {
-			return err
+	_, err := strconv.Atoi(oldName)
+	if err == nil {
+		virtualFiles, err1 := db.QueryVirtualFilesById(storageId, []string{oldName})
+		if err1 != nil {
+			return err1
 		}
-		return nil
+
+		if len(virtualFiles) > 0 {
+			virtualFile := virtualFiles[0]
+			virtualFile.Name = newName
+			err1 = db.UpdateVirtualFile(virtualFile)
+			if err1 != nil {
+				return err1
+			}
+			return nil
+		}
 	}
 
 	virtualFile := GetSubscription(storageId, dir)
