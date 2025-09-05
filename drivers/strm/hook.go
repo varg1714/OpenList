@@ -7,30 +7,53 @@ import (
 	stdpath "path"
 	"strings"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
 
+var strmMap = make(map[uint]*Strm)
+
 func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
 	storage, _, err := op.GetStorageAndActualPath(parent)
 	if err != nil {
 		return
 	}
+	if d, ok := storage.(*Strm); !ok {
+		// 判断非strm驱动的路径是否被strm驱动挂载
+		for id := range strmMap {
+			strmDriver := strmMap[id]
+			if !strmDriver.SaveStrmToLocal {
+				continue
+			}
+			for _, path := range strings.Split(strmDriver.Paths, "\n") {
+				path = strings.TrimSpace(path)
+				if path == "" {
+					continue
+				}
+				// 如果被挂载则访问strm对应路径触发更新
+				if strings.HasPrefix(parent, path+"/") || parent == path {
+					strmPath := path[strings.LastIndex(path, "/"):]
+					relPath := stdpath.Join(strmDriver.MountPath, strmPath, strings.TrimPrefix(parent, path))
+					if len(relPath) > 0 {
+						_, _ = fs.List(ctx, relPath, &fs.ListArgs{Refresh: false, NoLog: true})
+					}
+				}
+			}
+		}
+	} else {
+		if d.SaveStrmToLocal {
+			relParent := strings.TrimPrefix(parent, d.MountPath)
+			localParentPath := stdpath.Join(d.SaveStrmLocalPath, relParent)
 
-	d, ok := storage.(*Strm)
-	if !ok || !d.SaveStrmToLocal {
-		return
+			generateStrm(ctx, d, localParentPath, objs)
+			deleteExtraFiles(localParentPath, objs)
+
+			log.Infof("Updating Strm Path %s", localParentPath)
+		}
 	}
-
-	relParent := strings.TrimPrefix(parent, d.MountPath)
-	localParentPath := stdpath.Join(d.SaveStrmLocalPath, relParent)
-
-	generateStrm(ctx, d, localParentPath, objs)
-	deleteExtraFiles(localParentPath, objs)
-
-	log.Infof("Updating Strm Path %s", localParentPath)
 }
 
 func getLocalFiles(localPath string) ([]string, error) {

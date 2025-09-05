@@ -82,6 +82,8 @@ func (d *Strm) Init(ctx context.Context) error {
 			}
 		}
 	}
+
+	strmMap[d.Storage.ID] = d
 	return nil
 }
 
