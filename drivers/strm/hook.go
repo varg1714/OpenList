@@ -2,14 +2,15 @@ package strm
 
 import (
 	"context"
-	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/internal/op"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"os"
 	stdpath "path"
 	"strings"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	log "github.com/sirupsen/logrus"
 )
 
 func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
@@ -35,16 +36,23 @@ func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
 func getLocalFiles(localPath string) ([]string, error) {
 	var files []string
 	entries, err := os.ReadDir(localPath)
+	if err != nil {
+		return nil, err
+	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			files = append(files, stdpath.Join(localPath, entry.Name()))
 		}
 	}
-	return files, err
+	return files, nil
 }
 
 func deleteExtraFiles(localPath string, objs []model.Obj) {
-	localFiles, _ := getLocalFiles(localPath)
+	localFiles, err := getLocalFiles(localPath)
+	if err != nil {
+		log.Errorf("Failed to read local files from %s: %v", localPath, err)
+		return
+	}
 
 	objsSet := make(map[string]struct{})
 	for _, obj := range objs {
@@ -74,18 +82,18 @@ func generateStrm(ctx context.Context, d *Strm, localParentPath string, objs []m
 		link, linkErr := d.Link(ctx, obj, model.LinkArgs{})
 		if linkErr != nil {
 			log.Errorf("get link failed, %s", linkErr)
-			return
+			continue
 		}
 		localPath := stdpath.Join(localParentPath, obj.GetName())
 		file, createErr := utils.CreateNestedFile(localPath)
 		if createErr != nil {
 			log.Errorf("create nested file failed, %s", createErr)
-			return
+			continue
 		}
 		_, copyErr := io.Copy(file, link.MFile)
 		if copyErr != nil {
 			log.Errorf("copy nested file failed: %s", copyErr)
-			return
+			continue
 		}
 		_ = file.Close()
 	}
