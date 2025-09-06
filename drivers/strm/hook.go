@@ -34,7 +34,7 @@ func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
 					continue
 				}
 				// 如果被挂载则访问strm对应路径触发更新
-				if strings.HasPrefix(parent, path+"/") || parent == path {
+				if strings.HasPrefix(parent, path) || strings.HasPrefix(parent, path+"/") || parent == path {
 					strmPath := path[strings.LastIndex(path, "/"):]
 					relPath := stdpath.Join(strmDriver.MountPath, strmPath, strings.TrimPrefix(parent, path))
 					if len(relPath) > 0 {
