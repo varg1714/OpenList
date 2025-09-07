@@ -92,20 +92,34 @@ func CacheImage(mediaInfo MediaInfo) int {
 
 	imgResp, err := base.RestyClient.R().SetHeaders(mediaInfo.ImgUrlHeaders).Get(mediaInfo.ImgUrl)
 	if err != nil {
-		utils.Log.Info("图片下载失败", err)
+		utils.Log.Warnf("failed to download the image file: %s", err.Error())
 		return CreatedFailed
 	}
 
 	err = os.MkdirAll(filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir), 0777)
 	if err != nil {
-		utils.Log.Info("图片缓存文件夹创建失败", err)
+		utils.Log.Warnf("failed to make directory: %s", err.Error())
 		return CreatedFailed
 	}
 
 	err = os.WriteFile(filePath, imgResp.Body(), 0777)
 	if err != nil {
-		utils.Log.Info("图片缓存失败", err)
+		utils.Log.Warnf("failed to write file: %s", err.Error())
 		return CreatedFailed
+	}
+
+	ext := filepath.Ext(mediaInfo.FileName)
+	fileName := strings.TrimSuffix(mediaInfo.FileName, ext)
+
+	destFilePath := filepath.Join(filepath.Dir(filePath), fmt.Sprintf("%s-background%s", fileName, ext))
+
+	if _, err1 := os.Stat(destFilePath); err1 == nil {
+		return CreatedSuccess
+	}
+
+	err1 := os.Symlink(mediaInfo.FileName, destFilePath)
+	if err1 != nil {
+		utils.Log.Warnf("failed to generate backgroud image, error message: %s", err1.Error())
 	}
 
 	return CreatedSuccess

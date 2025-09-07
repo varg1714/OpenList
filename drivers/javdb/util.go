@@ -35,7 +35,7 @@ func (d *Javdb) fetchFilms(dirName string, urlFunc func(index int) string) {
 
 	for index := 1; index <= 20 && nextPage && !existFilmFlag; index++ {
 
-		films, tempNextPage, err := d.getJavPageInfo(urlFunc, index, newFilms)
+		films, tempNextPage, err := d.getJavPageInfo(urlFunc, index)
 		if err != nil {
 			utils.Log.Warnf("failed to query javdb films, error message: %s", err.Error())
 			break
@@ -188,7 +188,7 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 
 	javFilms, _, err := d.getJavPageInfo(func(index int) string {
 		return fmt.Sprintf("https://javdb.com/search?f=download&q=%s", code)
-	}, 1, []model.EmbyFileObj{})
+	}, 1)
 	if err != nil {
 		utils.Log.Info("jav影片查询失败:", err)
 		return model.EmbyFileObj{}, err

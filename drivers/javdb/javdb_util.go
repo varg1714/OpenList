@@ -11,9 +11,10 @@ import (
 	"time"
 )
 
-func (d *Javdb) getJavPageInfo(urlFunc func(index int) string, index int, data []model.EmbyFileObj) ([]model.EmbyFileObj, bool, error) {
+func (d *Javdb) getJavPageInfo(urlFunc func(index int) string, index int) ([]model.EmbyFileObj, bool, error) {
 
 	var nextPage bool
+	var data []model.EmbyFileObj
 
 	filter := strings.Split(d.Addition.Filter, ",")
 
