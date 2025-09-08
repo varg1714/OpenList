@@ -275,6 +275,8 @@ func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 	targetVirtualFile := GetSubscription(storageId, targetDir.GetPath())
 	if targetVirtualFile.ShareID != "" {
 		return errors.New("仅能移动到虚拟文件夹下")
+	} else if targetDir.GetPath() == "/" {
+		return errors.New("不可直接移动到根目录下")
 	}
 
 	if virDir, ok := srcObj.(*model.ObjVirtualDir); ok {
@@ -295,7 +297,7 @@ func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 		oldSource := filepath.Join(parentPaths...)
 		newSource := targetDir.GetPath()
 		oldRealPath := strings.TrimPrefix(virDir.GetPath(), oldSource)
-		err := db.UpdateMovedItemSource(storageId, virDir.GetPath(), newSource+oldRealPath)
+		err := db.UpdateMovedItemSource(storageId, virDir.GetPath(), filepath.Join(newSource, oldRealPath))
 		if err != nil {
 			return err
 		}
