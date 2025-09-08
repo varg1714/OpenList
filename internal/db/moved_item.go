@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/pkg/errors"
+	"gorm.io/gorm"
 )
 
 func CreateMovedItem(movedItem model.MovedItem) error {
@@ -35,4 +36,15 @@ func QueryMovedItemByFileId(fileId, sourcePath string) (model.MovedItem, error) 
 
 func UpdateMovedItem(movedItem model.MovedItem) error {
 	return errors.WithStack(db.Updates(&movedItem).Error)
+}
+
+func UpdateMovedItemSource(storageId uint, oldSource, newSource string) error {
+
+	tx := db.Model(&model.MovedItem{}).Where("storage_id = ?", storageId).Where("source like ?", fmt.Sprintf("%s%%", oldSource)).
+		Updates(map[string]interface{}{
+			"source": gorm.Expr("replace(source, ?, ?)", oldSource, newSource),
+		})
+
+	return errors.WithStack(tx.Error)
+
 }

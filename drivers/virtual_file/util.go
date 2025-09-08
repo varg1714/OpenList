@@ -278,7 +278,27 @@ func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 	}
 
 	if virDir, ok := srcObj.(*model.ObjVirtualDir); ok {
-		// update parent
+
+		// update the source path for moved items when moving a subscription directory
+		split := strings.Split(virDir.GetPath(), "/")
+		parentPaths := []string{"/"}
+		for _, parent := range split {
+			if parent != "" {
+				parentPaths = append(parentPaths, parent)
+			}
+
+			if parent == virDir.Parent {
+				break
+			}
+		}
+
+		oldSource := filepath.Join(parentPaths...)
+		newSource := targetDir.GetPath()
+		err := db.UpdateMovedItemSource(storageId, oldSource, newSource)
+		if err != nil {
+			return err
+		}
+
 		virtualFile := virDir.VirtualFile
 		virtualFile.Parent = targetDir.GetID()
 		return db.UpdateVirtualFile(virtualFile)
