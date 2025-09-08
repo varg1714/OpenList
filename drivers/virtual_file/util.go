@@ -294,7 +294,8 @@ func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 
 		oldSource := filepath.Join(parentPaths...)
 		newSource := targetDir.GetPath()
-		err := db.UpdateMovedItemSource(storageId, oldSource, newSource)
+		oldRealPath := strings.TrimPrefix(virDir.GetPath(), oldSource)
+		err := db.UpdateMovedItemSource(storageId, virDir.GetPath(), newSource+oldRealPath)
 		if err != nil {
 			return err
 		}

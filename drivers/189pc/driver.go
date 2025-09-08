@@ -432,7 +432,18 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 	link, err := y.Link(ctx, transferFile, model.LinkArgs{})
 
 	go func() {
-		removeErr := y.Remove(ctx, transferFile)
+
+		retryCount := 0
+		var removeErr error
+
+		for retryCount == 0 || retryCount < 3 && removeErr != nil {
+			removeErr = y.Remove(ctx, transferFile)
+			retryCount++
+			if removeErr != nil {
+				time.Sleep(time.Second * 3)
+			}
+		}
+
 		if removeErr != nil {
 			utils.Log.Infof("天翼云盘删除文件:%s失败:%v", fileName, removeErr)
 			return
