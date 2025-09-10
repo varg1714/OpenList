@@ -173,9 +173,11 @@ func (d *Pornhub) MakeDir(ctx context.Context, parentDir model.Obj, dirName stri
 	if actorType == PlayList {
 		// playlist
 		url = fmt.Sprintf("/playlist/%s", url)
-	} else if actorType == ACTOR {
+	} else if actorType == Model {
 		// actor
 		url = fmt.Sprintf("/model/%s", url)
+	} else if actorType == PornStar {
+		url = fmt.Sprintf("/pornstar/%s/videos/upload", url)
 	} else {
 		return errors.New("illegal actorType")
 	}

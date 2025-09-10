@@ -24,18 +24,20 @@ func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error)
 	var filmIds []string
 	var films []model.EmbyFileObj
 
-	key := ""
-
 	if strings.Contains(pageKey, "/playlist/") {
-		key = strings.ReplaceAll(pageKey, "/playlist/", "")
+		key := strings.ReplaceAll(pageKey, "/playlist/", "")
 		playListFilms, err := d.getPlayListFilms(key, dirName)
 		if err != nil {
 			return virtual_file.GetStorageFilms(DriverName, dirName, false), nil
 		}
 		films = playListFilms
 	} else {
-		key = strings.ReplaceAll(pageKey, "/model/", "")
-		actorFilms, err := d.getActorFilms(dirName, key)
+
+		if strings.Contains(pageKey, "/model/") {
+			pageKey = pageKey + "/videos"
+		}
+
+		actorFilms, err := d.getActorFilms(dirName, pageKey)
 		if err != nil {
 			return virtual_file.GetStorageFilms(DriverName, dirName, false), nil
 		}
@@ -248,17 +250,17 @@ func (d *Pornhub) getPlayListFilms(playlistId, dirName string) ([]model.EmbyFile
 
 }
 
-func (d *Pornhub) getActorFilms(dirName, actor string) ([]model.EmbyFileObj, error) {
+func (d *Pornhub) getActorFilms(dirName, pageKey string) ([]model.EmbyFileObj, error) {
 
 	var films []PornFilm
 	page := 1
-	pageUrl := fmt.Sprintf("%s/model/%s/videos?o=mr&page=%d", d.ServerUrl, actor, page)
+	pageUrl := fmt.Sprintf("%s%s?o=mr&page=%d", d.ServerUrl, pageKey, page)
 
 	err := spider.Visit(d.SpiderServer, pageUrl, time.Duration(d.SpiderMaxWaitTime)*time.Second, func(wd selenium.WebDriver) {
 
 		var newFilmIds []string
 
-		newFilms := resolveFilms(wd, ACTOR)
+		newFilms := resolveFilms(wd, Model)
 		films = append(films, newFilms...)
 		page++
 
@@ -285,7 +287,7 @@ func (d *Pornhub) getActorFilms(dirName, actor string) ([]model.EmbyFileObj, err
 
 		for nextPageFunc() && len(db.QueryUnSaveFilms(newFilmIds, dirName)) > 0 {
 
-			pageUrl = fmt.Sprintf("%s/model/%s/videos?page=%d", d.ServerUrl, actor, page)
+			pageUrl = fmt.Sprintf("%s%s/videos?page=%d", d.ServerUrl, pageKey, page)
 
 			err := wd.Get(pageUrl)
 			if err != nil {
@@ -295,7 +297,7 @@ func (d *Pornhub) getActorFilms(dirName, actor string) ([]model.EmbyFileObj, err
 
 			time.Sleep(time.Duration(d.SpiderMaxWaitTime) * time.Second)
 
-			pornFilms := resolveFilms(wd, ACTOR)
+			pornFilms := resolveFilms(wd, Model)
 			clear(newFilmIds)
 			for _, film := range pornFilms {
 				newFilmIds = append(newFilmIds, film.ViewKey)
@@ -348,13 +350,16 @@ func resolveFilms(wd selenium.WebDriver, actorType int) []PornFilm {
 
 		for i := 1; i < len(aEles) && (href == "" || title == ""); i++ {
 
-			if tempHref, _ := aEles[i].GetAttribute("href"); tempHref != "" {
+			if tempHref, _ := aEles[i].GetAttribute("href"); tempHref != "" && strings.Contains(tempHref, "view_video.php") {
 				href = tempHref
-			}
-			if tempTitle, _ := aEles[i].GetAttribute("title"); tempTitle != "" {
+				tempTitle, _ := aEles[i].GetAttribute("title")
 				title = tempTitle
 			}
 
+		}
+
+		if href == "" {
+			continue
 		}
 
 		imgEle, err1 := filmElement.FindElement(selenium.ByCSSSelector, "img")
@@ -377,7 +382,6 @@ func resolveFilms(wd selenium.WebDriver, actorType int) []PornFilm {
 				return films
 			}
 		}
-		viewKeyCompile.ReplaceAllString(href, "$1")
 		films = append(films, PornFilm{
 			Image: imgSrc,
 			Title: title,

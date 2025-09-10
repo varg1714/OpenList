@@ -2,7 +2,8 @@ package pornhub
 
 const (
 	PlayList = iota
-	ACTOR
+	Model
+	PornStar
 )
 
 type videoInfo struct {
