@@ -13,7 +13,17 @@ func CreateActor(dir string, name string, url string) error {
 		Url:  url,
 	}
 
-	err := db.Create(&actor).Error
+	var existActors []model.Actor
+	err := db.Where(actor).Find(&existActors).Error
+	if err != nil {
+		return err
+	}
+
+	if len(existActors) > 0 {
+		return errors.Errorf("actor with name %s already exists", name)
+	}
+
+	err = db.Create(&actor).Error
 	return errors.WithStack(err)
 
 }
