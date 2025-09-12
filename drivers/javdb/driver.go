@@ -124,7 +124,7 @@ func (d *Javdb) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 		return results, nil
 	} else if dirName == "个人收藏" {
 		// 2. 个人收藏
-		return utils.SliceConvert(d.getStars(), func(src model.EmbyFileObj) (model.Obj, error) {
+		return utils.SliceConvert(virtual_file.WrapEmbyFilms(d.getStars()), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
 	} else if actor, exist := categories.Get(dirName); exist {
