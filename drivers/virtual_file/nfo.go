@@ -35,29 +35,29 @@ func DeleteImageAndNfo(source, dir, fileName string) error {
 		// 有多个文件
 		sourceName = nameRegexp.ReplaceAllString(sourceName, "$1")
 
-		filePath := filepath.Join(flags.DataDir, "emby", source, dir, fmt.Sprintf("%s-cd1.nfo", sourceName))
+		filePath := filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), fmt.Sprintf("%s-cd1.nfo", sourceName))
 		for i := 1; utils.Exists(filePath); {
 			err := os.Remove(filePath)
 			if err != nil {
 				return err
 			}
 			i++
-			filePath = filepath.Join(flags.DataDir, "emby", source, dir, fmt.Sprintf("%s-cd%d.nfo", sourceName, i))
+			filePath = filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), fmt.Sprintf("%s-cd%d.nfo", sourceName, i))
 		}
 
-		filePath = filepath.Join(flags.DataDir, "emby", source, dir, fmt.Sprintf("%s-cd1.jpg", sourceName))
+		filePath = filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), fmt.Sprintf("%s-cd1.jpg", sourceName))
 		for i := 1; utils.Exists(filePath); {
 			err := os.Remove(filePath)
 			if err != nil {
 				return err
 			}
 			i++
-			filePath = filepath.Join(flags.DataDir, "emby", source, dir, fmt.Sprintf("%s-cd%d.jpg", sourceName, i))
+			filePath = filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), fmt.Sprintf("%s-cd%d.jpg", sourceName, i))
 		}
 
 	} else {
 		// 删除nfo文件
-		filePath := filepath.Join(flags.DataDir, "emby", source, dir, sourceName+".nfo")
+		filePath := filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), sourceName+".nfo")
 		if utils.Exists(filePath) {
 			err := os.Remove(filePath)
 			if err != nil {
@@ -66,7 +66,7 @@ func DeleteImageAndNfo(source, dir, fileName string) error {
 		}
 
 		// 删除img文件
-		filePath = filepath.Join(flags.DataDir, "emby", source, dir, sourceName+".jpg")
+		filePath = filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), sourceName+".jpg")
 		if utils.Exists(filePath) {
 			err := os.Remove(filePath)
 			if err != nil {
@@ -85,7 +85,7 @@ func CacheImage(mediaInfo MediaInfo) int {
 		return CreatedFailed
 	}
 
-	filePath := filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, mediaInfo.FileName)
+	filePath := filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, GetRealName(mediaInfo.FileName), mediaInfo.FileName)
 	if utils.Exists(filePath) {
 		return Exist
 	}
@@ -96,7 +96,7 @@ func CacheImage(mediaInfo MediaInfo) int {
 		return CreatedFailed
 	}
 
-	err = os.MkdirAll(filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir), 0777)
+	err = os.MkdirAll(filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, GetRealName(mediaInfo.FileName)), 0777)
 	if err != nil {
 		utils.Log.Warnf("failed to make directory: %s", err.Error())
 		return CreatedFailed
@@ -132,7 +132,7 @@ func UpdateNfo(mediaInfo MediaInfo) {
 		return
 	}
 
-	filePath := filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, clearFileName(mediaInfo.FileName)+".nfo")
+	filePath := filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, GetRealName(mediaInfo.FileName), clearFileName(mediaInfo.FileName)+".nfo")
 
 	file, err := os.ReadFile(filePath)
 	if err != nil {
@@ -234,8 +234,7 @@ func ClearUnUsedFiles(source, dir string, fileNames []string) {
 	}
 
 	for _, file := range readFiles {
-		ext := filepath.Ext(file.Name())
-		if !file.IsDir() && (ext == "nfo" || ext == "jpg") || !fileNamesSet[clearFileName(filepath.Base(file.Name()))] {
+		if file.IsDir() && !fileNamesSet[filepath.Base(file.Name())] {
 			err1 := os.Remove(filepath.Join(parentDir, file.Name()))
 			if err1 != nil {
 				utils.Log.Warnf("failed to remove file:%s", file.Name())
@@ -255,12 +254,12 @@ func cacheActorNfo(mediaInfo MediaInfo) int {
 	}
 
 	source := mediaInfo.Source
-	filePath := filepath.Join(flags.DataDir, "emby", source, mediaInfo.Dir, clearFileName(fileName)+".nfo")
+	filePath := filepath.Join(flags.DataDir, "emby", source, mediaInfo.Dir, GetRealName(fileName), clearFileName(fileName)+".nfo")
 	if utils.Exists(filePath) {
 		return Exist
 	}
 
-	err := os.MkdirAll(filepath.Join(flags.DataDir, "emby", source, mediaInfo.Dir), 0777)
+	err := os.MkdirAll(filepath.Join(flags.DataDir, "emby", source, mediaInfo.Dir, GetRealName(fileName)), 0777)
 	if err != nil {
 		utils.Log.Info("nfo缓存文件夹创建失败", err)
 		return CreatedFailed

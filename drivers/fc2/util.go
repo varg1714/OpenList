@@ -598,3 +598,26 @@ func (d *FC2) getPageFilms(url string) ([]string, error) {
 	return ids, err
 
 }
+
+func (d *FC2) deleteFilm(obj model.Obj) error {
+	err := db.DeleteAllMagnetCacheByCode(av.GetFilmCode(obj.GetName()))
+	if err != nil {
+		utils.Log.Warnf("影片缓存信息删除失败：%s", err.Error())
+	}
+	err = virtual_file.DeleteImageAndNfo("fc2", "个人收藏", obj.GetName())
+	if err != nil {
+		utils.Log.Warnf("影片附件信息删除失败：%s", err.Error())
+	}
+
+	err = db.CreateMissedFilms([]string{av.GetFilmCode(obj.GetName())})
+	if err != nil {
+		utils.Log.Warnf("影片黑名单信息失败：%s", err.Error())
+	}
+
+	err = db.DeleteFilmsByCode("fc2", "个人收藏", av.GetFilmCode(obj.GetName()))
+	if err != nil {
+		utils.Log.Warnf("影片删除失败：%s", err.Error())
+	}
+
+	return err
+}

@@ -141,12 +141,16 @@ func (d *Javdb) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 			utils.Log.Info("影片获取失败", err)
 			return nil, err
 		}
-		return utils.SliceConvert(films, func(src model.EmbyFileObj) (model.Obj, error) {
+
+		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
 
+	} else if dirWrapper, ok := dir.(*model.EmbyFileDirWrapper); ok {
+		return utils.SliceConvert(dirWrapper.EmbyFiles, func(src model.EmbyFileObj) (model.Obj, error) {
+			return &src, nil
+		})
 	} else {
-		// pikPak文件
 		return results, nil
 	}
 
@@ -197,12 +201,22 @@ func (d *Javdb) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 func (d *Javdb) Remove(ctx context.Context, obj model.Obj) error {
 
 	if obj.IsDir() {
-		err := db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
-		if err != nil {
-			return err
+		if dirWrapper, ok := obj.(*model.EmbyFileDirWrapper); !ok {
+			err := db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
+			if err != nil {
+				return err
+			}
+
+			return db.DeleteFilmsByActor(DriverName, obj.GetName())
+		} else {
+			for _, file := range dirWrapper.EmbyFiles {
+				err2 := d.deleteFilm(file.GetPath(), file.GetName(), file.GetID())
+				if err2 != nil {
+					return err2
+				}
+			}
 		}
 
-		return db.DeleteFilmsByActor(DriverName, obj.GetName())
 	} else {
 
 		err2 := d.deleteFilm(obj.GetPath(), obj.GetName(), obj.GetID())
@@ -232,7 +246,9 @@ func (d *Javdb) Put(ctx context.Context, dstDir model.Obj, stream model.FileStre
 	if err == nil && d.EmbyServers != "" {
 		emby.Refresh(d.EmbyServers)
 	}
-	return &star, err
+
+	dirWrapper := virtual_file.WrapEmbyFilms([]model.EmbyFileObj{star})[0]
+	return &dirWrapper, err
 
 }
 

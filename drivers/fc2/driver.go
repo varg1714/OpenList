@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/emby"
@@ -108,7 +107,8 @@ func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]m
 		}
 		return results, nil
 	} else if dirName == "个人收藏" {
-		return utils.SliceConvert(d.getStars(), func(src model.EmbyFileObj) (model.Obj, error) {
+		films := d.getStars()
+		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
 	} else if categories[dirName] != "" {
@@ -127,11 +127,15 @@ func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]m
 		if err != nil {
 			return nil, err
 		}
-		return utils.SliceConvert(films, func(src model.EmbyFileObj) (model.Obj, error) {
+		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
+			return &src, nil
+		})
+
+	} else if dirWrapper, ok := dir.(*model.EmbyFileDirWrapper); ok {
+		return utils.SliceConvert(dirWrapper.EmbyFiles, func(src model.EmbyFileObj) (model.Obj, error) {
 			return &src, nil
 		})
 	} else {
-		// pikPak文件
 		return results, nil
 	}
 
@@ -160,33 +164,26 @@ func (d *FC2) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*m
 func (d *FC2) Remove(ctx context.Context, obj model.Obj) error {
 
 	if obj.IsDir() {
-		err := db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
-		if err != nil {
-			return err
+
+		if dirWrapper, ok := obj.(*model.EmbyFileDirWrapper); !ok {
+			err := db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
+			if err != nil {
+				return err
+			}
+
+			return db.DeleteFilmsByActor("fc2", obj.GetName())
+		} else {
+			for _, file := range dirWrapper.EmbyFiles {
+				err2 := d.deleteFilm(&file)
+				if err2 != nil {
+					return err2
+				}
+			}
+			return nil
 		}
 
-		return db.DeleteFilmsByActor("fc2", obj.GetName())
 	} else {
-		err := db.DeleteAllMagnetCacheByCode(av.GetFilmCode(obj.GetName()))
-		if err != nil {
-			utils.Log.Warnf("影片缓存信息删除失败：%s", err.Error())
-		}
-		err = virtual_file.DeleteImageAndNfo("fc2", "个人收藏", obj.GetName())
-		if err != nil {
-			utils.Log.Warnf("影片附件信息删除失败：%s", err.Error())
-		}
-
-		err = db.CreateMissedFilms([]string{av.GetFilmCode(obj.GetName())})
-		if err != nil {
-			utils.Log.Warnf("影片黑名单信息失败：%s", err.Error())
-		}
-
-		err = db.DeleteFilmsByCode("fc2", "个人收藏", av.GetFilmCode(obj.GetName()))
-		if err != nil {
-			utils.Log.Warnf("影片删除失败：%s", err.Error())
-		}
-
-		return err
+		return d.deleteFilm(obj)
 	}
 
 }
@@ -230,7 +227,10 @@ func (d *FC2) Put(ctx context.Context, dstDir model.Obj, stream model.FileStream
 		}
 
 	}
-	return &star, err
+
+	dirWrapper := virtual_file.WrapEmbyFilms([]model.EmbyFileObj{star})[0]
+
+	return &dirWrapper, err
 
 }
 

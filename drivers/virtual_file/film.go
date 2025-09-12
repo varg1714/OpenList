@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var realNameRegexp = regexp.MustCompile("(.+?)(?:-cd\\d+)?(?:-background)?")
+
 func GetFilms(source, dirName string, urlFunc func(index int) string, pageFunc func(urlFunc func(index int) string, index int, data []model.EmbyFileObj) ([]model.EmbyFileObj, bool, error)) ([]model.EmbyFileObj, error) {
 
 	results := make([]model.EmbyFileObj, 0)
@@ -322,4 +324,45 @@ func BatchSaveFilms(driverName, dirName string, savingFilms []model.EmbyFileObj,
 		}
 
 	}
+}
+
+func WrapEmbyFilms(films []model.EmbyFileObj) []model.EmbyFileDirWrapper {
+
+	filmMap := make(map[string][]model.EmbyFileObj)
+
+	for _, film := range films {
+		name := GetRealName(film.Name)
+		filmMap[name] = append(filmMap[name], film)
+	}
+
+	var result []model.EmbyFileDirWrapper
+	for name, embyFilms := range filmMap {
+
+		if len(embyFilms) == 0 {
+			continue
+		}
+
+		firstFilm := embyFilms[0]
+
+		result = append(result, model.EmbyFileDirWrapper{
+			EmbyFiles: embyFilms,
+			ObjThumb: model.ObjThumb{
+				Object: model.Object{
+					IsFolder: true,
+					Name:     name,
+					ID:       name,
+					Ctime:    firstFilm.Ctime,
+					Modified: firstFilm.Modified,
+				},
+				Thumbnail: firstFilm.Thumbnail,
+			},
+		})
+	}
+
+	return result
+
+}
+
+func GetRealName(name string) string {
+	return realNameRegexp.ReplaceAllString(clearFileName(name), "$1")
 }

@@ -87,7 +87,12 @@ func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 		if err != nil {
 			return nil, err
 		}
-		return utils.SliceConvert(films, func(src model.EmbyFileObj) (model.Obj, error) {
+		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
+			return &src, nil
+		})
+
+	} else if dirWrapper, ok := dir.(*model.EmbyFileDirWrapper); ok {
+		return utils.SliceConvert(dirWrapper.EmbyFiles, func(src model.EmbyFileObj) (model.Obj, error) {
 			return &src, nil
 		})
 	} else {

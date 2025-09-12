@@ -114,6 +114,11 @@ type EmbyFileObj struct {
 	Tags        []string
 }
 
+type EmbyFileDirWrapper struct {
+	EmbyFiles []EmbyFileObj
+	ObjThumb
+}
+
 type ObjVirtualDir struct {
 	ObjThumb
 	VirtualFile
