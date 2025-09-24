@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	stdpath "path"
+	"path/filepath"
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
@@ -126,7 +127,14 @@ func generateStrm(ctx context.Context, d *Strm, localParentPath string, objs []m
 			log.Errorf("get link failed, %s", linkErr)
 			continue
 		}
-		file, createErr := utils.CreateNestedFile(localPath)
+
+		err := os.MkdirAll(filepath.Dir(localPath), os.FileMode(d.mkdirPerm))
+		if err != nil {
+			log.Errorf("mkdir failed, %s", err)
+			continue
+		}
+
+		file, createErr := os.Create(localPath)
 		if createErr != nil {
 			log.Errorf("create nested file failed, %s", createErr)
 			continue

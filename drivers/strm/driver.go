@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	stdpath "path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ type Strm struct {
 
 	supportSuffix  map[string]struct{}
 	downloadSuffix map[string]struct{}
+	mkdirPerm      int32
 }
 
 func (d *Strm) Config() driver.Config {
@@ -91,6 +93,16 @@ func (d *Strm) Init(ctx context.Context) error {
 		if len(localPathMapping) == 2 {
 			strmLocalPathMap[localPathMapping[0]] = localPathMapping[1]
 		}
+	}
+
+	if d.MkdirPerm == "" {
+		d.mkdirPerm = 0o777
+	} else {
+		v, err := strconv.ParseUint(d.MkdirPerm, 8, 32)
+		if err != nil {
+			return err
+		}
+		d.mkdirPerm = int32(v)
 	}
 
 	return nil

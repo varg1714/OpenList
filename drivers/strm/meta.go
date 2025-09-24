@@ -14,6 +14,7 @@ type Addition struct {
 	WithoutUrl           bool   `json:"withoutUrl" default:"false" help:"strm file content without URL prefix"`
 	SaveStrmToLocal      bool   `json:"SaveStrmToLocal" default:"false" help:"save strm file locally"`
 	SaveStrmLocalPath    string `json:"SaveStrmLocalPath" type:"text" help:"save strm file local path"`
+	MkdirPerm            string `json:"mkdir_perm" default:"777"`
 	DeleteExtraLocalFile bool   `json:"deleteExtraLocalFile" default:"false" help:"delete extra file locally"`
 }
 
