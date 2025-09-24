@@ -10,6 +10,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
@@ -52,6 +53,7 @@ func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
 			for parentPrefix, parentLocalPath := range strmLocalPathMap {
 				if strings.HasPrefix(relParent, parentPrefix) {
 					localPath = parentLocalPath
+					relParent = strings.TrimPrefix(relParent, parentPrefix)
 					break
 				}
 			}
@@ -129,7 +131,14 @@ func generateStrm(ctx context.Context, d *Strm, localParentPath string, objs []m
 			log.Errorf("create nested file failed, %s", createErr)
 			continue
 		}
-		_, copyErr := io.Copy(file, link.MFile)
+
+		seekableStream, linkErr := stream.NewSeekableStream(&stream.FileStream{Obj: obj, Ctx: ctx}, link)
+		if linkErr != nil {
+			log.Errorf("create seekable stream failed, %s", linkErr)
+			continue
+		}
+
+		_, copyErr := io.Copy(file, seekableStream)
 		if copyErr != nil {
 			log.Errorf("copy nested file failed: %s", copyErr)
 			continue
