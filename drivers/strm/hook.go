@@ -15,6 +15,7 @@ import (
 )
 
 var strmMap = make(map[uint]*Strm)
+var strmLocalPathMap = make(map[string]string)
 
 func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
 	storage, _, err := op.GetStorageAndActualPath(parent)
@@ -47,7 +48,14 @@ func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
 	} else {
 		if d.SaveStrmToLocal {
 			relParent := strings.TrimPrefix(parent, d.MountPath)
-			localParentPath := stdpath.Join(d.SaveStrmLocalPath, relParent)
+			localPath := d.SaveStrmLocalPath
+			for parentPrefix, parentLocalPath := range strmLocalPathMap {
+				if strings.HasPrefix(relParent, parentPrefix) {
+					localPath = parentLocalPath
+					break
+				}
+			}
+			localParentPath := stdpath.Join(localPath, relParent)
 
 			generateStrm(ctx, d, localParentPath, objs)
 			deleteExtraFiles(localParentPath, objs)
@@ -103,12 +111,17 @@ func generateStrm(ctx context.Context, d *Strm, localParentPath string, objs []m
 		if obj.IsDir() {
 			continue
 		}
+		localPath := stdpath.Join(localParentPath, obj.GetName())
+
+		if utils.Exists(localPath) {
+			continue
+		}
+
 		link, linkErr := d.Link(ctx, obj, model.LinkArgs{})
 		if linkErr != nil {
 			log.Errorf("get link failed, %s", linkErr)
 			continue
 		}
-		localPath := stdpath.Join(localParentPath, obj.GetName())
 		file, createErr := utils.CreateNestedFile(localPath)
 		if createErr != nil {
 			log.Errorf("create nested file failed, %s", createErr)

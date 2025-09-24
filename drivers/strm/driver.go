@@ -85,6 +85,14 @@ func (d *Strm) Init(ctx context.Context) error {
 	}
 
 	strmMap[d.Storage.ID] = d
+
+	for _, localPath := range strings.Split(d.SaveStrmLocalPath, "\n") {
+		localPathMapping := strings.Split(localPath, ":")
+		if len(localPathMapping) == 2 {
+			strmLocalPathMap[localPathMapping[0]] = localPathMapping[1]
+		}
+	}
+
 	return nil
 }
 
