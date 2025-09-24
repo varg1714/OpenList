@@ -123,3 +123,16 @@ type ObjVirtualDir struct {
 	ObjThumb
 	VirtualFile
 }
+
+type Provider struct {
+	Provider string
+}
+
+func (p Provider) GetProvider() string {
+	return p.Provider
+}
+
+type ObjectProvider struct {
+	Object
+	Provider
+}

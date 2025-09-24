@@ -150,7 +150,7 @@ func List(ctx context.Context, storage driver.Driver, path string, args model.Li
 		model.WrapObjsName(files)
 		// call hooks
 		go func(reqPath string, files []model.Obj) {
-			HandleObjsUpdateHook(reqPath, files)
+			HandleObjsUpdateHook(ctx, reqPath, files)
 		}(utils.GetFullPath(storage.GetStorage().MountPath, path), files)
 
 		// sort objs
@@ -183,6 +183,9 @@ func Get(ctx context.Context, storage driver.Driver, path string) (model.Obj, er
 		obj, err := g.Get(ctx, path)
 		if err == nil {
 			return model.WrapObjName(obj), nil
+		}
+		if !errs.IsNotImplement(err) {
+			return nil, errors.WithMessage(err, "failed to get obj")
 		}
 	}
 
@@ -327,11 +330,8 @@ func Link(ctx context.Context, storage driver.Driver, path string, args model.Li
 		return nil
 	})
 	link, err, _ := linkG.Do(key, fn)
-	if err == nil && !link.AcquireReference() {
+	for err == nil && !link.AcquireReference() {
 		link, err, _ = linkG.Do(key, fn)
-		if err == nil {
-			link.AcquireReference()
-		}
 	}
 
 	if err == errLinkMFileCache {
@@ -630,6 +630,11 @@ func Put(ctx context.Context, storage driver.Driver, dstDirPath string, file mod
 		up = func(p float64) {}
 	}
 
+	// 如果小于0，则通过缓存获取完整大小，可能发生于流式上传
+	if file.GetSize() < 0 {
+		log.Warnf("file size < 0, try to get full size from cache")
+		file.CacheFullAndWriter(nil, nil)
+	}
 	switch s := storage.(type) {
 	case driver.PutResult:
 		var newObj model.Obj
