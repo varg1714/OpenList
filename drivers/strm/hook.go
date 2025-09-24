@@ -58,7 +58,9 @@ func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
 			localParentPath := stdpath.Join(localPath, relParent)
 
 			generateStrm(ctx, d, localParentPath, objs)
-			deleteExtraFiles(localParentPath, objs)
+			if d.DeleteExtraLocalFile {
+				deleteExtraFiles(localParentPath, objs)
+			}
 
 			log.Infof("Updating Strm Path %s", localParentPath)
 		}
