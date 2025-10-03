@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
@@ -46,5 +47,24 @@ func UpdateMovedItemSource(storageId uint, oldSource, newSource string) error {
 		})
 
 	return errors.WithStack(tx.Error)
+
+}
+
+func DeleteMovedItems(fileId string) (int, error) {
+
+	var movedItem model.MovedItem
+	tx := db.Where("file_id = ?", fileId).
+		Limit(1).Find(&movedItem)
+	if tx.Error != nil {
+		return 0, errors.WithStack(tx.Error)
+	}
+
+	if movedItem.ID == 0 {
+		return 0, nil
+	}
+
+	tx = db.Delete(&movedItem)
+
+	return 1, errors.WithStack(tx.Error)
 
 }

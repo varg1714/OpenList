@@ -4,15 +4,16 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/generic"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/dlclark/regexp2"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func List(storageId uint, dir model.Obj, fileFunc func(virtualFile model.VirtualFile, dir model.Obj) ([]model.Obj, error)) ([]model.Obj, error) {
@@ -255,7 +256,19 @@ func DeleteVirtualFile(storageId uint, obj model.Obj) error {
 			}
 		}
 	} else {
+
+		// delete the  moved items
+		deletedMovedItems, err := db.DeleteMovedItems(obj.GetID())
+		if err != nil {
+			return err
+		}
+
+		if deletedMovedItems > 0 {
+			return nil
+		}
+
 		virtualFile := GetSubscription(storageId, obj.GetPath())
+
 		// delete file
 		replacement := model.Replacement{
 			StorageId: storageId,
