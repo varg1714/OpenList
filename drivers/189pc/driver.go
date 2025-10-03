@@ -91,11 +91,11 @@ func (y *Cloud189PC) Init(ctx context.Context) (err error) {
 		if y.Addition.RefreshToken != "" {
 			y.tokenInfo = &AppSessionResp{RefreshToken: y.Addition.RefreshToken}
 			if err = y.refreshToken(); err != nil {
-				return
+				return err
 			}
 		} else {
 			if err = y.login(); err != nil {
-				return
+				return err
 			}
 		}
 
@@ -125,7 +125,7 @@ func (y *Cloud189PC) Init(ctx context.Context) (err error) {
 			utils.Log.Errorf("cleanFamilyTransferFolderError:%s", err)
 		}
 	})
-	return
+	return err
 }
 
 func (d *Cloud189PC) InitReference(storage driver.Driver) error {
@@ -299,7 +299,6 @@ func (y *Cloud189PC) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		FileName: srcObj.GetName(),
 		IsFolder: BoolToNumber(srcObj.IsDir()),
 	})
-
 	if err != nil {
 		return err
 	}
@@ -477,4 +476,25 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 
 	return link, err
 
+}
+
+func (y *Cloud189PC) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	capacityInfo, err := y.getCapacityInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var total, free uint64
+	if y.isFamily() {
+		total = capacityInfo.FamilyCapacityInfo.TotalSize
+		free = capacityInfo.FamilyCapacityInfo.FreeSize
+	} else {
+		total = capacityInfo.CloudCapacityInfo.TotalSize
+		free = capacityInfo.CloudCapacityInfo.FreeSize
+	}
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			FreeSpace:  free,
+		},
+	}, nil
 }
