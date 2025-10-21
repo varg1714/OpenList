@@ -4,6 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -12,12 +19,6 @@ import (
 	"github.com/Xhofe/go-cache"
 	"github.com/go-resty/resty/v2"
 	"golang.org/x/time/rate"
-	"net/http"
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
-	"time"
 )
 
 // do others that not defined in Driver interface
@@ -148,7 +149,7 @@ func (d *QuarkShare) getShareFiles(ctx context.Context, virtualFile model.Virtua
 			shareTokenCache.Del(virtualFile.ShareID)
 			fileListRespCache.Del(buildCacheKeyFunc())
 			topDir := strings.Split(dir.GetPath(), "/")[0]
-			op.ClearCache(d, topDir)
+			op.Cache.DeleteDirectory(d, topDir)
 			utils.Log.Infof("由于文件token失效,因此清除:%s目录的文件缓存", topDir)
 
 			stToken, err = d.getShareInfo(virtualFile.ShareID, virtualFile.SharePwd)
@@ -228,7 +229,7 @@ func (d *QuarkShare) transformFile(virtualFile model.VirtualFile, obj FileObj) (
 
 		shareTokenCache.Del(virtualFile.ShareID)
 		topDir := strings.Split(obj.GetPath(), "/")[0]
-		op.ClearCache(d, topDir)
+		op.Cache.DeleteDirectory(d, topDir)
 		utils.Log.Infof("由于文件token失效,因此清除:%s目录的文件缓存", topDir)
 
 		transferFile()

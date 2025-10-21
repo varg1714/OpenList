@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -13,9 +17,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type FC2 struct {
@@ -221,7 +222,7 @@ func (d *FC2) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) 
 func (d *FC2) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) (model.Obj, error) {
 	star, err := d.addStar(stream.GetName(), []string{})
 	if err == nil {
-		op.ClearCache(d, "个人收藏")
+		op.Cache.DeleteDirectory(d, "个人收藏")
 		if d.EmbyServers != "" {
 			emby.Refresh(d.EmbyServers)
 		}
