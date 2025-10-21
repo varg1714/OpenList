@@ -130,7 +130,7 @@ func (d *Alias) Get(ctx context.Context, path string) (model.Obj, error) {
 func (d *Alias) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	path := dir.GetPath()
 	if utils.PathEqual(path, "/") && !d.autoFlatten {
-		return d.listRoot(ctx, args.WithStorageDetails && d.DetailsPassThrough), nil
+		return d.listRoot(ctx, args.WithStorageDetails && d.DetailsPassThrough, args.Refresh), nil
 	}
 	root, sub := d.getRootAndPath(path)
 	dsts, ok := d.pathMap[root]
@@ -146,22 +146,27 @@ func (d *Alias) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 		})
 		if err == nil {
 			tmp, err = utils.SliceConvert(tmp, func(obj model.Obj) (model.Obj, error) {
-				thumb, ok := model.GetThumb(obj)
 				objRes := model.Object{
 					Name:     obj.GetName(),
 					Size:     obj.GetSize(),
 					Modified: obj.ModTime(),
 					IsFolder: obj.IsDir(),
 				}
-				if !ok {
-					return &objRes, nil
+				if thumb, ok := model.GetThumb(obj); ok {
+					return &model.ObjThumb{
+						Object: objRes,
+						Thumbnail: model.Thumbnail{
+							Thumbnail: thumb,
+						},
+					}, nil
 				}
-				return &model.ObjThumb{
-					Object: objRes,
-					Thumbnail: model.Thumbnail{
-						Thumbnail: thumb,
-					},
-				}, nil
+				if details, ok := model.GetStorageDetails(obj); ok {
+					return &model.ObjStorageDetails{
+						Obj:                    &objRes,
+						StorageDetailsWithName: *details,
+					}, nil
+				}
+				return &objRes, nil
 			})
 		}
 		if err == nil {
@@ -205,9 +210,6 @@ func (d *Alias) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 
 		if resultLink.ContentLength == 0 {
 			resultLink.ContentLength = fi.GetSize()
-		}
-		if resultLink.MFile != nil {
-			return &resultLink, nil
 		}
 		if d.DownloadConcurrency > 0 {
 			resultLink.Concurrency = d.DownloadConcurrency
@@ -520,6 +522,27 @@ func (d *Alias) ArchiveDecompress(ctx context.Context, srcObj, dstDir model.Obj,
 	} else {
 		return errors.New("parallel paths mismatch")
 	}
+}
+
+func (d *Alias) ResolveLinkCacheMode(path string) driver.LinkCacheMode {
+	root, sub := d.getRootAndPath(path)
+	dsts, ok := d.pathMap[root]
+	if !ok {
+		return 0
+	}
+	for _, dst := range dsts {
+		storage, actualPath, err := op.GetStorageAndActualPath(stdpath.Join(dst, sub))
+		if err == nil {
+			continue
+		}
+		mode := storage.Config().LinkCacheMode
+		if mode == -1 {
+			return storage.(driver.LinkCacheModeResolver).ResolveLinkCacheMode(actualPath)
+		} else {
+			return mode
+		}
+	}
+	return 0
 }
 
 var _ driver.Driver = (*Alias)(nil)

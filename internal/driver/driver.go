@@ -47,11 +47,6 @@ type Getter interface {
 	Get(ctx context.Context, path string) (model.Obj, error)
 }
 
-type GetObjInfo interface {
-	// GetObjInfo get file info by path
-	GetObjInfo(ctx context.Context, path string) (model.Obj, error)
-}
-
 //type Writer interface {
 //	Mkdir
 //	Move
@@ -221,4 +216,9 @@ type WithDetails interface {
 
 type Reference interface {
 	InitReference(storage Driver) error
+}
+
+type LinkCacheModeResolver interface {
+	// ResolveLinkCacheMode returns the LinkCacheMode for the given path.
+	ResolveLinkCacheMode(path string) LinkCacheMode
 }

@@ -37,7 +37,6 @@ func (d *PikPak) GetAddition() driver.Additional {
 }
 
 func (d *PikPak) Init(ctx context.Context) (err error) {
-
 	if d.Common == nil {
 		d.Common = &Common{
 			client:       base.NewRestyClient(),
@@ -255,7 +254,7 @@ func (d *PikPak) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 	}
 
 	params := resp.Resumable.Params
-	//endpoint := strings.Join(strings.Split(params.Endpoint, ".")[1:], ".")
+	// endpoint := strings.Join(strings.Split(params.Endpoint, ".")[1:], ".")
 	// web 端上传 返回的endpoint 为 `mypikpak.net` | android 端上传 返回的endpoint 为 `vip-lixian-07.mypikpak.net`·
 	if d.Addition.Platform == "android" {
 		params.Endpoint = "mypikpak.net"
@@ -266,6 +265,27 @@ func (d *PikPak) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 	}
 	// 分片上传
 	return d.UploadByMultipart(ctx, &params, stream.GetSize(), stream, up)
+}
+
+func (d *PikPak) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	var about AboutResponse
+	_, err := d.request("https://api-drive.mypikpak.com/drive/v1/about", http.MethodGet, func(req *resty.Request) {
+		req.SetContext(ctx)
+	}, &about)
+	if err != nil {
+		return nil, err
+	}
+	total, err := strconv.ParseUint(about.Quota.Limit, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	used, err := strconv.ParseUint(about.Quota.Usage, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &model.StorageDetails{
+		DiskUsage: driver.DiskUsageFromUsedAndTotal(used, total),
+	}, nil
 }
 
 // 离线下载文件
@@ -286,7 +306,6 @@ func (d *PikPak) OfflineDownload(ctx context.Context, fileUrl string, parentDir 
 		req.SetContext(ctx).
 			SetBody(requestBody)
 	}, &resp)
-
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +352,6 @@ func (d *PikPak) OfflineList(ctx context.Context, nextPageToken string, phase []
 		req.SetContext(ctx).
 			SetQueryParams(params)
 	}, &resp)
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to get offline list: %w", err)
 	}

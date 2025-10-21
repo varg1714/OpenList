@@ -85,7 +85,7 @@ type Media struct {
 
 type UploadTaskData struct {
 	UploadType string `json:"upload_type"`
-	//UPLOAD_TYPE_RESUMABLE
+	// UPLOAD_TYPE_RESUMABLE
 	Resumable *struct {
 		Kind     string   `json:"kind"`
 		Params   S3Params `json:"params"`
@@ -236,4 +236,16 @@ type CaptchaTokenResponse struct {
 	CaptchaToken string `json:"captcha_token"`
 	ExpiresIn    int64  `json:"expires_in"`
 	Url          string `json:"url"`
+}
+
+type AboutResponse struct {
+	Quota struct {
+		Limit         string `json:"limit"`
+		Usage         string `json:"usage"`
+		UsageInTrash  string `json:"usage_in_trash"`
+		IsUnlimited   bool   `json:"is_unlimited"`
+		Complimentary string `json:"complimentary"`
+	} `json:"quota"`
+	ExpiresAt string `json:"expires_at"`
+	UserType  int    `json:"user_type"`
 }
