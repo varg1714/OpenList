@@ -4,6 +4,8 @@ import (
 	"context"
 	stderrors "errors"
 	stdpath "path"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -69,8 +71,27 @@ func List(ctx context.Context, storage driver.Driver, path string, args model.Li
 		if !storage.Config().NoCache {
 			if len(files) > 0 {
 				log.Debugf("set cache: %s => %+v", key, files)
-				ttl := time.Minute * time.Duration(storage.GetStorage().CacheExpiration)
-				Cache.dirCache.SetWithTTL(key, newDirectoryCache(files), ttl)
+
+				ttl := storage.GetStorage().CacheExpiration
+
+				customCachePolicies := storage.GetStorage().CustomCachePolicies
+				if len(customCachePolicies) > 0 {
+					configPolicies := strings.Split(customCachePolicies, "\n")
+					for _, configPolicy := range configPolicies {
+						policy := strings.Split(configPolicy, ":")
+						if len(policy) == 2 && strings.HasPrefix(path, policy[0]) {
+							configTtl, _ := strconv.ParseInt(policy[1], 10, 64)
+							if configTtl > 0 {
+								ttl = int(configTtl)
+								break
+							}
+
+						}
+					}
+				}
+
+				duration := time.Minute * time.Duration(ttl)
+				Cache.dirCache.SetWithTTL(key, newDirectoryCache(files), duration)
 			} else {
 				log.Debugf("del cache: %s", key)
 				Cache.deleteDirectoryTree(key)
