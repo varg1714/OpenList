@@ -84,7 +84,7 @@ func getMainItems(config driver.Config) []driver.Item {
 			Name:     "custom_cache_policies",
 			Type:     conf.TypeText,
 			Default:  "",
-			Required: true,
+			Required: false,
 			Help:     "The cache expiration rules for this storage",
 		})
 	}
