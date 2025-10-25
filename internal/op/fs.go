@@ -14,6 +14,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/singleflight"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -79,13 +80,15 @@ func List(ctx context.Context, storage driver.Driver, path string, args model.Li
 					configPolicies := strings.Split(customCachePolicies, "\n")
 					for _, configPolicy := range configPolicies {
 						policy := strings.Split(configPolicy, ":")
-						if len(policy) == 2 && strings.HasPrefix(path, policy[0]) {
-							configTtl, _ := strconv.ParseInt(policy[1], 10, 64)
-							if configTtl > 0 {
-								ttl = int(configTtl)
-								break
-							}
-
+						if len(policy) != 2 {
+							continue
+						}
+						if match, _ := doublestar.Match(policy[0], path); !match {
+							continue
+						}
+						if configTtl, err1 := strconv.ParseInt(policy[1], 10, 64); err1 == nil {
+							ttl = int(configTtl)
+							break
 						}
 					}
 				}
