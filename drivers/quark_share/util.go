@@ -148,13 +148,10 @@ func (d *QuarkShare) getShareFiles(ctx context.Context, virtualFile model.Virtua
 
 			shareTokenCache.Del(virtualFile.ShareID)
 			fileListRespCache.Del(buildCacheKeyFunc())
-			topDir := strings.Split(dir.GetPath(), "/")[0]
-			op.Cache.DeleteDirectory(d, topDir)
-			utils.Log.Infof("由于文件token失效,因此清除:%s目录的文件缓存", topDir)
 
 			stToken, err = d.getShareInfo(virtualFile.ShareID, virtualFile.SharePwd)
 			if err != nil {
-				utils.Log.Infof("分享的stoken过期后重新获取stoken失败:%s", err.Error())
+				utils.Log.Infof("重新获取stoken失败:%s", err.Error())
 				return nil, err
 			}
 
@@ -193,17 +190,38 @@ func (d *QuarkShare) getShareFiles(ctx context.Context, virtualFile model.Virtua
 	return res, nil
 }
 
-func (d *QuarkShare) transformFile(virtualFile model.VirtualFile, obj FileObj) (string, error) {
+func (d *QuarkShare) getShareFile(ctx context.Context, virtualFile model.VirtualFile, obj FileObj) (FileObj, error) {
+
+	files, err := d.getShareFiles(ctx, virtualFile, &model.Object{
+		Path: filepath.Dir(obj.GetPath()),
+		Name: obj.GetName(),
+	})
+
+	if err != nil {
+		return FileObj{}, err
+	}
+
+	for _, file := range files {
+		if file.ID == obj.GetID() {
+			return file, nil
+		}
+	}
+	return FileObj{}, nil
+}
+
+func (d *QuarkShare) transformFile(ctx context.Context, virtualFile model.VirtualFile, obj FileObj) (string, error) {
 
 	stToken, err := d.getShareInfo(virtualFile.ShareID, virtualFile.SharePwd)
 	if err != nil {
 		return "", err
 	}
+	shareFidToken := obj.ShareFidToken
 
 	utils.Log.Infof("开始转存文件:%s", obj.GetName())
 
 	var transformResult TransformResult
 	transferFile := func() {
+
 		_, err = d.request("/1/clouddrive/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
 			req.SetQueryParams(
 				map[string]string{
@@ -212,7 +230,7 @@ func (d *QuarkShare) transformFile(virtualFile model.VirtualFile, obj FileObj) (
 			req.SetBody(
 				base.Json{
 					"fid_list":       []string{obj.GetID()},
-					"fid_token_list": []string{obj.ShareFidToken},
+					"fid_token_list": []string{shareFidToken},
 					"to_pdir_fid":    d.TransferPath,
 					"pwd_id":         virtualFile.ShareID,
 					"stoken":         stToken,
@@ -224,13 +242,20 @@ func (d *QuarkShare) transformFile(virtualFile model.VirtualFile, obj FileObj) (
 
 	transferFile()
 	if err != nil && (strings.Contains(err.Error(), "token校验异常") || strings.Contains(err.Error(), "分享的stoken过期")) {
-		utils.Log.Infof("夸克文件:%s转存失败:%v", obj.GetName(), err)
+		utils.Log.Infof("由于夸克文件:[%s]转存失败:[%s],重试重新获取文件分享信息", obj.GetName(), err.Error())
 		err = nil
 
 		shareTokenCache.Del(virtualFile.ShareID)
-		topDir := strings.Split(obj.GetPath(), "/")[0]
-		op.Cache.DeleteDirectory(d, topDir)
-		utils.Log.Infof("由于文件token失效,因此清除:%s目录的文件缓存", topDir)
+
+		tempFile, err1 := d.getShareFile(ctx, virtualFile, obj)
+		if err1 != nil {
+			return "", err1
+		} else if tempFile.ID == "" {
+			return "", errors.New(fmt.Sprintf("file: %s not exist", obj.GetName()))
+		}
+
+		stToken, _ = d.getShareInfo(virtualFile.ShareID, virtualFile.SharePwd)
+		shareFidToken = tempFile.ShareFidToken
 
 		transferFile()
 	}

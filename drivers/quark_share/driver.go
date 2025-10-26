@@ -3,6 +3,9 @@ package quark_share
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"time"
+
 	quark "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -11,8 +14,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
-	"path/filepath"
-	"time"
 )
 
 type QuarkShare struct {
@@ -91,7 +92,7 @@ func (d *QuarkShare) Link(ctx context.Context, file model.Obj, args model.LinkAr
 
 	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
 
-	transformFile, err := d.transformFile(virtualFile, *fileObject)
+	transformFile, err := d.transformFile(ctx, virtualFile, *fileObject)
 	if err != nil {
 		return nil, err
 	}
