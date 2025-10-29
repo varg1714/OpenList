@@ -118,7 +118,7 @@ func generateStrm(ctx context.Context, d *Strm, localParentPath string, objs []m
 		}
 		localPath := stdpath.Join(localParentPath, obj.GetName())
 
-		if utils.Exists(localPath) {
+		if !d.UpdateExistFile && utils.Exists(localPath) {
 			continue
 		}
 

@@ -16,6 +16,7 @@ type Addition struct {
 	SaveStrmLocalPath    string `json:"SaveStrmLocalPath" type:"text" help:"save strm file local path"`
 	MkdirPerm            string `json:"mkdir_perm" default:"777"`
 	DeleteExtraLocalFile bool   `json:"deleteExtraLocalFile" default:"false" help:"delete extra file locally"`
+	UpdateExistFile      bool   `json:"updateExistFile" default:"false" help:"override exist file locally"`
 }
 
 var config = driver.Config{
