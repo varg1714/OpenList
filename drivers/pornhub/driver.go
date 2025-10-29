@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type Pornhub struct {
@@ -103,8 +104,10 @@ func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 
 func (d *Pornhub) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 
+	cacheTime := time.Second * time.Duration(d.LinkCacheTime)
 	videoLink := &model.Link{
-		URL: d.MockedLink,
+		URL:        d.MockedLink,
+		Expiration: &cacheTime,
 	}
 
 	if d.MockedByMatchUa != "" && !virtual_file.AllowUA(args.Header.Get("User-Agent"), d.MockedByMatchUa) && d.MockedLink != "" {
