@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -12,9 +16,6 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/robertkrimen/otto"
 	"github.com/tebeka/selenium"
-	"regexp"
-	"strings"
-	"time"
 )
 
 var viewKeyCompile = regexp.MustCompile(`/view_video.php\?viewkey=([^&\s]+)`)
@@ -287,7 +288,7 @@ func (d *Pornhub) getActorFilms(dirName, pageKey string) ([]model.EmbyFileObj, e
 
 		for nextPageFunc() && len(db.QueryUnSaveFilms(newFilmIds, dirName)) > 0 {
 
-			pageUrl = fmt.Sprintf("%s%s/videos?page=%d", d.ServerUrl, pageKey, page)
+			pageUrl = fmt.Sprintf("%s%s?page=%d", d.ServerUrl, pageKey, page)
 
 			err := wd.Get(pageUrl)
 			if err != nil {
