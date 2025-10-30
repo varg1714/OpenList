@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/pikpak"
@@ -17,7 +18,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils/random"
 	"github.com/Xhofe/go-cache"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -353,10 +353,13 @@ func (d *PikPakShare) refreshCaptchaToken(action string, metas map[string]string
 	return nil
 }
 
+var driverRoundIndex atomic.Uint64
+
 func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 
 	driverPaths := strings.Split(d.PikPakDriverPath, "\n")
-	driverPath := driverPaths[random.Rand.Int()%len(driverPaths)]
+	index := driverRoundIndex.Add(1)
+	driverPath := driverPaths[(index-1)%uint64(len(driverPaths))]
 
 	storage := op.GetBalancedStorage(driverPath)
 	pikpakDriver, ok := storage.(*pikpak.PikPak)
@@ -425,6 +428,9 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 			utils.Log.Errorf("pikpak driver remove failed, %s", err2.Error())
 			return
 		}
+
+		// make sure the file has deleted
+		time.Sleep(time.Second * 3)
 		err2 = pikpakDriver.ClearTrash(withoutCancel)
 		if err2 != nil {
 			utils.Log.Errorf("pikpak driver clear failed, %s", err2.Error())
