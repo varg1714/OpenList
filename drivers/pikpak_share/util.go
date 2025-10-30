@@ -17,6 +17,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils/random"
 	"github.com/Xhofe/go-cache"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -354,7 +355,10 @@ func (d *PikPakShare) refreshCaptchaToken(action string, metas map[string]string
 
 func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 
-	storage := op.GetBalancedStorage(d.PikPakDriverPath)
+	driverPaths := strings.Split(d.PikPakDriverPath, "\n")
+	driverPath := driverPaths[random.Rand.Int()%len(driverPaths)]
+
+	storage := op.GetBalancedStorage(driverPath)
 	pikpakDriver, ok := storage.(*pikpak.PikPak)
 
 	if !ok {
