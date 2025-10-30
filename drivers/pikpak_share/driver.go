@@ -2,16 +2,19 @@ package pikpak_share
 
 import (
 	"context"
+	"net/http"
+	"strconv"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
-	"net/http"
-	"time"
+
+	"path/filepath"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
-	"path/filepath"
 )
 
 type PikPakShare struct {
@@ -88,7 +91,12 @@ func (d *PikPakShare) List(ctx context.Context, dir model.Obj, args model.ListAr
 
 	return virtual_file.List(d.ID, dir, func(virtualFile model.VirtualFile, dir model.Obj) ([]model.Obj, error) {
 
-		files, err := d.getFiles(virtualFile, filepath.Base(dir.GetPath()))
+		parentId := ""
+		if _, err := strconv.ParseInt(filepath.Base(dir.GetPath()), 10, 64); err != nil {
+			parentId = filepath.Base(dir.GetPath())
+		}
+
+		files, err := d.getFiles(virtualFile, parentId)
 		if err != nil {
 			return nil, err
 		}
