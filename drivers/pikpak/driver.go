@@ -162,7 +162,6 @@ func (d *PikPak) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 		}
 	}
 
-	utils.Log.Infof("pikpak返回的地址: %s", link.URL)
 	return &link, err
 }
 
@@ -371,6 +370,56 @@ func (d *PikPak) DeleteOfflineTasks(ctx context.Context, taskIDs []string, delet
 	}, nil)
 	if err != nil {
 		return fmt.Errorf("failed to delete tasks %v: %w", taskIDs, err)
+	}
+	return nil
+}
+
+func (d *PikPak) Restore(ctx context.Context, shareId, passCodeToken, fileId string, ancestorIds []string) (RestoreResult, error) {
+
+	url := "https://api-drive.mypikpak.net/drive/v1/share/restore"
+
+	var resp RestoreResult
+
+	_, err := d.request(url, http.MethodPost, func(req *resty.Request) {
+		req.SetContext(ctx).
+			SetBody(base.Json{
+				"share_id":        shareId,
+				"pass_code_token": passCodeToken,
+				"file_ids":        []string{fileId},
+				"params": base.Json{
+					"trace_file_ids": fileId,
+				},
+				"ancestor_ids": ancestorIds,
+			})
+	}, &resp)
+	if err != nil {
+		return resp, fmt.Errorf("failed to restore the file %v: %w", fileId, err)
+	}
+	return resp, nil
+}
+
+func (d *PikPak) GetTask(ctx context.Context, taskId string) (RestoreTask, error) {
+	url := fmt.Sprintf("https://api-drive.mypikpak.net/drive/v1/tasks/%s", taskId)
+
+	var resp RestoreTask
+
+	_, err := d.request(url, http.MethodGet, func(req *resty.Request) {
+		req.SetContext(ctx)
+	}, &resp)
+	if err != nil {
+		return resp, fmt.Errorf("failed to get the take %s: %w", taskId, err)
+	}
+	return resp, nil
+}
+
+func (d *PikPak) ClearTrash(ctx context.Context) error {
+	url := "https://api-drive.mypikpak.net/drive/v1/files/trash:empty"
+
+	_, err := d.request(url, http.MethodPatch, func(req *resty.Request) {
+		req.SetContext(ctx)
+	}, nil)
+	if err != nil {
+		return err
 	}
 	return nil
 }

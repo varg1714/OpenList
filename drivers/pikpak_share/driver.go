@@ -104,6 +104,11 @@ func (d *PikPakShare) List(ctx context.Context, dir model.Obj, args model.ListAr
 		return utils.SliceConvert(files, func(src File) (model.Obj, error) {
 			obj := fileToObj(src)
 			obj.Path = filepath.Join(dir.GetPath(), obj.GetID())
+			if parentId != "" {
+				if sharedFile, ok := dir.(*SharedObject); ok {
+					obj.ancestorIds = append(sharedFile.ancestorIds, parentId)
+				}
+			}
 			return obj, nil
 		})
 
@@ -112,6 +117,10 @@ func (d *PikPakShare) List(ctx context.Context, dir model.Obj, args model.ListAr
 }
 
 func (d *PikPakShare) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+
+	if file.GetSize() > d.TransformFileSize {
+		return d.transformFile(ctx, file, args)
+	}
 
 	var resp ShareResp
 
@@ -147,8 +156,10 @@ func (d *PikPakShare) Link(ctx context.Context, file model.Obj, args model.LinkA
 
 	}
 
+	exp := time.Minute
 	return &model.Link{
-		URL: downloadUrl,
+		URL:        downloadUrl,
+		Expiration: &exp,
 	}, nil
 }
 

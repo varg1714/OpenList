@@ -12,6 +12,8 @@ type Addition struct {
 	Platform              string `json:"platform" default:"web" required:"true" type:"select" options:"android,web,pc"`
 	DeviceID              string `json:"device_id"  required:"false" default:""`
 	UseTransCodingAddress bool   `json:"use_transcoding_address" required:"true" default:"false"`
+	PikPakDriverPath      string `json:"pik_pak_driver_path" required:"true" default:""`
+	TransformFileSize     int64  `json:"transform_file_size" required:"true" default:"0" type:"number"`
 }
 
 var config = driver.Config{

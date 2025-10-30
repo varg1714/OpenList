@@ -29,18 +29,25 @@ type File struct {
 	Medias         []Media   `json:"medias"`
 }
 
-func fileToObj(f File) *model.ObjThumb {
+type SharedObject struct {
+	model.ObjThumb
+	ancestorIds []string
+}
+
+func fileToObj(f File) *SharedObject {
 	size, _ := strconv.ParseInt(f.Size, 10, 64)
-	return &model.ObjThumb{
-		Object: model.Object{
-			ID:       f.Id,
-			Name:     f.Name,
-			Size:     size,
-			Modified: f.ModifiedTime,
-			IsFolder: f.Kind == "drive#folder",
-		},
-		Thumbnail: model.Thumbnail{
-			Thumbnail: f.ThumbnailLink,
+	return &SharedObject{
+		ObjThumb: model.ObjThumb{
+			Object: model.Object{
+				ID:       f.Id,
+				Name:     f.Name,
+				Size:     size,
+				Modified: f.ModifiedTime,
+				IsFolder: f.Kind == "drive#folder",
+			},
+			Thumbnail: model.Thumbnail{
+				Thumbnail: f.ThumbnailLink,
+			},
 		},
 	}
 }

@@ -249,3 +249,39 @@ type AboutResponse struct {
 	ExpiresAt string `json:"expires_at"`
 	UserType  int    `json:"user_type"`
 }
+
+type RestoreResult struct {
+	ShareStatus     string `json:"share_status"`
+	ShareStatusText string `json:"share_status_text"`
+	FileID          string `json:"file_id"`
+	RestoreStatus   string `json:"restore_status"`
+	RestoreTaskID   string `json:"restore_task_id"`
+	Params          struct {
+	} `json:"params"`
+}
+
+type RestoreTask struct {
+	Kind       string `json:"kind"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	UserID     string `json:"user_id"`
+	Statuses   []any  `json:"statuses"`
+	StatusSize int    `json:"status_size"`
+	Params     struct {
+		ShareID      string `json:"share_id"`
+		TraceFileIds string `json:"trace_file_ids"`
+	} `json:"params"`
+	FileID      string    `json:"file_id"`
+	FileName    string    `json:"file_name"`
+	FileSize    string    `json:"file_size"`
+	Message     string    `json:"message"`
+	CreatedTime time.Time `json:"created_time"`
+	UpdatedTime time.Time `json:"updated_time"`
+	ThirdTaskID string    `json:"third_task_id"`
+	Phase       string    `json:"phase"`
+	Progress    int       `json:"progress"`
+	IconLink    string    `json:"icon_link"`
+	Callback    string    `json:"callback"`
+	Space       string    `json:"space"`
+}

@@ -1,18 +1,23 @@
 package pikpak_share
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"github.com/Xhofe/go-cache"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/drivers/pikpak"
+	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/Xhofe/go-cache"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/go-resty/resty/v2"
@@ -345,4 +350,83 @@ func (d *PikPakShare) refreshCaptchaToken(action string, metas map[string]string
 	}
 	d.Common.SetCaptchaToken(resp.CaptchaToken)
 	return nil
+}
+
+func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+
+	storage := op.GetBalancedStorage(d.PikPakDriverPath)
+	pikpakDriver, ok := storage.(*pikpak.PikPak)
+
+	if !ok {
+		return nil, errors.New("please check the pikpak driver path")
+	}
+
+	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
+	sharePassToken, err := d.getSharePassToken(virtualFile)
+	if err != nil {
+		return nil, err
+	}
+
+	traceFileIds := ""
+
+	sharedObject, ok1 := file.(*SharedObject)
+	if !ok1 {
+		return nil, errors.New("please check the file type")
+	}
+
+	restoreResult, err1 := pikpakDriver.Restore(ctx, virtualFile.ShareID, sharePassToken, sharedObject.ID, sharedObject.ancestorIds)
+	if err1 != nil {
+		return nil, err1
+	}
+
+	count := 1
+	for count < 10 {
+		restoreTask, err2 := pikpakDriver.GetTask(ctx, restoreResult.RestoreTaskID)
+		if err2 != nil {
+			return nil, err2
+		}
+
+		if restoreTask.Phase == "PHASE_TYPE_COMPLETE" {
+			traceFileIds = restoreTask.Params.TraceFileIds
+			break
+		} else {
+			time.Sleep(time.Second * 2)
+		}
+
+		count++
+	}
+
+	if traceFileIds == "" {
+		return nil, errors.New("pikpak trace file ids is empty")
+	}
+
+	traceIdMap := map[string]string{}
+	err1 = utils.Json.Unmarshal([]byte(traceFileIds), &traceIdMap)
+	if err1 != nil {
+		return nil, err1
+	}
+
+	newFileId := traceIdMap[sharedObject.ID]
+	if newFileId == "" {
+		return nil, errors.New("pikpak trace file ids is empty")
+	}
+
+	newFile := model.Object{ID: newFileId}
+	link, err1 := pikpakDriver.Link(ctx, &newFile, args)
+	withoutCancel := context.WithoutCancel(ctx)
+
+	go func() {
+		err2 := pikpakDriver.Remove(withoutCancel, &newFile)
+		if err2 != nil {
+			utils.Log.Errorf("pikpak driver remove failed, %s", err2.Error())
+			return
+		}
+		err2 = pikpakDriver.ClearTrash(withoutCancel)
+		if err2 != nil {
+			utils.Log.Errorf("pikpak driver clear failed, %s", err2.Error())
+		}
+	}()
+
+	return link, err1
+
 }
