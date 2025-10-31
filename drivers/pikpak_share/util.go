@@ -154,12 +154,23 @@ func (d *PikPakShare) getSharePassToken(virtualFile model.VirtualFile) (string, 
 	return resp.PassCodeToken, nil
 }
 
+var fileListRespCache = cache.NewMemCache(cache.WithShards[[]File](128))
+
 func (d *PikPakShare) getFiles(virtualFile model.VirtualFile, parentId string) ([]File, error) {
 
 	sharePassToken, err := d.getSharePassToken(virtualFile)
 	if err != nil {
 		utils.Log.Warnf("share token获取错误, share Id:[%s],error:[%s]", virtualFile.ShareID, err.Error())
 		return nil, err
+	}
+
+	buildCacheKeyFunc := func() string {
+		return fmt.Sprintf("%s-%s-%s", virtualFile.ShareID, parentId, sharePassToken)
+	}
+
+	cacheKey := buildCacheKeyFunc()
+	if cacheResp, exist := fileListRespCache.Get(cacheKey); exist {
+		return cacheResp, nil
 	}
 
 	res := make([]File, 0)
@@ -192,6 +203,9 @@ func (d *PikPakShare) getFiles(virtualFile model.VirtualFile, parentId string) (
 		pageToken = resp.NextPageToken
 		res = append(res, resp.Files...)
 	}
+
+	fileListRespCache.Set(cacheKey, res, cache.WithEx[[]File](time.Minute*time.Duration(d.CacheExpiration)))
+
 	return res, nil
 }
 
