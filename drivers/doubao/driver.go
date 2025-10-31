@@ -147,12 +147,14 @@ func (d *Doubao) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 		// 生成标准的Content-Disposition
 		contentDisposition := utils.GenerateContentDisposition(u.Name)
 
+		duration := time.Second * time.Duration(d.LinkCacheTime)
 		return &model.Link{
 			URL: downloadUrl,
 			Header: http.Header{
 				"User-Agent":          []string{UserAgent},
 				"Content-Disposition": []string{contentDisposition},
 			},
+			Expiration: &duration,
 		}, nil
 	}
 
