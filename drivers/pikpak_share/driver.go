@@ -177,4 +177,8 @@ func (d *PikPakShare) Move(ctx context.Context, srcObj, dstDir model.Obj) error 
 	return virtual_file.Move(d.ID, srcObj, dstDir)
 }
 
+func (d *PikPakShare) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
+	return virtual_file.Rename(d.ID, srcObj.GetPath(), srcObj.GetID(), newName)
+}
+
 var _ driver.Driver = (*PikPakShare)(nil)
