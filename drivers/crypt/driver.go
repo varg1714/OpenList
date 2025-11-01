@@ -319,6 +319,7 @@ func (d *Crypt) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 		}),
 		SyncClosers:      utils.NewSyncClosers(remoteLink),
 		RequireReference: remoteLink.RequireReference,
+		Concurrency:      d.Concurrency,
 	}, nil
 }
 

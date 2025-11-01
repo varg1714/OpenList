@@ -22,7 +22,8 @@ type Addition struct {
 
 	Thumbnail bool `json:"thumbnail" required:"true" default:"false" help:"enable thumbnail which pre-generated under .thumbnails folder"`
 
-	ShowHidden bool `json:"show_hidden"  default:"true" required:"false" help:"show hidden directories and files"`
+	ShowHidden  bool `json:"show_hidden"  default:"true" required:"false" help:"show hidden directories and files"`
+	Concurrency int  `json:"concurrency" type:"number" required:"false" help:"download concurrency"`
 }
 
 var config = driver.Config{
