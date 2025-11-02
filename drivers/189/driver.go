@@ -218,7 +218,7 @@ func (d *Cloud189) BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []mo
 					return 1
 				}
 				return 0
-			},
+			}(),
 		})
 	}
 	taskInfosBytes, err := utils.Json.Marshal(taskInfos)
@@ -247,7 +247,7 @@ func (d *Cloud189) BatchCopy(ctx context.Context, srcDir model.Obj, srcObjs []mo
 					return 1
 				}
 				return 0
-			},
+			}(),
 		})
 	}
 

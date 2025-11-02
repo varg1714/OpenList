@@ -104,7 +104,7 @@ func FsMove(c *gin.Context) {
 		return
 	} else if batchMove {
 		common.SuccessResp(c, gin.H{
-			"message": "Copy operations completed immediately",
+			"message": "Move operations completed immediately",
 		})
 		return
 	}
