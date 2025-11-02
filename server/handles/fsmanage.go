@@ -61,7 +61,7 @@ type MoveCopyReq struct {
 	DstDir       string   `json:"dst_dir"`
 	Names        []string `json:"names"`
 	Overwrite    bool     `json:"overwrite"`
-	SkipExisting bool     `json:"skipExisting"`
+	SkipExisting bool     `json:"skip_existing"`
 	Merge        bool     `json:"merge"`
 }
 
