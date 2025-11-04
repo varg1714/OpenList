@@ -5,7 +5,6 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -13,15 +12,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/pikpak"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/Xhofe/go-cache"
-
-	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/go-resty/resty/v2"
+	"github.com/pkg/errors"
 )
 
 // do others that not defined in Driver interface
@@ -379,7 +378,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 	pikpakDriver, ok := storage.(*pikpak.PikPak)
 
 	if !ok {
-		return nil, errors.New("please check the pikpak driver path")
+		return nil, errors.New(fmt.Sprintf("pikpak driver %s is not a pikpak storage", driverPath))
 	}
 
 	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
@@ -397,7 +396,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 
 	restoreResult, err1 := pikpakDriver.Restore(ctx, virtualFile.ShareID, sharePassToken, sharedObject.ID, sharedObject.ancestorIds)
 	if err1 != nil {
-		return nil, err1
+		return nil, errors.WithMessagef(err, "%s: failed to restore shared object.", driverPath)
 	}
 
 	count := 1
@@ -418,7 +417,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 	}
 
 	if traceFileIds == "" {
-		return nil, errors.New("pikpak trace file ids is empty")
+		return nil, errors.WithMessagef(err, "%s: pikpak trace file ids is empty", driverPath)
 	}
 
 	traceIdMap := map[string]string{}
@@ -429,7 +428,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 
 	newFileId := traceIdMap[sharedObject.ID]
 	if newFileId == "" {
-		return nil, errors.New("pikpak trace file ids is empty")
+		return nil, errors.WithMessagef(err, "%s: pikpak trace file ids is empty", driverPath)
 	}
 
 	newFile := model.Object{ID: newFileId}
@@ -439,7 +438,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 	go func() {
 		err2 := pikpakDriver.Remove(withoutCancel, &newFile)
 		if err2 != nil {
-			utils.Log.Errorf("pikpak driver remove failed, %s", err2.Error())
+			utils.Log.Errorf("%s: the transfered file remove failed, %s", driverPath, err2.Error())
 			return
 		}
 
@@ -447,7 +446,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 		time.Sleep(time.Second * 3)
 		err2 = pikpakDriver.ClearTrash(withoutCancel)
 		if err2 != nil {
-			utils.Log.Errorf("pikpak driver clear failed, %s", err2.Error())
+			utils.Log.Errorf("%s: the trash clear failed, %s", driverPath, err2.Error())
 		}
 	}()
 
