@@ -378,7 +378,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 	pikpakDriver, ok := storage.(*pikpak.PikPak)
 
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("pikpak driver %s is not a pikpak storage", driverPath))
+		return nil, fmt.Errorf("pikpak driver %s is not a pikpak storage", driverPath)
 	}
 
 	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
@@ -396,14 +396,14 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 
 	restoreResult, err1 := pikpakDriver.Restore(ctx, virtualFile.ShareID, sharePassToken, sharedObject.ID, sharedObject.ancestorIds)
 	if err1 != nil {
-		return nil, errors.WithMessagef(err, "%s: failed to restore shared object.", driverPath)
+		return nil, errors.WithMessagef(err1, "%s: failed to restore shared object.", driverPath)
 	}
 
 	count := 1
 	for count < 10 {
 		restoreTask, err2 := pikpakDriver.GetTask(ctx, restoreResult.RestoreTaskID)
 		if err2 != nil {
-			return nil, err2
+			return nil, errors.WithMessagef(err2, "%s: failed to get restore task.", driverPath)
 		}
 
 		if restoreTask.Phase == "PHASE_TYPE_COMPLETE" {
@@ -417,7 +417,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 	}
 
 	if traceFileIds == "" {
-		return nil, errors.WithMessagef(err, "%s: pikpak trace file ids is empty", driverPath)
+		return nil, fmt.Errorf("%s: pikpak trace file ids is empty", driverPath)
 	}
 
 	traceIdMap := map[string]string{}
@@ -428,7 +428,7 @@ func (d *PikPakShare) transformFile(ctx context.Context, file model.Obj, args mo
 
 	newFileId := traceIdMap[sharedObject.ID]
 	if newFileId == "" {
-		return nil, errors.WithMessagef(err, "%s: pikpak trace file ids is empty", driverPath)
+		return nil, fmt.Errorf("%s: pikpak trace file ids is empty", driverPath)
 	}
 
 	newFile := model.Object{ID: newFileId}
