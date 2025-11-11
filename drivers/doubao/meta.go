@@ -24,6 +24,10 @@ var config = driver.Config{
 
 func init() {
 	op.RegisterDriver(func() driver.Driver {
-		return &Doubao{}
+		return &Doubao{
+			Addition: Addition{
+				LimitRate: 2,
+			},
+		}
 	})
 }
