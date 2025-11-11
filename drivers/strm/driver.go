@@ -148,6 +148,7 @@ func (d *Strm) Drop(ctx context.Context) error {
 	d.pathMap = nil
 	d.downloadSuffix = nil
 	d.supportSuffix = nil
+	d.strmLocalPathMap = nil
 	for _, path := range strings.Split(d.Paths, "\n") {
 		RemoveStrm(utils.FixAndCleanPath(strings.TrimSpace(path)), d)
 	}
