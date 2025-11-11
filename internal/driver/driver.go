@@ -219,6 +219,15 @@ type LinkCacheModeResolver interface {
 	ResolveLinkCacheMode(path string) LinkCacheMode
 }
 
+type DirectUploader interface {
+	// GetDirectUploadTools returns available frontend-direct upload tools
+	GetDirectUploadTools() []string
+	// GetDirectUploadInfo returns the information needed for direct upload from client to storage
+	// actualPath is the path relative to the storage root (after removing mount path prefix)
+	// return errs.NotImplement if the driver does not support the given direct upload tool
+	GetDirectUploadInfo(ctx context.Context, tool string, dstDir model.Obj, fileName string, fileSize int64) (any, error)
+}
+
 type BatchMove interface {
 	BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []model.Obj, dstDir model.Obj, args model.BatchArgs) error
 }
