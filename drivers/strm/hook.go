@@ -3,13 +3,11 @@ package strm
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	stdpath "path"
 	"path/filepath"
 	"strings"
 
-	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
@@ -20,31 +18,42 @@ import (
 )
 
 var strmMap = make(map[uint]*Strm)
-var strmLocalPathMap = make(map[string]string)
 var strmTrie = patricia.NewTrie()
 
 func UpdateLocalStrm(ctx context.Context, path string, objs []model.Obj) {
 	path = utils.FixAndCleanPath(path)
 	updateLocal := func(driver *Strm, basePath string, objs []model.Obj) {
 
-		relParent := strings.TrimPrefix(basePath, d.MountPath)
-		saveToLocalPath := d.SaveStrmLocalPath
-		for parentPrefix, parentLocalPath := range strmLocalPathMap {
-			if strings.HasPrefix(relParent, parentPrefix) {
-				saveToLocalPath = parentLocalPath
-				relParent = strings.TrimPrefix(relParent, parentPrefix)
-				break
+		relParent := strings.TrimPrefix(basePath, driver.MountPath)
+
+		saveToLocalPath := ""
+		if len(driver.strmLocalPathMap) > 0 {
+			for parentPrefix, parentLocalPath := range driver.strmLocalPathMap {
+				if strings.HasPrefix(relParent, parentPrefix) {
+					saveToLocalPath = parentLocalPath
+					relParent = strings.TrimPrefix(relParent, parentPrefix)
+					break
+				}
 			}
+		} else {
+			saveToLocalPath = driver.SaveStrmLocalPath
 		}
+
+		if len(saveToLocalPath) == 0 {
+			log.Warnf("unable to save strm locally to path: %v", driver.SaveStrmToLocal)
+			return
+		}
+
 		localParentPath := stdpath.Join(saveToLocalPath, relParent)
 
 		for _, obj := range objs {
 			localPath := stdpath.Join(localParentPath, obj.GetName())
 			generateStrm(ctx, driver, obj, localPath)
 		}
-		if d.DeleteExtraLocalFile {
+		if driver.DeleteExtraLocalFile {
 			deleteExtraFiles(localParentPath, objs)
 		}
+
 	}
 
 	_ = strmTrie.VisitPrefixes(patricia.Prefix(path), func(needPathPrefix patricia.Prefix, item patricia.Item) error {
@@ -134,7 +143,7 @@ func generateStrm(ctx context.Context, driver *Strm, obj model.Obj, localPath st
 			return
 		}
 		defer rc.Close()
-		err = os.MkdirAll(filepath.Dir(localPath), os.FileMode(d.mkdirPerm))
+		err = os.MkdirAll(filepath.Dir(localPath), os.FileMode(driver.mkdirPerm))
 		if err != nil {
 			log.Warnf("failed to generate strm of obj %s: failed to create local file: %v", localPath, err)
 			return

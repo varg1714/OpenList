@@ -27,9 +27,10 @@ type Strm struct {
 	autoFlatten bool
 	oneKey      string
 
-	supportSuffix  map[string]struct{}
-	downloadSuffix map[string]struct{}
-	mkdirPerm      int32
+	supportSuffix    map[string]struct{}
+	downloadSuffix   map[string]struct{}
+	mkdirPerm        int32
+	strmLocalPathMap map[string]string
 }
 
 func (d *Strm) Config() driver.Config {
@@ -122,10 +123,11 @@ func (d *Strm) Init(ctx context.Context) error {
 
 	strmMap[d.Storage.ID] = d
 
+	d.strmLocalPathMap = make(map[string]string)
 	for _, localPath := range strings.Split(d.SaveStrmLocalPath, "\n") {
 		localPathMapping := strings.Split(localPath, ":")
 		if len(localPathMapping) == 2 {
-			strmLocalPathMap[localPathMapping[0]] = localPathMapping[1]
+			d.strmLocalPathMap[localPathMapping[0]] = localPathMapping[1]
 		}
 	}
 
@@ -221,7 +223,7 @@ func (d *Strm) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*
 		link := d.getLink(ctx, file.GetPath())
 		return &model.Link{
 			RangeReader: stream.GetRangeReaderFromMFile(int64(len(link)), strings.NewReader(link)),
-			Expiration: &expiration,
+			Expiration:  &expiration,
 		}, nil
 	}
 	// ftp,s3
