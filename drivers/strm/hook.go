@@ -2,6 +2,7 @@ package strm
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	stdpath "path"
@@ -12,76 +13,143 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
+	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
+	"github.com/tchap/go-patricia/v2/patricia"
 )
 
 var strmMap = make(map[uint]*Strm)
 var strmLocalPathMap = make(map[string]string)
+var strmTrie = patricia.NewTrie()
 
-func UpdateLocalStrm(ctx context.Context, parent string, objs []model.Obj) {
-	storage, _, err := op.GetStorageAndActualPath(parent)
-	if err != nil {
-		return
-	}
-	if d, ok := storage.(*Strm); !ok {
-		// 判断非strm驱动的路径是否被strm驱动挂载
-		for id := range strmMap {
-			strmDriver := strmMap[id]
-			if !strmDriver.SaveStrmToLocal {
-				continue
-			}
-			for _, path := range strings.Split(strmDriver.Paths, "\n") {
-				path = strings.TrimSpace(path)
-				if path == "" {
-					continue
-				}
-				// 如果被挂载则访问strm对应路径触发更新
-				if strings.HasPrefix(parent, path) || strings.HasPrefix(parent, path+"/") || parent == path {
-					path = strings.TrimRight(path, "/")
-					strmPath := path[strings.LastIndex(path, "/"):]
-					relPath := stdpath.Join(strmDriver.MountPath, strmPath, strings.TrimPrefix(parent, path))
-					if len(relPath) > 0 {
-						_, _ = fs.List(ctx, relPath, &fs.ListArgs{Refresh: false, NoLog: true})
-					}
-				}
+func UpdateLocalStrm(ctx context.Context, path string, objs []model.Obj) {
+	path = utils.FixAndCleanPath(path)
+	updateLocal := func(driver *Strm, basePath string, objs []model.Obj) {
+
+		relParent := strings.TrimPrefix(basePath, d.MountPath)
+		saveToLocalPath := d.SaveStrmLocalPath
+		for parentPrefix, parentLocalPath := range strmLocalPathMap {
+			if strings.HasPrefix(relParent, parentPrefix) {
+				saveToLocalPath = parentLocalPath
+				relParent = strings.TrimPrefix(relParent, parentPrefix)
+				break
 			}
 		}
+		localParentPath := stdpath.Join(saveToLocalPath, relParent)
+
+		for _, obj := range objs {
+			localPath := stdpath.Join(localParentPath, obj.GetName())
+			generateStrm(ctx, driver, obj, localPath)
+		}
+		if d.DeleteExtraLocalFile {
+			deleteExtraFiles(localParentPath, objs)
+		}
+	}
+
+	_ = strmTrie.VisitPrefixes(patricia.Prefix(path), func(needPathPrefix patricia.Prefix, item patricia.Item) error {
+		strmDrivers := item.([]*Strm)
+		needPath := string(needPathPrefix)
+		restPath := strings.TrimPrefix(path, needPath)
+		if len(restPath) > 0 && restPath[0] != '/' {
+			return nil
+		}
+		for _, strmDriver := range strmDrivers {
+			strmObjs := strmDriver.convert2strmObjs(ctx, path, objs)
+			updateLocal(strmDriver, stdpath.Join(stdpath.Base(needPath), restPath), strmObjs)
+		}
+		return nil
+	})
+}
+
+func InsertStrm(dstPath string, d *Strm) error {
+	prefix := patricia.Prefix(strings.TrimRight(dstPath, "/"))
+	existing := strmTrie.Get(prefix)
+
+	if existing == nil {
+		if !strmTrie.Insert(prefix, []*Strm{d}) {
+			return errors.New("failed to insert strm")
+		}
+		return nil
+	}
+	if lst, ok := existing.([]*Strm); ok {
+		strmTrie.Set(prefix, append(lst, d))
 	} else {
-		if d.SaveStrmToLocal {
-			relParent := strings.TrimPrefix(parent, d.MountPath)
-			localPath := d.SaveStrmLocalPath
-			for parentPrefix, parentLocalPath := range strmLocalPathMap {
-				if strings.HasPrefix(relParent, parentPrefix) {
-					localPath = parentLocalPath
-					relParent = strings.TrimPrefix(relParent, parentPrefix)
-					break
-				}
-			}
-			localParentPath := stdpath.Join(localPath, relParent)
+		return errors.New("invalid trie item type")
+	}
 
-			generateStrm(ctx, d, localParentPath, objs)
-			if d.DeleteExtraLocalFile {
-				deleteExtraFiles(localParentPath, objs)
-			}
+	return nil
+}
 
-			log.Infof("Updating Strm Path %s", localParentPath)
+func RemoveStrm(dstPath string, d *Strm) {
+	prefix := patricia.Prefix(strings.TrimRight(dstPath, "/"))
+	existing := strmTrie.Get(prefix)
+	if existing == nil {
+		return
+	}
+	lst, ok := existing.([]*Strm)
+	if !ok {
+		return
+	}
+	if len(lst) == 1 && lst[0] == d {
+		strmTrie.Delete(prefix)
+		return
+	}
+
+	for i, di := range lst {
+		if di == d {
+			newList := append(lst[:i], lst[i+1:]...)
+			strmTrie.Set(prefix, newList)
+			return
 		}
 	}
 }
 
-func getLocalFiles(localPath string) ([]string, error) {
-	var files []string
-	entries, err := os.ReadDir(localPath)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			files = append(files, stdpath.Join(localPath, entry.Name()))
+func generateStrm(ctx context.Context, driver *Strm, obj model.Obj, localPath string) {
+	if obj.IsDir() {
+		err := utils.CreateNestedDirectory(localPath)
+		if err != nil {
+			log.Warnf("failed to generate strm dir %s: failed to create dir: %v", localPath, err)
+			return
+		}
+	} else {
+		link, err := driver.Link(ctx, obj, model.LinkArgs{})
+		if err != nil {
+			log.Warnf("failed to generate strm of obj %s: failed to link: %v", localPath, err)
+			return
+		}
+		defer link.Close()
+		size := link.ContentLength
+		if size <= 0 {
+			size = obj.GetSize()
+		}
+		rrf, err := stream.GetRangeReaderFromLink(size, link)
+		if err != nil {
+			log.Warnf("failed to generate strm of obj %s: failed to get range reader: %v", localPath, err)
+			return
+		}
+		rc, err := rrf.RangeRead(ctx, http_range.Range{Length: -1})
+		if err != nil {
+			log.Warnf("failed to generate strm of obj %s: failed to read range: %v", localPath, err)
+			return
+		}
+		defer rc.Close()
+		err = os.MkdirAll(filepath.Dir(localPath), os.FileMode(d.mkdirPerm))
+		if err != nil {
+			log.Warnf("failed to generate strm of obj %s: failed to create local file: %v", localPath, err)
+			return
+		}
+
+		file, createErr := os.Create(localPath)
+		if createErr != nil {
+			log.Warnf("failed to generate strm of obj %s: failed to create local file: %v", localPath, err)
+			return
+		}
+		defer file.Close()
+		if _, err := utils.CopyWithBuffer(file, rc); err != nil {
+			log.Warnf("failed to generate strm of obj %s: copy failed: %v", localPath, err)
 		}
 	}
-	return files, nil
 }
 
 func deleteExtraFiles(localPath string, objs []model.Obj) {
@@ -111,48 +179,18 @@ func deleteExtraFiles(localPath string, objs []model.Obj) {
 	}
 }
 
-func generateStrm(ctx context.Context, d *Strm, localParentPath string, objs []model.Obj) {
-	for _, obj := range objs {
-		if obj.IsDir() {
-			continue
-		}
-		localPath := stdpath.Join(localParentPath, obj.GetName())
-
-		if !d.UpdateExistFile && utils.Exists(localPath) {
-			continue
-		}
-
-		link, linkErr := d.Link(ctx, obj, model.LinkArgs{})
-		if linkErr != nil {
-			log.Errorf("get link failed, %s", linkErr)
-			continue
-		}
-
-		err := os.MkdirAll(filepath.Dir(localPath), os.FileMode(d.mkdirPerm))
-		if err != nil {
-			log.Errorf("mkdir failed, %s", err)
-			continue
-		}
-
-		file, createErr := os.Create(localPath)
-		if createErr != nil {
-			log.Errorf("create nested file failed, %s", createErr)
-			continue
-		}
-
-		seekableStream, linkErr := stream.NewSeekableStream(&stream.FileStream{Obj: obj, Ctx: ctx}, link)
-		if linkErr != nil {
-			log.Errorf("create seekable stream failed, %s", linkErr)
-			continue
-		}
-
-		_, copyErr := io.Copy(file, seekableStream)
-		if copyErr != nil {
-			log.Errorf("copy nested file failed: %s", copyErr)
-			continue
-		}
-		_ = file.Close()
+func getLocalFiles(localPath string) ([]string, error) {
+	var files []string
+	entries, err := os.ReadDir(localPath)
+	if err != nil {
+		return nil, err
 	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			files = append(files, stdpath.Join(localPath, entry.Name()))
+		}
+	}
+	return files, nil
 }
 
 func init() {

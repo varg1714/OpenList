@@ -213,6 +213,8 @@ func _fs(g *gin.RouterGroup) {
 	g.POST("/add_offline_download", handles.AddOfflineDownload)
 	g.POST("/offline_download", handles.FsOfflineDownload)
 	g.POST("/archive/decompress", handles.FsArchiveDecompress)
+	// Direct upload (client-side upload to storage)
+	g.POST("/get_direct_upload_info", middlewares.FsUp, handles.FsGetDirectUploadInfo)
 }
 
 func _task(g *gin.RouterGroup) {
