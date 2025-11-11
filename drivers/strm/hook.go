@@ -40,7 +40,7 @@ func UpdateLocalStrm(ctx context.Context, path string, objs []model.Obj) {
 		}
 
 		if len(saveToLocalPath) == 0 {
-			log.Warnf("unable to save strm locally to path: %v", driver.SaveStrmToLocal)
+			log.Warnf("unable to save strm locally to path: %v", driver.SaveStrmLocalPath)
 			return
 		}
 
@@ -116,7 +116,7 @@ func RemoveStrm(dstPath string, d *Strm) {
 
 func generateStrm(ctx context.Context, driver *Strm, obj model.Obj, localPath string) {
 	if obj.IsDir() {
-		err := utils.CreateNestedDirectory(localPath)
+		err := os.MkdirAll(localPath, os.FileMode(driver.mkdirPerm))
 		if err != nil {
 			log.Warnf("failed to generate strm dir %s: failed to create dir: %v", localPath, err)
 			return
