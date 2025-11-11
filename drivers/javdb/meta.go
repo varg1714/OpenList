@@ -25,7 +25,8 @@ type Addition struct {
 	Filter                string `json:"filter" required:"false" help:"Multi values must separated by commas."`
 	SubtitleScanTime      uint64 `json:"subtitle_scan_time" required:"true" type:"number" `
 	SubtitlesScanLimit    int    `json:"subtitles_scan_limit" required:"true" type:"number" `
-	RefreshNfo            bool   `json:"refresh_nfo"`
+	RefreshNfo            bool   `json:"refresh_nfo" required:"false" help:"match the film info from web to db"`
+	SyncNfo               bool   `json:"sync_nfo" required:"false" help:"Sync nfo from db to disk"`
 	EmbyServers           string `json:"emby_servers" required:"false" type:"text"`
 	MatchFilmTagLimit     int    `json:"match_film_tag_limit" required:"false" type:"number" `
 	MatchTopFilmsStarter  int    `json:"match_top_film_starter" required:"true" type:"number" `

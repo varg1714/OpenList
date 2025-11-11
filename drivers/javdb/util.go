@@ -4,6 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -11,10 +16,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/offline_download/tool"
 	"github.com/OpenListTeam/OpenList/v4/internal/open_ai"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"net/http"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func (d *Javdb) getFilms(dirName string, urlFunc func(index int) string) ([]model.EmbyFileObj, error) {
@@ -23,7 +24,16 @@ func (d *Javdb) getFilms(dirName string, urlFunc func(index int) string) ([]mode
 	d.fetchFilms(dirName, urlFunc)
 
 	// 2. mapping film name
-	return d.mappingNames(dirName, virtual_file.ConvertFilms(DriverName, dirName, db.QueryByActor(DriverName, dirName), []model.EmbyFileObj{}, false))
+	films, err := d.mappingNames(dirName, virtual_file.ConvertFilms(DriverName, dirName, db.QueryByActor(DriverName, dirName), []model.EmbyFileObj{}, false))
+	if err != nil {
+		return films, err
+	}
+
+	if d.SyncNfo {
+		virtual_file.SynImageAndNfo(DriverName, dirName, films)
+	}
+
+	return films, err
 
 }
 
@@ -165,6 +175,10 @@ func (d *Javdb) getStars() []model.EmbyFileObj {
 			filmNames = append(filmNames, film.Name)
 		}
 		virtual_file.ClearUnUsedFiles(DriverName, "个人收藏", filmNames)
+	}
+
+	if d.SyncNfo {
+		virtual_file.SynImageAndNfo(DriverName, "个人收藏", films)
 	}
 
 	return films

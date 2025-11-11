@@ -88,6 +88,11 @@ func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 		if err != nil {
 			return nil, err
 		}
+
+		if d.SyncNfo {
+			virtual_file.SynImageAndNfo(DriverName, dirName, films)
+		}
+
 		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})

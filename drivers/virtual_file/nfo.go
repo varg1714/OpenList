@@ -3,14 +3,16 @@ package virtual_file
 import (
 	"encoding/xml"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
-	"github.com/OpenListTeam/OpenList/v4/drivers/base"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
 func CacheImageAndNfo(mediaInfo MediaInfo) int {
@@ -303,5 +305,23 @@ func cacheActorNfo(mediaInfo MediaInfo) int {
 	}
 
 	return CreatedSuccess
+
+}
+
+func SynImageAndNfo(source, dir string, films []model.EmbyFileObj) {
+
+	for _, film := range films {
+		mediaInfo := MediaInfo{
+			Source:   source,
+			Dir:      dir,
+			FileName: AppendImageName(film.Name),
+			Title:    film.Title,
+			ImgUrl:   film.Thumb(),
+			Actors:   film.Actors,
+			Release:  film.ReleaseTime,
+		}
+		_ = cacheActorNfo(mediaInfo)
+		_ = CacheImage(mediaInfo)
+	}
 
 }
