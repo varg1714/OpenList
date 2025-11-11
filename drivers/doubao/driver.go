@@ -314,15 +314,27 @@ func (d *Doubao) BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []mode
 	}
 
 	currentParentId := srcObjs[0].GetPath()
-	var r UploadNodeResp
-	_, err := d.request("/samantha/aispace/move_node", http.MethodPost, func(req *resty.Request) {
-		req.SetBody(base.Json{
-			"node_list":         srcObjIds,
-			"current_parent_id": currentParentId,
-			"target_parent_id":  dstDir.GetID(),
-		})
-	}, &r)
-	return err
+
+	// Doubao service limits the number of files that can be moved in one request
+	partition := utils.SlicePartition(srcObjIds, 50)
+	for _, movingFiles := range partition {
+		if err := d.WaitLimit(ctx); err != nil {
+			return err
+		}
+		var r UploadNodeResp
+		_, err := d.request("/samantha/aispace/move_node", http.MethodPost, func(req *resty.Request) {
+			req.SetBody(base.Json{
+				"node_list":         movingFiles,
+				"current_parent_id": currentParentId,
+				"target_parent_id":  dstDir.GetID(),
+			})
+		}, &r)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 
 }
 

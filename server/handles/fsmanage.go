@@ -90,8 +90,25 @@ func FsMove(c *gin.Context) {
 	}
 
 	if !req.Overwrite {
+
+		// Previously, the existence check was done via the Get() method, which could trigger multiple API calls.
+		// If the target driver does not implement Get(), it would fallback to a List operation.
+		// When the target folder is empty, the cache mechanism cannot take effect, leading to a large number of List requests.
+		// The more files being operated on, the more requests are sent, resulting in very long response times.
+		// Therefore, we directly retrieve all files under the target folder to perform the existence check.
+		dstDirFiles, err1 := fs.List(c.Request.Context(), dstDir, &fs.ListArgs{NoLog: true})
+		if err1 != nil {
+			common.ErrorResp(c, err1, 500)
+			return
+		}
+
+		nameSet := make(map[string]bool)
+		for _, file := range dstDirFiles {
+			nameSet[file.GetName()] = true
+		}
+
 		for _, name := range req.Names {
-			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, name), &fs.GetArgs{NoLog: true}); res != nil {
+			if nameSet[name] {
 				common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
 				return
 			}
@@ -163,8 +180,20 @@ func FsCopy(c *gin.Context) {
 	}
 
 	if !req.Overwrite {
+
+		dstDirFiles, err1 := fs.List(c.Request.Context(), dstDir, &fs.ListArgs{NoLog: true})
+		if err1 != nil {
+			common.ErrorResp(c, err1, 500)
+			return
+		}
+
+		nameSet := make(map[string]bool)
+		for _, file := range dstDirFiles {
+			nameSet[file.GetName()] = true
+		}
+
 		for _, name := range req.Names {
-			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, name), &fs.GetArgs{NoLog: true}); res != nil {
+			if nameSet[name] {
 				common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
 				return
 			}
