@@ -77,9 +77,12 @@ func (d *Crypt) convertEncryptedObj(ctx context.Context, srcDir model.Obj, srcOb
 		return nil, nil, nil, err
 	}
 
-	dstEncryptedObj, err := d.getEncryptedObject(ctx, args.DstDirActualPath)
-	if err != nil {
-		return nil, nil, nil, err
+	var dstEncryptedObj model.Obj
+	if args.DstDirActualPath != "" {
+		dstEncryptedObj, err = d.getEncryptedObject(ctx, args.DstDirActualPath)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
 
 	path := srcDir.GetPath()

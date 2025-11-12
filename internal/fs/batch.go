@@ -28,6 +28,43 @@ func BatchCopy(ctx context.Context, srcDirPath, dstDirPath string, objectNames [
 	)
 }
 
+func BatchRemove(ctx context.Context, srcDirPath string, objectNames []string) (bool, error) {
+
+	srcStorage, srcActualPath, err := op.GetStorageAndActualPath(srcDirPath)
+	if err != nil {
+		return false, errors.WithMessage(err, "failed to get source storage")
+	}
+
+	if _, ok := srcStorage.(driver.BatchRemove); !ok {
+		return false, nil
+	} else {
+		err1 := op.BatchRemove(ctx, srcStorage, srcActualPath, objectNames)
+		if err1 != nil {
+			return false, err1
+		}
+		return true, nil
+	}
+
+}
+
+func BatchRename(ctx context.Context, srcDirPath string, nameMapping map[string]string) (bool, error) {
+	srcStorage, srcActualPath, err := op.GetStorageAndActualPath(srcDirPath)
+	if err != nil {
+		return false, errors.WithMessage(err, "failed to get source storage")
+	}
+
+	if _, ok := srcStorage.(driver.BatchRemove); !ok {
+		return false, nil
+	} else {
+		err1 := op.BatchRename(ctx, srcStorage, srcActualPath, nameMapping)
+		if err1 != nil {
+			return false, err1
+		}
+		return true, nil
+	}
+
+}
+
 func batchFsOperate(ctx context.Context, srcDirPath, dstDirPath string, objectNames []string,
 	capabilityCheck func(d driver.Driver) bool,
 	operation func(ctx context.Context, storage driver.Driver, srcPath, dstPath string, names []string) error) (bool, error) {
