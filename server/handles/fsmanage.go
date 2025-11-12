@@ -310,6 +310,18 @@ func FsRemove(c *gin.Context) {
 		common.ErrorResp(c, err, 403)
 		return
 	}
+
+	batchRemove, err := fs.BatchRemove(c, reqDir, req.Names)
+	if err != nil && !errors.Is(errs.NotImplement, err) {
+		common.ErrorResp(c, err, 500)
+		return
+	} else if batchRemove {
+		common.SuccessResp(c, gin.H{
+			"message": "Remove operations completed immediately",
+		})
+		return
+	}
+
 	for _, name := range req.Names {
 		err := fs.Remove(c.Request.Context(), stdpath.Join(reqDir, name))
 		if err != nil {

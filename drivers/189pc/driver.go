@@ -545,3 +545,22 @@ func (y *Cloud189PC) BatchCopy(ctx context.Context, srcDir model.Obj, srcObjs []
 	}
 	return nil
 }
+func (y *Cloud189PC) BatchRemove(ctx context.Context, batchRenameObj model.BatchRemoveObj, args model.BatchArgs) error {
+	isFamily := y.isFamily()
+
+	var tasks []BatchTaskInfo
+	for _, obj := range batchRenameObj.RemoveObjs {
+		tasks = append(tasks, BatchTaskInfo{
+			FileId:   obj.GetID(),
+			FileName: obj.GetName(),
+			IsFolder: BoolToNumber(obj.IsDir()),
+		})
+	}
+
+	resp, err := y.CreateBatchTask("DELETE", IF(isFamily, y.FamilyID, ""), "", nil, tasks...)
+	if err != nil {
+		return err
+	}
+	// 批量任务数量限制，过快会导致无法删除
+	return y.WaitBatchTask("DELETE", resp.TaskID, time.Millisecond*200)
+}

@@ -402,4 +402,22 @@ func (d *Open115) BatchCopy(ctx context.Context, srcDir model.Obj, srcObjs []mod
 	return err
 }
 
+func (d *Open115) BatchRemove(ctx context.Context, batchRemoveObj model.BatchRemoveObj, args model.BatchArgs) error {
+	if err := d.WaitLimit(ctx); err != nil {
+		return err
+	}
+
+	var srcObjIds []string
+	for _, srcObj := range batchRemoveObj.RemoveObjs {
+		srcObjIds = append(srcObjIds, srcObj.GetID())
+	}
+
+	_, err := d.client.DelFile(ctx, &sdk.DelFileReq{
+		FileIDs:  strings.Join(srcObjIds, ","),
+		ParentID: batchRemoveObj.Dir.GetID(),
+	})
+
+	return err
+}
+
 var _ driver.Driver = (*Open115)(nil)

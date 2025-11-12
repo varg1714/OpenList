@@ -284,4 +284,25 @@ func (d *Pan115) BatchCopy(ctx context.Context, srcDir model.Obj, srcObjs []mode
 	return d.client.Copy(dstDir.GetID(), srcObjIds...)
 }
 
+func (d *Pan115) BatchRemove(ctx context.Context, batchRemoveObj model.BatchRemoveObj, args model.BatchArgs) error {
+	if err := d.WaitLimit(ctx); err != nil {
+		return err
+	}
+
+	var srcObjIds []string
+	for _, srcObj := range batchRemoveObj.RemoveObjs {
+		srcObjIds = append(srcObjIds, srcObj.GetID())
+	}
+
+	return d.client.Delete(srcObjIds...)
+}
+
+func (d *Pan115) BatchRename(ctx context.Context, batchRenameObj model.BatchRenameObj, args model.BatchArgs) error {
+	if err := d.WaitLimit(ctx); err != nil {
+		return err
+	}
+
+	return d.batchRename(batchRenameObj)
+}
+
 var _ driver.Driver = (*Pan115)(nil)

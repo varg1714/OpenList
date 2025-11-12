@@ -340,6 +340,35 @@ func (d *Doubao) BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []mode
 
 }
 
+func (d *Doubao) BatchRemove(ctx context.Context, batchRemoveObj model.BatchRemoveObj, args model.BatchArgs) error {
+	if err := d.WaitLimit(ctx); err != nil {
+		return err
+	}
+
+	var srcObjIds []base.Json
+
+	for _, obj := range batchRemoveObj.RemoveObjs {
+		srcObjIds = append(srcObjIds, base.Json{"id": obj.GetID()})
+	}
+
+	partition := utils.SlicePartition(srcObjIds, 50)
+	for _, removingFiles := range partition {
+		if err := d.WaitLimit(ctx); err != nil {
+			return err
+		}
+
+		var r BaseResp
+		_, err := d.request("/samantha/aispace/delete_node", http.MethodPost, func(req *resty.Request) {
+			req.SetBody(base.Json{"node_list": removingFiles})
+		}, &r)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 //func (d *Doubao) Other(ctx context.Context, args model.OtherArgs) (interface{}, error) {
 //	return nil, errs.NotSupport
 //}

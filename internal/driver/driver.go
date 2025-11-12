@@ -239,3 +239,11 @@ type BatchMove interface {
 type BatchCopy interface {
 	BatchCopy(ctx context.Context, srcDir model.Obj, srcObjs []model.Obj, dstDir model.Obj, args model.BatchArgs) error
 }
+
+type BatchRemove interface {
+	BatchRemove(ctx context.Context, batchRemoveObj model.BatchRemoveObj, args model.BatchArgs) error
+}
+
+type BatchRename interface {
+	BatchRename(ctx context.Context, batchRenameObj model.BatchRenameObj, args model.BatchArgs) error
+}

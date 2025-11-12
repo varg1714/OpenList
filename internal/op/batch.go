@@ -42,6 +42,102 @@ func BatchCopy(ctx context.Context, storage driver.Driver, srcDirPath, dstDirPat
 
 }
 
+func BatchRemove(ctx context.Context, storage driver.Driver, srcDirPath string, removingObjs []string) error {
+
+	batchOperator, ok := storage.(driver.BatchRemove)
+	if !ok {
+		return errors.New("storage driver doesn't support batch remove")
+	}
+
+	if storage.Config().CheckStatus && storage.GetStorage().Status != WORK {
+		return errors.WithMessagef(errs.StorageNotInit, "storage status: %s", storage.GetStorage().Status)
+	}
+
+	srcDirPath = utils.FixAndCleanPath(srcDirPath)
+
+	srcDirFiles, err := List(ctx, storage, srcDirPath, model.ListArgs{})
+	if err != nil {
+		return err
+	}
+
+	srcDir, err := Get(ctx, storage, srcDirPath)
+	if err != nil {
+		return err
+	}
+
+	removingNameSet := make(map[string]bool)
+	for _, obj := range removingObjs {
+		removingNameSet[obj] = true
+	}
+
+	batchRemoveObj := model.BatchRemoveObj{
+		Dir: srcDir,
+	}
+	for _, obj := range srcDirFiles {
+		if removingNameSet[obj.GetName()] {
+			batchRemoveObj.RemoveObjs = append(batchRemoveObj.RemoveObjs, obj)
+		}
+	}
+
+	err = batchOperator.BatchRemove(ctx, batchRemoveObj, model.BatchArgs{
+		SrcDirActualPath: srcDirPath,
+	})
+	if err != nil {
+		return err
+	}
+
+	Cache.DeleteDirectory(storage, srcDirPath)
+
+	return nil
+}
+
+func BatchRename(ctx context.Context, storage driver.Driver, srcDirPath string, nameMapping map[string]string) error {
+
+	batchOperator, ok := storage.(driver.BatchRename)
+	if !ok {
+		return errors.New("storage driver doesn't support batch rename")
+	}
+
+	if storage.Config().CheckStatus && storage.GetStorage().Status != WORK {
+		return errors.WithMessagef(errs.StorageNotInit, "storage status: %s", storage.GetStorage().Status)
+	}
+
+	srcDirPath = utils.FixAndCleanPath(srcDirPath)
+
+	srcDirFiles, err := List(ctx, storage, srcDirPath, model.ListArgs{})
+	if err != nil {
+		return err
+	}
+
+	srcDir, err := Get(ctx, storage, srcDirPath)
+	if err != nil {
+		return err
+	}
+
+	batchRenameObj := model.BatchRenameObj{
+		Dir: srcDir,
+	}
+	for _, obj := range srcDirFiles {
+		if newName, exist := nameMapping[obj.GetName()]; exist {
+			batchRenameObj.RenameObjs = append(batchRenameObj.RenameObjs, model.RenameObj{
+				Obj:     obj,
+				NewName: newName,
+			})
+		}
+	}
+
+	err = batchOperator.BatchRename(ctx, batchRenameObj, model.BatchArgs{
+		SrcDirActualPath: srcDirPath,
+	})
+	if err != nil {
+		return err
+	}
+
+	Cache.DeleteDirectory(storage, srcDirPath)
+
+	return nil
+}
+
 func batchOperate(ctx context.Context, storage driver.Driver, srcDirPath, dstDirPath string, changingObjs []string,
 	operation func(storage driver.Driver, srcDir, dstDir model.Obj, changingObjs []model.Obj) error) error {
 
