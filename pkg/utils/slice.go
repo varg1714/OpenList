@@ -99,12 +99,3 @@ func SliceReplace[T any](arr []T, replace func(src T) T) {
 		arr[i] = replace(src)
 	}
 }
-
-func SlicePartition[T any](array []T, size int) [][]T {
-	var res [][]T
-	for size < len(array) {
-		array, res = array[size:], append(res, array[0:size:size])
-	}
-	res = append(res, array)
-	return res
-}

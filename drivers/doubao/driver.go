@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -316,8 +317,7 @@ func (d *Doubao) BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []mode
 	currentParentId := srcObjs[0].GetPath()
 
 	// Doubao service limits the number of files that can be moved in one request
-	partition := utils.SlicePartition(srcObjIds, 50)
-	for _, movingFiles := range partition {
+	for movingFiles := range slices.Chunk(srcObjs, 50) {
 		if err := d.WaitLimit(ctx); err != nil {
 			return err
 		}
@@ -349,8 +349,7 @@ func (d *Doubao) BatchRemove(ctx context.Context, batchRemoveObj model.BatchRemo
 		srcObjIds = append(srcObjIds, base.Json{"id": obj.GetID()})
 	}
 
-	partition := utils.SlicePartition(srcObjIds, 50)
-	for _, removingFiles := range partition {
+	for removingFiles := range slices.Chunk(srcObjIds, 50) {
 		if err := d.WaitLimit(ctx); err != nil {
 			return err
 		}
