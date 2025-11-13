@@ -210,4 +210,22 @@ func (d *S3) Put(ctx context.Context, dstDir model.Obj, s model.FileStreamer, up
 	return err
 }
 
+func (d *S3) BatchRemove(ctx context.Context, batchRemoveObj model.BatchRemoveObj, args model.BatchArgs) error {
+	var keys []string
+
+	for _, obj := range batchRemoveObj.RemoveObjs {
+		if obj.IsDir() {
+			subDirKeys, err := d.collectAllKeys(ctx, obj.GetPath())
+			if err != nil {
+				return err
+			}
+			keys = append(keys, subDirKeys...)
+		} else {
+			keys = append(keys, getKey(obj.GetPath(), false))
+		}
+	}
+
+	return d.batchDelete(keys)
+}
+
 var _ driver.Driver = (*S3)(nil)
