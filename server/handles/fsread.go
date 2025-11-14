@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -49,13 +50,14 @@ type ObjResp struct {
 }
 
 type FsListResp struct {
-	Content           []ObjResp `json:"content"`
-	Total             int64     `json:"total"`
-	Readme            string    `json:"readme"`
-	Header            string    `json:"header"`
-	Write             bool      `json:"write"`
-	Provider          string    `json:"provider"`
-	DirectUploadTools []string  `json:"direct_upload_tools,omitempty"`
+	Content           []ObjResp     `json:"content"`
+	Total             int64         `json:"total"`
+	Readme            string        `json:"readme"`
+	Header            string        `json:"header"`
+	Write             bool          `json:"write"`
+	Provider          string        `json:"provider"`
+	DirectUploadTools []string      `json:"direct_upload_tools,omitempty"`
+	MkdirConfig       []driver.Item `json:"mkdir_config,omitempty"`
 }
 
 func FsListSplit(c *gin.Context) {
@@ -111,9 +113,14 @@ func FsList(c *gin.Context, req *ListReq, user *model.User) {
 	total, objs := pagination(objs, &req.PageReq)
 	provider := "unknown"
 	var directUploadTools []string
+	var mkdirConfig []driver.Item
 	if user.CanWrite() {
 		if storage, err := fs.GetStorage(reqPath, &fs.GetStoragesArgs{}); err == nil {
 			directUploadTools = op.GetDirectUploadTools(storage)
+			provider = storage.Config().Name
+			if config, ok := storage.(driver.MkdirConfig); ok {
+				mkdirConfig = config.MkdirConfig()
+			}
 		}
 	}
 	common.SuccessResp(c, FsListResp{
@@ -124,6 +131,7 @@ func FsList(c *gin.Context, req *ListReq, user *model.User) {
 		Write:             user.CanWrite() || common.CanWrite(meta, reqPath),
 		Provider:          provider,
 		DirectUploadTools: directUploadTools,
+		MkdirConfig:       mkdirConfig,
 	})
 }
 

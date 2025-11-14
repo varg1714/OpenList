@@ -25,6 +25,10 @@ type Meta interface {
 	Drop(ctx context.Context) error
 }
 
+type MkdirConfig interface {
+	MkdirConfig() []Item
+}
+
 type Other interface {
 	Other(ctx context.Context, args model.OtherArgs) (interface{}, error)
 }

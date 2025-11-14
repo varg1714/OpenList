@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -155,33 +155,15 @@ func (d *Pornhub) Remove(ctx context.Context, obj model.Obj) error {
 
 func (d *Pornhub) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
 
-	actorType := 0
-	name := ""
-	url := ""
-
-	if strings.HasPrefix(dirName, "{") {
-		var param MakeDirParam
-		err := json.Unmarshal([]byte(dirName), &param)
-		if err != nil {
-			return err
-		}
-		name = param.Name
-		url = param.Url
-		actorType = param.Type
-	} else {
-		split := strings.Split(dirName, " ")
-		if len(split) != 3 {
-			return errors.New("illegal dirName")
-		}
-
-		tempType, err := strconv.Atoi(split[2])
-		if err != nil {
-			return errors.New("illegal dirName")
-		}
-		actorType = tempType
-		name = split[0]
-		url = split[1]
+	var param MakeDirParam
+	err := json.Unmarshal([]byte(dirName), &param)
+	if err != nil {
+		return err
 	}
+
+	name := param.DirName
+	url := param.Url
+	actorType := param.Type
 
 	if actorType == PlayList {
 		// playlist
@@ -197,6 +179,34 @@ func (d *Pornhub) MakeDir(ctx context.Context, parentDir model.Obj, dirName stri
 
 	return db.CreateActor(strconv.Itoa(int(d.ID)), name, url)
 
+}
+
+func (d *Pornhub) MkdirConfig() []driver.Item {
+	return []driver.Item{
+		{
+			Name:     "dirName",
+			Type:     conf.TypeString,
+			Default:  "",
+			Options:  "",
+			Help:     "文件夹名称",
+			Required: true,
+		},
+		{
+			Name:     "type",
+			Type:     conf.TypeSelect,
+			Default:  "",
+			Options:  "0,1,2",
+			Help:     "0:播放列表;1:演员;2:明星",
+			Required: true,
+		},
+		{
+			Name:    "url",
+			Type:    conf.TypeString,
+			Default: "",
+			Options: "",
+			Help:    "url",
+		},
+	}
 }
 
 var _ driver.Driver = (*Pornhub)(nil)

@@ -153,6 +153,10 @@ func (d *QuarkShare) Put(ctx context.Context, dstDir model.Obj, stream model.Fil
 	return errs.NotSupport
 }
 
+func (d *QuarkShare) MkdirConfig() []driver.Item {
+	return virtual_file.GetMkdirConfig()
+}
+
 //func (d *Template) Other(ctx context.Context, args model.OtherArgs) (interface{}, error) {
 //	return nil, errs.NotSupport
 //}

@@ -2,10 +2,14 @@ package javdb
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/emby"
@@ -13,9 +17,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/emirpasic/gods/v2/maps/linkedhashmap"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type Javdb struct {
@@ -232,12 +233,13 @@ func (d *Javdb) Remove(ctx context.Context, obj model.Obj) error {
 
 func (d *Javdb) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
 
-	split := strings.Split(dirName, " ")
-	if len(split) != 2 {
-		return errors.New("illegal dirName")
+	var req CreatActorReq
+	err := utils.Json.Unmarshal([]byte(dirName), &req)
+	if err != nil {
+		return err
 	}
 
-	return db.CreateActor(strconv.Itoa(int(d.ID)), split[0], split[1])
+	return db.CreateActor(strconv.Itoa(int(d.ID)), req.ActorName, req.ActorId)
 
 }
 
@@ -250,6 +252,27 @@ func (d *Javdb) Put(ctx context.Context, dstDir model.Obj, stream model.FileStre
 	dirWrapper := virtual_file.WrapEmbyFilms([]model.EmbyFileObj{star})[0]
 	return &dirWrapper, err
 
+}
+
+func (d *Javdb) MkdirConfig() []driver.Item {
+	return []driver.Item{
+		{
+			Name:     "actorName",
+			Type:     conf.TypeString,
+			Default:  "",
+			Options:  "",
+			Help:     "演员名称",
+			Required: true,
+		},
+		{
+			Name:     "actorId",
+			Type:     conf.TypeString,
+			Default:  "",
+			Options:  "",
+			Help:     "演员ID",
+			Required: true,
+		},
+	}
 }
 
 var _ driver.Driver = (*Javdb)(nil)

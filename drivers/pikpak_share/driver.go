@@ -181,4 +181,8 @@ func (d *PikPakShare) Rename(ctx context.Context, srcObj model.Obj, newName stri
 	return virtual_file.Rename(d.ID, srcObj.GetPath(), srcObj.GetID(), newName)
 }
 
+func (d *PikPakShare) MkdirConfig() []driver.Item {
+	return virtual_file.GetMkdirConfig()
+}
+
 var _ driver.Driver = (*PikPakShare)(nil)

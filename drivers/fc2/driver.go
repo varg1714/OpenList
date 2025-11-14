@@ -2,6 +2,7 @@ package fc2
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/emby"
@@ -191,31 +193,27 @@ func (d *FC2) Remove(ctx context.Context, obj model.Obj) error {
 
 func (d *FC2) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
 
-	split := strings.Split(dirName, " ")
-	if len(split) != 3 {
-		return errors.New("illegal dirName")
-	}
-
-	actorType, err := strconv.Atoi(split[2])
+	var param MakeDirParam
+	err := json.Unmarshal([]byte(dirName), &param)
 	if err != nil {
-		return errors.New("illegal dirName")
+		return err
 	}
 
 	var url string
-	if actorType == 0 {
+	if param.Type == 0 {
 		// 0 演员
-		url = fmt.Sprintf("https://fc2ppvdb.com/actresses/%s", split[1]) + "?page=%d"
-	} else if actorType == 1 {
+		url = fmt.Sprintf("https://fc2ppvdb.com/actresses/%s", param.Url) + "?page=%d"
+	} else if param.Type == 1 {
 		// 贩卖者
-		url = fmt.Sprintf("https://fc2ppvdb.com/writers/%s", split[1]) + "?page=%d"
-	} else if actorType == 2 {
+		url = fmt.Sprintf("https://fc2ppvdb.com/writers/%s", param.Url) + "?page=%d"
+	} else if param.Type == 2 {
 		// missAv fc2收藏榜
 		url = "https://missav.ai/dm99/cn/fc2?sort=saved&page=%d"
 	} else {
 		return errors.New("illegal actorType")
 	}
 
-	return db.CreateActor(strconv.Itoa(int(d.ID)), split[0], url)
+	return db.CreateActor(strconv.Itoa(int(d.ID)), param.DirName, url)
 
 }
 
@@ -233,6 +231,34 @@ func (d *FC2) Put(ctx context.Context, dstDir model.Obj, stream model.FileStream
 
 	return &dirWrapper, err
 
+}
+
+func (d *FC2) MkdirConfig() []driver.Item {
+	return []driver.Item{
+		{
+			Name:     "dirName",
+			Type:     conf.TypeString,
+			Default:  "",
+			Options:  "",
+			Help:     "文件夹名称",
+			Required: true,
+		},
+		{
+			Name:     "type",
+			Type:     conf.TypeSelect,
+			Default:  "",
+			Options:  "0,1,2",
+			Help:     "0:演员;1:贩卖者;2:收藏榜",
+			Required: true,
+		},
+		{
+			Name:    "url",
+			Type:    conf.TypeString,
+			Default: "",
+			Options: "",
+			Help:    "url",
+		},
+	}
 }
 
 var _ driver.Driver = (*FC2)(nil)

@@ -3,6 +3,8 @@ package quark_share
 import (
 	"context"
 	"errors"
+	"path/filepath"
+
 	_189pc "github.com/OpenListTeam/OpenList/v4/drivers/189pc"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
@@ -12,7 +14,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
-	"path/filepath"
 )
 
 type Cloud189Share struct {
@@ -121,6 +122,10 @@ func (d *Cloud189Share) Remove(ctx context.Context, obj model.Obj) error {
 func (d *Cloud189Share) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
 	// TODO upload file, optional
 	return errs.NotSupport
+}
+
+func (d *Cloud189Share) MkdirConfig() []driver.Item {
+	return virtual_file.GetMkdirConfig()
 }
 
 //func (d *Template) Other(ctx context.Context, args model.OtherArgs) (interface{}, error) {

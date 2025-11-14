@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/generic"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -205,6 +207,63 @@ func MakeDir(storageId uint, parentDir model.Obj, param string) error {
 
 	return db.CreateVirtualFile(req)
 
+}
+
+func GetMkdirConfig() []driver.Item {
+	return []driver.Item{
+		{
+			Name:     "controlText",
+			Type:     conf.TypeText,
+			Default:  "",
+			Options:  "",
+			Help:     "控制文本，用于便捷的生成其他属性信息",
+			Required: true,
+		},
+		{
+			Name:     "dirType",
+			Type:     conf.TypeSelect,
+			Default:  "1",
+			Options:  "0,1",
+			Help:     "0:订阅文件夹;1:虚拟文件夹",
+			Required: true,
+		},
+		{
+			Name:     "name",
+			Type:     conf.TypeString,
+			Default:  "",
+			Options:  "",
+			Help:     "文件夹名称",
+			Required: true,
+		},
+		{
+			Name:    "shareId",
+			Type:    conf.TypeString,
+			Default: "",
+			Options: "",
+			Help:    "分享ID",
+		},
+		{
+			Name:    "parentDir",
+			Type:    conf.TypeString,
+			Default: "0",
+			Options: "",
+			Help:    "挂载的根文件夹ID",
+		},
+		{
+			Name:    "sharePwd",
+			Type:    conf.TypeString,
+			Default: "",
+			Options: "",
+			Help:    "分享密码",
+		},
+		{
+			Name:    "minSize",
+			Type:    conf.TypeString,
+			Default: "0",
+			Options: "",
+			Help:    "最小文件大小",
+		},
+	}
 }
 
 func GetSubscription(storageId uint, path string) model.VirtualFile {

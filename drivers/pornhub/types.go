@@ -21,7 +21,7 @@ type PornFilm struct {
 }
 
 type MakeDirParam struct {
-	Name string `json:"name"`
-	Type int    `json:"type"`
-	Url  string `json:"url"`
+	DirName string `json:"dirName"`
+	Type    int    `json:"type"`
+	Url     string `json:"url"`
 }

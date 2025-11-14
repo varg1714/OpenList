@@ -12,3 +12,9 @@ type WhatLinkInfo struct {
 		Screenshot string `json:"screenshot"`
 	} `json:"screenshots"`
 }
+
+type MakeDirParam struct {
+	DirName string `json:"dirName"`
+	Type    int    `json:"type"`
+	Url     string `json:"url"`
+}
