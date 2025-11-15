@@ -17,7 +17,7 @@ import (
 
 func CacheImageAndNfo(mediaInfo MediaInfo) int {
 
-	actorNfo := cacheActorNfo(mediaInfo)
+	actorNfo := cacheActorNfo(mediaInfo, false)
 	if actorNfo == Exist {
 		return Exist
 	}
@@ -129,7 +129,7 @@ func CacheImage(mediaInfo MediaInfo) int {
 
 func UpdateNfo(mediaInfo MediaInfo) {
 
-	cacheResult := cacheActorNfo(mediaInfo)
+	cacheResult := cacheActorNfo(mediaInfo, false)
 	if cacheResult != Exist {
 		return
 	}
@@ -153,7 +153,7 @@ func UpdateNfo(mediaInfo MediaInfo) {
 		if err1 != nil {
 			utils.Log.Warnf("failed to delete the file:[%s], error message:%s", filePath, err.Error())
 		} else {
-			cacheActorNfo(mediaInfo)
+			cacheActorNfo(mediaInfo, false)
 		}
 
 		return
@@ -248,7 +248,7 @@ func ClearUnUsedFiles(source, dir string, fileNames []string) {
 
 }
 
-func cacheActorNfo(mediaInfo MediaInfo) int {
+func cacheActorNfo(mediaInfo MediaInfo, force bool) int {
 
 	fileName := mediaInfo.FileName
 	if fileName == "" {
@@ -257,7 +257,7 @@ func cacheActorNfo(mediaInfo MediaInfo) int {
 
 	source := mediaInfo.Source
 	filePath := filepath.Join(flags.DataDir, "emby", source, mediaInfo.Dir, GetRealName(fileName), clearFileName(fileName)+".nfo")
-	if utils.Exists(filePath) {
+	if utils.Exists(filePath) && !force {
 		return Exist
 	}
 
@@ -319,8 +319,9 @@ func SynImageAndNfo(source, dir string, films []model.EmbyFileObj) {
 			ImgUrl:   film.Thumb(),
 			Actors:   film.Actors,
 			Release:  film.ReleaseTime,
+			Tags:     film.Tags,
 		}
-		_ = cacheActorNfo(mediaInfo)
+		_ = cacheActorNfo(mediaInfo, true)
 		_ = CacheImage(mediaInfo)
 	}
 
