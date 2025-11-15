@@ -33,6 +33,12 @@ type Obj interface {
 	GetPath() string
 }
 
+type Additional interface{}
+
+type ObjAdditional interface {
+	GetAddition() Additional
+}
+
 // FileStreamer ->check FileStream for more comments
 type FileStreamer interface {
 	io.Reader

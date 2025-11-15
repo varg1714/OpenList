@@ -194,7 +194,7 @@ func (d *Pornhub) MkdirConfig() []driver.Item {
 		{
 			Name:     "type",
 			Type:     conf.TypeSelect,
-			Default:  "",
+			Default:  "1",
 			Options:  "0,1,2",
 			Help:     "0:播放列表;1:演员;2:明星",
 			Required: true,

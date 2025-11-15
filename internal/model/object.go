@@ -124,6 +124,10 @@ type ObjVirtualDir struct {
 	VirtualFile
 }
 
+func (o *ObjVirtualDir) GetAddition() Additional {
+	return o.VirtualFile.GetInfo()
+}
+
 type Provider struct {
 	Provider string
 }

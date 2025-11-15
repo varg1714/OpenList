@@ -7,9 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/drivers/aliyundrive_open"
-	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"io"
 	"math"
 	"math/big"
@@ -17,6 +14,10 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/drivers/aliyundrive_open"
+	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -169,7 +170,7 @@ func (d *AliDrive) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 
 func (d *AliDrive) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
 
-	return virtual_file.Rename(d.ID, srcObj.GetPath(), srcObj.GetID(), newName)
+	return virtual_file.Rename(d.ID, srcObj, newName)
 
 }
 

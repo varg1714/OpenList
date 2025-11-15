@@ -6,6 +6,8 @@ const (
 	TypeBool   = "bool"
 	TypeText   = "text"
 	TypeNumber = "number"
+	TypeGroup  = "group"
+	TypeArray  = "array"
 )
 
 const (

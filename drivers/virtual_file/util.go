@@ -187,18 +187,22 @@ func MakeDir(storageId uint, parentDir model.Obj, param string) error {
 		req.DirType = model.VirtualDirection
 	}
 
+	if req.Name == "" {
+		return errors.New("empty dir name")
+	}
+
 	if parentDir.GetName() == "root" {
 		req.Parent = ""
 	} else if virDir, ok := parentDir.(*model.ObjVirtualDir); ok && virDir.DirType == model.VirtualDirection {
 		req.Parent = fmt.Sprintf("%d", virDir.ID)
 	} else {
-		return errors.New("不允许在此目录下新增文件夹")
+		return errors.New("can't make the new dir under this dir")
 	}
 
 	virtualFiles := db.QueryVirtualFiles(storageId, req.Parent)
 	for _, file := range virtualFiles {
 		if file.Name == req.Name {
-			return errors.New("文件夹已存在")
+			return errors.New("the file already exists")
 		}
 	}
 
@@ -210,15 +214,19 @@ func MakeDir(storageId uint, parentDir model.Obj, param string) error {
 }
 
 func GetMkdirConfig() []driver.Item {
+	subscriptionCondition := driver.VisibilityCondition{
+		Field: "dirType",
+		Value: "0",
+	}
+	orderRenameCondition := driver.VisibilityCondition{
+		Field: "type",
+		Value: "0",
+	}
+	regexpRenameCondition := driver.VisibilityCondition{
+		Field: "type",
+		Value: "1",
+	}
 	return []driver.Item{
-		{
-			Name:     "controlText",
-			Type:     conf.TypeText,
-			Default:  "",
-			Options:  "",
-			Help:     "控制文本，用于便捷的生成其他属性信息",
-			Required: true,
-		},
 		{
 			Name:     "dirType",
 			Type:     conf.TypeSelect,
@@ -236,32 +244,98 @@ func GetMkdirConfig() []driver.Item {
 			Required: true,
 		},
 		{
-			Name:    "shareId",
-			Type:    conf.TypeString,
+			Name:      "shareId",
+			Type:      conf.TypeString,
+			Default:   "",
+			Options:   "",
+			Help:      "分享ID",
+			VisibleOn: subscriptionCondition,
+		},
+		{
+			Name:      "parentDir",
+			Type:      conf.TypeString,
+			Default:   "0",
+			Options:   "",
+			Help:      "挂载的根文件夹ID",
+			VisibleOn: subscriptionCondition,
+		},
+		{
+			Name:      "sharePwd",
+			Type:      conf.TypeString,
+			Default:   "",
+			Options:   "",
+			Help:      "分享密码",
+			VisibleOn: subscriptionCondition,
+		},
+		{
+			Name:      "minFileSize",
+			Type:      conf.TypeNumber,
+			Default:   "0",
+			Options:   "",
+			Help:      "最小文件大小，小于此大小的文件不会展示",
+			VisibleOn: subscriptionCondition,
+		},
+		{
+			Name:    "replace",
+			Type:    conf.TypeArray,
 			Default: "",
 			Options: "",
-			Help:    "分享ID",
-		},
-		{
-			Name:    "parentDir",
-			Type:    conf.TypeString,
-			Default: "0",
-			Options: "",
-			Help:    "挂载的根文件夹ID",
-		},
-		{
-			Name:    "sharePwd",
-			Type:    conf.TypeString,
-			Default: "",
-			Options: "",
-			Help:    "分享密码",
-		},
-		{
-			Name:    "minSize",
-			Type:    conf.TypeString,
-			Default: "0",
-			Options: "",
-			Help:    "最小文件大小",
+			Help:    "替换类型",
+			Children: []driver.Item{
+				{
+					Name:     "type",
+					Type:     conf.TypeSelect,
+					Default:  "1",
+					Options:  "0,1",
+					Help:     "0:顺序重命名;1:正则重命名",
+					Required: true,
+				},
+				{
+					Name:      "oldNameRegexp",
+					Type:      conf.TypeString,
+					Default:   "",
+					Options:   "",
+					Help:      "原文件名匹配正则表达式",
+					Required:  false,
+					VisibleOn: regexpRenameCondition,
+				},
+				{
+					Name:      "sourceName",
+					Type:      conf.TypeString,
+					Default:   "",
+					Options:   "",
+					Help:      "替换的正则表达式",
+					Required:  false,
+					VisibleOn: regexpRenameCondition,
+				},
+				{
+					Name:      "startNum",
+					Type:      conf.TypeNumber,
+					Default:   "1",
+					Options:   "",
+					Help:      "开始编号",
+					Required:  false,
+					VisibleOn: orderRenameCondition,
+				},
+				{
+					Name:      "start",
+					Type:      conf.TypeNumber,
+					Default:   "0",
+					Options:   "",
+					Help:      "替换的起始索引，小于此索引的数据不会被替换",
+					Required:  false,
+					VisibleOn: orderRenameCondition,
+				}, {
+					Name:      "end",
+					Type:      conf.TypeNumber,
+					Default:   "-1",
+					Options:   "",
+					Help:      "替换的终止索引，大于此索引的数据不会被替换。-1为替换至列表结束",
+					Required:  false,
+					VisibleOn: orderRenameCondition,
+				},
+			},
+			VisibleOn: subscriptionCondition,
 		},
 	}
 }
@@ -405,8 +479,19 @@ func Move(storageId uint, srcObj model.Obj, targetDir model.Obj) error {
 
 }
 
-func Rename(storageId uint, dir, oldName, newName string) error {
+func Rename(storageId uint, srcObj model.Obj, newName string) error {
 
+	if virDir, ok := srcObj.(*model.ObjVirtualDir); ok {
+		var req model.VirtualFileInfo
+		err := utils.Json.Unmarshal([]byte(newName), &req)
+		if err != nil {
+			return err
+		}
+		virDir.VirtualFileInfo = req
+		return db.UpdateVirtualFile(virDir.VirtualFile)
+	}
+
+	dir, oldName := srcObj.GetPath(), srcObj.GetID()
 	_, err := strconv.Atoi(oldName)
 	if err == nil {
 		virtualFiles, err1 := db.QueryVirtualFilesById(storageId, []string{oldName})
@@ -431,11 +516,11 @@ func Rename(storageId uint, dir, oldName, newName string) error {
 
 func tryReplace(replaceItem *model.ReplaceItem, index int, oldName string, nameSetter model.SetName) bool {
 
-	if replaceItem.SourceName == "" {
-		return false
-	}
-
 	if replaceItem.Type == 0 {
+
+		if replaceItem.SourceName == "" {
+			return false
+		}
 
 		// 不在给定的重命名规则中
 		if index < replaceItem.Start || (replaceItem.End != -1 && index > replaceItem.End) {

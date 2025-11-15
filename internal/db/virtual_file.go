@@ -31,8 +31,10 @@ func QueryVirtualFilesById(storageId uint, ids []string) ([]model.VirtualFile, e
 func QueryVirtualFilm(storageId uint, name string) model.VirtualFile {
 
 	file := model.VirtualFile{
-		StorageId: storageId,
-		Name:      name,
+		VirtualFileInfo: model.VirtualFileInfo{
+			StorageId: storageId,
+			Name:      name,
+		},
 	}
 
 	db.Where(file).Take(&file)

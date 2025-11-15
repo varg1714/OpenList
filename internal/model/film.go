@@ -4,8 +4,9 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
-	"gorm.io/gorm"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type Film struct {
@@ -53,8 +54,7 @@ const (
 	VirtualDirection
 )
 
-type VirtualFile struct {
-	ID              uint          `gorm:"primarykey"`
+type VirtualFileInfo struct {
 	DirType         uint          `json:"dirType"`
 	Parent          string        `json:"parent"`
 	StorageId       uint          `json:"storage_id"`
@@ -68,6 +68,15 @@ type VirtualFile struct {
 	MinFileSize     int64         `json:"minFileSize"`
 	Modified        time.Time     `json:"modified"`
 	Replace         []ReplaceItem `json:"replace" gorm:"type:json;serializer:json"`
+}
+
+type VirtualFile struct {
+	ID uint `gorm:"primarykey"`
+	VirtualFileInfo
+}
+
+func (d *VirtualFile) GetInfo() VirtualFileInfo {
+	return d.VirtualFileInfo
 }
 
 type ReplaceItem struct {

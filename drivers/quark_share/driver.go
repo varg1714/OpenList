@@ -136,7 +136,7 @@ func (d *QuarkShare) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 }
 
 func (d *QuarkShare) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
-	return virtual_file.Rename(d.ID, srcObj.GetPath(), srcObj.GetID(), newName)
+	return virtual_file.Rename(d.ID, srcObj, newName)
 }
 
 func (d *QuarkShare) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {

@@ -107,7 +107,7 @@ func (d *Cloud189Share) Move(ctx context.Context, srcObj, dstDir model.Obj) erro
 }
 
 func (d *Cloud189Share) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
-	return virtual_file.Rename(d.ID, srcObj.GetPath(), srcObj.GetID(), newName)
+	return virtual_file.Rename(d.ID, srcObj, newName)
 }
 
 func (d *Cloud189Share) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
