@@ -317,7 +317,7 @@ func (d *Doubao) BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []mode
 	currentParentId := srcObjs[0].GetPath()
 
 	// Doubao service limits the number of files that can be moved in one request
-	for movingFiles := range slices.Chunk(srcObjs, 50) {
+	for movingFiles := range slices.Chunk(srcObjIds, 50) {
 		if err := d.WaitLimit(ctx); err != nil {
 			return err
 		}

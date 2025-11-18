@@ -18,10 +18,20 @@ func BatchMove(ctx context.Context, storage driver.Driver, srcDirPath, dstDirPat
 			return errors.New("storage driver doesn't support batch move")
 		}
 
-		return batchOperator.BatchMove(ctx, srcDir, changingObjs, dstDir, model.BatchArgs{
+		err := batchOperator.BatchMove(ctx, srcDir, changingObjs, dstDir, model.BatchArgs{
 			SrcDirActualPath: srcDirPath,
 			DstDirActualPath: dstDirPath,
 		})
+
+		if err != nil {
+			return err
+		}
+
+		for _, obj := range changingObjs {
+			Cache.removeDirectoryObject(storage, srcDirPath, obj)
+		}
+
+		return err
 	})
 
 }
@@ -86,7 +96,9 @@ func BatchRemove(ctx context.Context, storage driver.Driver, srcDirPath string, 
 		return err
 	}
 
-	Cache.DeleteDirectory(storage, srcDirPath)
+	for _, obj := range batchRemoveObj.RemoveObjs {
+		Cache.removeDirectoryObject(storage, srcDirPath, obj)
+	}
 
 	return nil
 }
@@ -188,7 +200,6 @@ func batchOperate(ctx context.Context, storage driver.Driver, srcDirPath, dstDir
 		return err
 	}
 
-	Cache.DeleteDirectory(storage, srcDirPath)
 	Cache.DeleteDirectory(storage, dstDirPath)
 
 	return nil
