@@ -123,11 +123,3 @@ func Slice2Map[T any, K any](list []T, keyFunc func(t T) string, valFunc func(t 
 
 }
 
-func SlicePartition[T any](array []T, size int) [][]T {
-	var res [][]T
-	for size < len(array) {
-		array, res = array[size:], append(res, array[0:size:size])
-	}
-	res = append(res, array)
-	return res
-}
