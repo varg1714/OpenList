@@ -57,10 +57,12 @@ func FsMkdir(c *gin.Context) {
 }
 
 type MoveCopyReq struct {
-	SrcDir    string   `json:"src_dir"`
-	DstDir    string   `json:"dst_dir"`
-	Names     []string `json:"names"`
-	Overwrite bool     `json:"overwrite"`
+	SrcDir       string   `json:"src_dir"`
+	DstDir       string   `json:"dst_dir"`
+	Names        []string `json:"names"`
+	Overwrite    bool     `json:"overwrite"`
+	SkipExisting bool     `json:"skip_existing"`
+	Merge        bool     `json:"merge"`
 }
 
 func FsMove(c *gin.Context) {
@@ -89,6 +91,7 @@ func FsMove(c *gin.Context) {
 		return
 	}
 
+	var validNames []string
 	if !req.Overwrite {
 
 		// Previously, the existence check was done via the Get() method, which could trigger multiple API calls.
@@ -108,14 +111,25 @@ func FsMove(c *gin.Context) {
 		}
 
 		for _, name := range req.Names {
-			if nameSet[name] {
+			if nameSet[name] && !req.SkipExisting {
 				common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
 				return
+			} else if !nameSet[name] {
+				validNames = append(validNames, name)
 			}
 		}
+	} else {
+		validNames = req.Names
 	}
 
-	batchMove, err := fs.BatchMove(c.Request.Context(), req.SrcDir, req.DstDir, req.Names)
+	if len(validNames) == 0 {
+		common.SuccessResp(c, gin.H{
+			"message": "Move operations completed immediately",
+		})
+		return
+	}
+
+	batchMove, err := fs.BatchMove(c.Request.Context(), req.SrcDir, req.DstDir, validNames)
 	if err != nil && !errors.Is(errs.NotImplement, err) {
 		common.ErrorResp(c, err, 500)
 		return
@@ -129,8 +143,8 @@ func FsMove(c *gin.Context) {
 	// Create all tasks immediately without any synchronous validation
 	// All validation will be done asynchronously in the background
 	var addedTasks []task.TaskExtensionInfo
-	for i, name := range req.Names {
-		t, err := fs.Move(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(req.Names) > i+1)
+	for i, name := range validNames {
+		t, err := fs.Move(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
 		if t != nil {
 			addedTasks = append(addedTasks, t)
 		}
@@ -179,6 +193,7 @@ func FsCopy(c *gin.Context) {
 		return
 	}
 
+	var validNames []string
 	if !req.Overwrite {
 
 		dstDirFiles, err1 := fs.List(c.Request.Context(), dstDir, &fs.ListArgs{NoLog: true})
@@ -187,20 +202,35 @@ func FsCopy(c *gin.Context) {
 			return
 		}
 
-		nameSet := make(map[string]bool)
+		nameSet := make(map[string]model.Obj)
 		for _, file := range dstDirFiles {
-			nameSet[file.GetName()] = true
+			nameSet[file.GetName()] = file
 		}
 
 		for _, name := range req.Names {
-			if nameSet[name] {
-				common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
-				return
+			if existFile, ok := nameSet[name]; ok {
+				if !req.SkipExisting && !req.Merge {
+					common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
+					return
+				} else if req.Merge && existFile.IsDir() {
+					validNames = append(validNames, name)
+				}
+			} else {
+				validNames = append(validNames, name)
 			}
 		}
+	} else {
+		validNames = req.Names
 	}
 
-	batchCopy, err := fs.BatchCopy(c.Request.Context(), req.SrcDir, req.DstDir, req.Names)
+	if len(validNames) == 0 {
+		common.SuccessResp(c, gin.H{
+			"message": "Copy operations completed immediately",
+		})
+		return
+	}
+
+	batchCopy, err := fs.BatchCopy(c.Request.Context(), req.SrcDir, req.DstDir, validNames)
 	if err != nil && !errors.Is(errs.NotImplement, err) {
 		common.ErrorResp(c, err, 500)
 	} else if batchCopy {
@@ -213,8 +243,13 @@ func FsCopy(c *gin.Context) {
 	// Create all tasks immediately without any synchronous validation
 	// All validation will be done asynchronously in the background
 	var addedTasks []task.TaskExtensionInfo
-	for i, name := range req.Names {
-		t, err := fs.Copy(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(req.Names) > i+1)
+	for i, name := range validNames {
+		var t task.TaskExtensionInfo
+		if req.Merge {
+			t, err = fs.Merge(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
+		} else {
+			t, err = fs.Copy(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
+		}
 		if t != nil {
 			addedTasks = append(addedTasks, t)
 		}
