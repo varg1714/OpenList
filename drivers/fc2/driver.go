@@ -65,15 +65,14 @@ func (d *FC2) Drop(ctx context.Context) error {
 
 func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 
-	categories := make(map[string]string)
+	categories := make(map[string]model.Actor)
 	results := make([]model.Obj, 0)
 
 	dirName := dir.GetName()
 
 	actors := db.QueryActor(strconv.Itoa(int(d.ID)))
 	for _, actor := range actors {
-		url := actor.Url
-		categories[actor.Name] = url
+		categories[actor.Name] = actor
 	}
 
 	if d.RootID.GetRootId() == dirName {
@@ -104,7 +103,7 @@ func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]m
 					IsFolder: true,
 					ID:       category,
 					Size:     622857143,
-					Modified: time.Now(),
+					Modified: categories[category].UpdatedAt,
 				},
 			})
 		}
@@ -114,17 +113,17 @@ func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]m
 		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
-	} else if categories[dirName] != "" {
+	} else if categories[dirName].Url != "" {
 		// 自定义目录
 		var films []model.EmbyFileObj
 		var err error
-		if strings.Contains(categories[dirName], "missav.ai/dm99") {
+		if strings.Contains(categories[dirName].Url, "missav.ai/dm99") {
 			films, err = d.getMissAvFilms(dirName, func(index int) string {
-				return d.ScraperApi + fmt.Sprintf(categories[dirName], index)
+				return d.ScraperApi + fmt.Sprintf(categories[dirName].Url, index)
 			})
 		} else {
 			films, err = d.getFilms(func(index int) string {
-				return fmt.Sprintf(categories[dirName], index)
+				return fmt.Sprintf(categories[dirName].Url, index)
 			})
 		}
 		if err != nil {

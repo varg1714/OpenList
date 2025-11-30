@@ -58,15 +58,14 @@ func (d *Pornhub) Drop(ctx context.Context) error {
 
 func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 
-	categories := make(map[string]string)
+	categories := make(map[string]model.Actor)
 	results := make([]model.Obj, 0)
 
 	dirName := dir.GetName()
 
 	actors := db.QueryActor(strconv.Itoa(int(d.ID)))
 	for _, actor := range actors {
-		url := actor.Url
-		categories[actor.Name] = url
+		categories[actor.Name] = actor
 	}
 
 	if d.RootID.GetRootId() == dirName {
@@ -77,14 +76,14 @@ func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 					IsFolder: true,
 					ID:       category,
 					Size:     622857143,
-					Modified: time.Now(),
+					Modified: categories[category].UpdatedAt,
 				},
 			})
 		}
 		return results, nil
-	} else if categories[dirName] != "" {
+	} else if categories[dirName].Url != "" {
 		// 自定义目录
-		films, err := d.getFilms(dirName, categories[dirName])
+		films, err := d.getFilms(dirName, categories[dirName].Url)
 		if err != nil {
 			return nil, err
 		}
