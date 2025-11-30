@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -29,55 +28,8 @@ func CacheImageAndNfo(mediaInfo MediaInfo) int {
 func DeleteImageAndNfo(source, dir, fileName string) error {
 
 	sourceName := fileName[0:strings.LastIndex(fileName, ".")]
-
-	nameRegexp, _ := regexp.Compile("(.*?)(-cd\\d+)")
-
-	if nameRegexp.MatchString(sourceName) {
-
-		// 有多个文件
-		sourceName = nameRegexp.ReplaceAllString(sourceName, "$1")
-
-		filePath := filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), fmt.Sprintf("%s-cd1.nfo", sourceName))
-		for i := 1; utils.Exists(filePath); {
-			err := os.Remove(filePath)
-			if err != nil {
-				return err
-			}
-			i++
-			filePath = filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), fmt.Sprintf("%s-cd%d.nfo", sourceName, i))
-		}
-
-		filePath = filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), fmt.Sprintf("%s-cd1.jpg", sourceName))
-		for i := 1; utils.Exists(filePath); {
-			err := os.Remove(filePath)
-			if err != nil {
-				return err
-			}
-			i++
-			filePath = filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), fmt.Sprintf("%s-cd%d.jpg", sourceName, i))
-		}
-
-	} else {
-		// 删除nfo文件
-		filePath := filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), sourceName+".nfo")
-		if utils.Exists(filePath) {
-			err := os.Remove(filePath)
-			if err != nil {
-				return err
-			}
-		}
-
-		// 删除img文件
-		filePath = filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName), sourceName+".jpg")
-		if utils.Exists(filePath) {
-			err := os.Remove(filePath)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+	realPath := filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName))
+	return os.Remove(realPath)
 
 }
 

@@ -25,7 +25,7 @@ type Addition struct {
 
 var config = driver.Config{
 	Name:        "Pornhub",
-	LocalSort:   false,
+	LocalSort:   true,
 	OnlyProxy:   false,
 	NoUpload:    false,
 	DefaultRoot: "root",

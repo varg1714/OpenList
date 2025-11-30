@@ -2,12 +2,13 @@ package fc2
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/gocolly/colly/v2"
-	"strings"
-	"time"
 )
 
 func (d *FC2) getMissAvPageFilms(url string) []model.EmbyFileObj {

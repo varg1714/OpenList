@@ -35,7 +35,7 @@ type Addition struct {
 
 var config = driver.Config{
 	Name:        "Javdb",
-	LocalSort:   false,
+	LocalSort:   true,
 	OnlyProxy:   false,
 	NoUpload:    false,
 	DefaultRoot: "root",

@@ -18,6 +18,7 @@ type Addition struct {
 	CloudPlayDownloadPath string `json:"cloud_play_download_path" required:"false" help:"If empty then use global setting."`
 	ReleaseScanTime       uint64 `json:"ReleaseScanTime" required:"true" type:"number" `
 	ScanTimeLimit         uint64 `json:"ScanTimeLimit" required:"true" type:"number" `
+	BatchScanSize         int    `json:"batch_scan_size" required:"true" type:"number" default:"20"`
 	RefreshNfo            bool   `json:"refresh_nfo"`
 	ScraperApi            string `json:"scraper_api" required:"false"`
 	MissAvMaxPage         int    `json:"miss_av_max_page" required:"true" type:"number" `
@@ -26,7 +27,7 @@ type Addition struct {
 
 var config = driver.Config{
 	Name:        "FC2",
-	LocalSort:   false,
+	LocalSort:   true,
 	OnlyProxy:   false,
 	NoUpload:    false,
 	DefaultRoot: "root",
@@ -34,6 +35,10 @@ var config = driver.Config{
 
 func init() {
 	op.RegisterDriver(func() driver.Driver {
-		return &FC2{}
+		return &FC2{
+			Addition: Addition{
+				BatchScanSize: 20,
+			},
+		}
 	})
 }

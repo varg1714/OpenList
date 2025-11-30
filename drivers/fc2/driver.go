@@ -202,10 +202,10 @@ func (d *FC2) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) 
 	var url string
 	if param.Type == 0 {
 		// 0 演员
-		url = fmt.Sprintf("https://fc2ppvdb.com/actresses/%s", param.Url) + "?page=%d"
+		url = fmt.Sprintf("https://paipancon.com/fc2daily/actor/%s/", param.Url) + "page-%d.html"
 	} else if param.Type == 1 {
 		// 贩卖者
-		url = fmt.Sprintf("https://fc2ppvdb.com/writers/%s", param.Url) + "?page=%d"
+		url = fmt.Sprintf("https://paipancon.com/fc2daily/search/%s/", param.Url) + "page-%d.html"
 	} else if param.Type == 2 {
 		// missAv fc2收藏榜
 		url = "https://missav.ai/dm99/cn/fc2?sort=saved&page=%d"

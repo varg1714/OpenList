@@ -2,10 +2,11 @@ package db
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/pkg/errors"
-	"strings"
 )
 
 func CreateFilms(source string, actor, actorId string, models []model.EmbyFileObj) error {
@@ -60,10 +61,13 @@ func QueryFilmByCode(source string, code string) (model.Film, error) {
 
 }
 
-func QueryIncompleteFilms(source string) ([]model.Film, error) {
+func QueryIncompleteFilms(source string, batchSize int) ([]model.Film, error) {
 
 	films := make([]model.Film, 0)
-	err := db.Where("source = ?", source).Where(`(date is null or (title is null or title = "") or (actors is null))`).Find(&films).Error
+	err := db.Where("source = ?", source).
+		Where(`(date is null or (title is null or title = "") or (actors is null))`).
+		Limit(batchSize).
+		Find(&films).Error
 
 	return films, err
 

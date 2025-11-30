@@ -3,6 +3,10 @@ package fc2
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
@@ -13,9 +17,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/gocolly/colly/v2"
 	"github.com/tebeka/selenium"
-	"regexp"
-	"strings"
-	"time"
 )
 
 var subTitles, _ = regexp.Compile(".*<a href=\"(.*)\" title=\".*</a>.*")
@@ -44,8 +45,8 @@ func (d *FC2) getFilms(urlFunc func(index int) string) ([]model.EmbyFileObj, err
 
 	for page == 1 || (preSize != len(filmIds)) {
 
-		ids, err2 := d.getPageFilms(urlFunc(page))
-		if err2 != nil {
+		ids, err2 := d.getFc2DailyPageFilms(urlFunc(page))
+		if err2 != nil && !strings.Contains(err2.Error(), "Not Found") {
 			utils.Log.Warnf("影片爬取失败: %s", err2.Error())
 			return result, nil
 		} else {
@@ -73,6 +74,7 @@ func (d *FC2) getFilms(urlFunc func(index int) string) ([]model.EmbyFileObj, err
 		if err != nil {
 			notExitedFilms = append(notExitedFilms, id)
 		}
+		time.Sleep(time.Duration(d.ScanTimeLimit) * time.Second)
 	}
 
 	if len(notExitedFilms) > 0 {
@@ -84,47 +86,6 @@ func (d *FC2) getFilms(urlFunc func(index int) string) ([]model.EmbyFileObj, err
 	}
 
 	return result, nil
-
-}
-
-func (d *FC2) getMagnet(file model.Obj) (string, error) {
-
-	code := av.GetFilmCode(file.GetName())
-
-	magnetCache := db.QueryMagnetCacheByCode(code)
-	if magnetCache.Magnet != "" {
-		utils.Log.Infof("返回缓存中的磁力地址:%s", magnetCache.Magnet)
-		return magnetCache.Magnet, nil
-	}
-
-	res, err := d.findMagnet(fmt.Sprintf("https://sukebei.nyaa.si/?f=0&c=0_0&q=%s&s=downloads&o=desc", code))
-	if err != nil {
-		return "", err
-	}
-
-	url := subTitles.FindString(res)
-	if url == "" {
-		return "", nil
-	}
-
-	magPage, err := d.findMagnet(fmt.Sprintf("https://sukebei.nyaa.si%s", subTitles.ReplaceAllString(url, "$1")))
-	if err != nil {
-		return "", err
-	}
-
-	tempMagnet := magnetUrl.FindString(magPage)
-	magnet := magnetUrl.ReplaceAllString(tempMagnet, "$1")
-
-	if magnet != "" {
-		err = db.CreateMagnetCache(model.MagnetCache{
-			Magnet: magnet,
-			Name:   file.GetName(),
-			Code:   code,
-			ScanAt: time.Now(),
-		})
-	}
-
-	return magnet, err
 
 }
 
@@ -243,7 +204,7 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	// 4. save film info
 
 	// 4.1 get film thumbnail
-	ppvFilmInfo, err := d.getPpvdbFilm(code)
+	ppvFilmInfo, err := d.getFc2DailyFilm(fc2Id)
 	if err == nil {
 		if len(ppvFilmInfo.Actors) == 0 {
 			ppvFilmInfo.Actors = append(ppvFilmInfo.Actors, "个人收藏")
@@ -373,83 +334,6 @@ func buildCacheFile(fileCount int, fc2Id string, title string, releaseTime time.
 	return cachingFiles
 }
 
-func (d *FC2) getPpvdbFilm(code string) (model.EmbyFileObj, error) {
-
-	split := strings.Split(code, "-")
-	code = split[len(split)-1]
-
-	collector := colly.NewCollector(func(c *colly.Collector) {
-		c.SetRequestTimeout(time.Second * 10)
-	})
-
-	imageUrl := ""
-
-	var actors []string
-	actorMap := make(map[string]bool)
-
-	collector.OnHTML(fmt.Sprintf(`img[alt="%s"]`, code), func(element *colly.HTMLElement) {
-
-		srcImage := element.Attr("src")
-		if srcImage != "" && !strings.Contains(srcImage, "no-image.jpg") {
-			imageUrl = srcImage
-		}
-	})
-
-	collector.OnHTML(".text-white.title-font.text-lg.font-medium", func(element *colly.HTMLElement) {
-		title := element.Attr("title")
-		if title != "" {
-			actorMap[title] = true
-		}
-
-	})
-
-	var releaseTime time.Time
-	collector.OnHTML("div[class*='lg:pl-8'][class*='lg:w-3/5']", func(element *colly.HTMLElement) {
-
-		element.ForEach("span", func(i int, spanElement *colly.HTMLElement) {
-			timeStr := spanElement.Text
-			if dateRegexp.MatchString(timeStr) {
-				tempTime, err := time.Parse("2006-01-02", timeStr)
-				if err == nil {
-					releaseTime = tempTime
-				} else {
-					utils.Log.Infof("failed to parse release time:%s,error message:%v", timeStr, err)
-				}
-			}
-		})
-
-	})
-
-	title := ""
-	collector.OnHTML(".items-center.text-white.text-lg.title-font.font-medium.mb-1 a", func(element *colly.HTMLElement) {
-		title = element.Text
-	})
-
-	err := collector.Visit(fmt.Sprintf("https://fc2ppvdb.com/articles/%s", code))
-	if err != nil {
-		utils.Log.Infof("failed to query fc2 film info for:[%s], error message:%s", code, err.Error())
-		return model.EmbyFileObj{}, err
-	}
-
-	for actor, _ := range actorMap {
-		actors = append(actors, actor)
-	}
-
-	return model.EmbyFileObj{
-		ObjThumb: model.ObjThumb{
-			Object: model.Object{
-				IsFolder: false,
-				Name:     title,
-			},
-			Thumbnail: model.Thumbnail{Thumbnail: imageUrl},
-		},
-		Title:       title,
-		Actors:      actors,
-		ReleaseTime: releaseTime,
-	}, nil
-
-}
-
 func (d *FC2) getWhatLinkInfo(magnet string) WhatLinkInfo {
 
 	var whatLinkInfo WhatLinkInfo
@@ -465,117 +349,6 @@ func (d *FC2) getWhatLinkInfo(magnet string) WhatLinkInfo {
 	}
 
 	return whatLinkInfo
-
-}
-
-func (d *FC2) refreshNfo() {
-
-	utils.Log.Info("start refresh nfo for fc2")
-
-	films := d.getStars()
-	fileNames := make(map[string][]string)
-
-	for _, film := range films {
-		virtual_file.UpdateNfo(virtual_file.MediaInfo{
-			Source:   "fc2",
-			Dir:      film.Path,
-			FileName: virtual_file.AppendImageName(film.Name),
-			Release:  film.ReleaseTime,
-			Title:    film.Title,
-			Actors:   film.Actors,
-			Tags:     film.Tags,
-		})
-		fileNames[film.Path] = append(fileNames[film.Path], film.Name)
-	}
-
-	// clear unused files
-	for dir, names := range fileNames {
-		virtual_file.ClearUnUsedFiles("fc2", dir, names)
-	}
-
-	utils.Log.Info("finish refresh nfo")
-}
-
-func (d *FC2) reMatchReleaseTime() {
-
-	// rematch release time
-
-	utils.Log.Infof("start rematching release time for fc2")
-
-	incompleteFilms, err := db.QueryIncompleteFilms("fc2")
-
-	if err != nil {
-		utils.Log.Warnf("failed to query no date films: %s", err.Error())
-		return
-	}
-
-	filmMap := make(map[string]model.Film)
-
-	for _, film := range incompleteFilms {
-
-		code := av.GetFilmCode(film.Name)
-
-		if existFilm, exist := filmMap[code]; exist {
-			if film.Title == "" {
-				film.Title = existFilm.Title
-			}
-			if len(film.Actors) == 0 {
-				if len(existFilm.Actors) > 0 {
-					film.Actors = append(film.Actors, existFilm.Actors...)
-				}
-			}
-		} else {
-
-			ppvdbMediaInfo, err1 := d.getPpvdbFilm(code)
-			if err1 != nil {
-				if strings.Contains(err1.Error(), "Not Found") {
-					film.Actors = []string{"个人收藏"}
-				} else {
-					return
-				}
-			} else {
-				if ppvdbMediaInfo.ReleaseTime.Year() != 1 {
-					film.Date = ppvdbMediaInfo.ReleaseTime
-				} else {
-					film.Date = film.CreatedAt
-				}
-
-				if film.Title == "" && ppvdbMediaInfo.Title != "" {
-					film.Title = open_ai.Translate(ppvdbMediaInfo.Title)
-				}
-
-				if len(film.Actors) == 0 {
-					if len(ppvdbMediaInfo.Actors) > 0 {
-						film.Actors = ppvdbMediaInfo.Actors
-					} else {
-						film.Actors = []string{"个人收藏"}
-					}
-				}
-			}
-
-		}
-
-		if film.Title == "" {
-			sukeMediaInfo, err2 := av.GetMetaFromSuke(code)
-			if err2 != nil {
-				utils.Log.Warnf("failed to query suke: %s", code)
-			} else if len(sukeMediaInfo.Magnets) > 0 {
-				film.Title = open_ai.Translate(sukeMediaInfo.Magnets[0].GetName())
-			}
-		}
-		filmMap[code] = film
-
-		err1 := db.UpdateFilm(film)
-		if err1 != nil {
-			utils.Log.Warnf("failed to update film info: %s", err1.Error())
-		}
-
-		// avoid 429
-		time.Sleep(time.Duration(d.ScanTimeLimit) * time.Second)
-
-	}
-
-	utils.Log.Info("rematching completed")
 
 }
 
