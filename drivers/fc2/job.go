@@ -85,6 +85,15 @@ func (d *FC2) reMatchReleaseTime() {
 		if err1 != nil {
 			utils.Log.Warnf("failed to update film info: %s", err1.Error())
 		}
+		virtual_file.UpdateNfo(virtual_file.MediaInfo{
+			Source:   "fc2",
+			Dir:      film.Actor,
+			FileName: virtual_file.AppendImageName(film.Name),
+			Release:  film.Date,
+			Title:    film.Title,
+			Actors:   film.Actors,
+			Tags:     film.Tags,
+		})
 
 		// avoid 429
 		time.Sleep(time.Duration(d.ScanTimeLimit) * time.Second)

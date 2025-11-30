@@ -16,6 +16,17 @@ func (d *FC2) getFc2DailyFilm(fc2Id string) (model.EmbyFileObj, error) {
 	collector := colly.NewCollector(func(c *colly.Collector) {
 		c.SetRequestTimeout(time.Second * 10)
 	})
+	retryCount := 1
+	collector.OnError(func(r *colly.Response, err error) {
+		utils.Log.Infof("request failed, retryCount: %d", retryCount)
+		if retryCount <= 3 {
+			retryCount++
+			err = r.Request.Retry()
+			if err != nil {
+				utils.Log.Warnf("retry failed: %s", err.Error())
+			}
+		}
+	})
 
 	var actors []string
 
