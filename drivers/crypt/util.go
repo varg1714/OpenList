@@ -9,7 +9,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -20,74 +19,58 @@ func guessPath(path string) (isFolder, secondTry bool) {
 		return true, false
 	}
 	lastSlash := strings.LastIndex(path, "/")
-	if strings.Index(path[lastSlash:], ".") < 0 {
+	if !strings.Contains(path[lastSlash:], ".") {
 		//no dot, try folder then try file
 		return true, true
 	}
 	return false, true
 }
 
-func (d *Crypt) getPathForRemote(path string, isFolder bool) (remoteFullPath string) {
-	if isFolder && !strings.HasSuffix(path, "/") {
-		path = path + "/"
+func (d *Crypt) encryptPath(path string, isFolder bool) string {
+	if isFolder {
+		return d.cipher.EncryptDirName(path)
 	}
 	dir, fileName := filepath.Split(path)
-
-	remoteDir := d.cipher.EncryptDirName(dir)
-	remoteFileName := ""
-	if len(strings.TrimSpace(fileName)) > 0 {
-		remoteFileName = d.cipher.EncryptFileName(fileName)
-	}
-	return stdpath.Join(d.RemotePath, remoteDir, remoteFileName)
-
+	return stdpath.Join(d.cipher.EncryptDirName(dir), d.cipher.EncryptFileName(fileName))
 }
 
-// actual path is used for internal only. any link for user should come from remoteFullPath
-func (d *Crypt) getActualPathForRemote(path string, isFolder bool) (string, error) {
-	_, remoteActualPath, err := op.GetStorageAndActualPath(d.getPathForRemote(path, isFolder))
-	return remoteActualPath, err
-}
+func (d *Crypt) getEncryptedObject(ctx context.Context, path string) (model.Obj, string, error) {
 
-func (d *Crypt) getEncryptedObject(ctx context.Context, path string) (model.Obj, error) {
-	remoteFullPath := ""
-	var remoteObj model.Obj
-	var err, err2 error
 	firstTryIsFolder, secondTry := guessPath(path)
-	remoteFullPath = d.getPathForRemote(path, firstTryIsFolder)
-	remoteObj, err = fs.Get(ctx, remoteFullPath, &fs.GetArgs{NoLog: true})
+	remoteFullPath := stdpath.Join(d.RemotePath, d.encryptPath(path, firstTryIsFolder))
+	remoteObj, err := fs.Get(ctx, remoteFullPath, &fs.GetArgs{NoLog: true})
 	if err != nil {
-		if errs.IsObjectNotFound(err) && secondTry {
+		if secondTry && errs.IsObjectNotFound(err) {
 			// try the opposite
-			remoteFullPath = d.getPathForRemote(path, !firstTryIsFolder)
-			remoteObj, err2 = fs.Get(ctx, remoteFullPath, &fs.GetArgs{NoLog: true})
-			if err2 != nil {
-				return nil, err2
+			remoteFullPath = stdpath.Join(d.RemotePath, d.encryptPath(path, !firstTryIsFolder))
+			remoteObj, err = fs.Get(ctx, remoteFullPath, &fs.GetArgs{NoLog: true})
+			if err != nil {
+				return nil, "", err
 			}
 		} else {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	return remoteObj, nil
+
+	return remoteObj, remoteFullPath, nil
 }
 
 func (d *Crypt) convertEncryptedObj(ctx context.Context, srcDir model.Obj, srcObjs []model.Obj, args model.BatchArgs) (model.Obj, model.Obj, []model.Obj, error) {
 
-	srcEncryptedObj, err := d.getEncryptedObject(ctx, args.SrcDirActualPath)
+	srcEncryptedObj,_, err := d.getEncryptedObject(ctx, args.SrcDirActualPath)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	var dstEncryptedObj model.Obj
 	if args.DstDirActualPath != "" {
-		dstEncryptedObj, err = d.getEncryptedObject(ctx, args.DstDirActualPath)
+		dstEncryptedObj,_, err = d.getEncryptedObject(ctx, args.DstDirActualPath)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 	}
 
-	path := srcDir.GetPath()
-
-	objs, err := fs.List(ctx, d.getPathForRemote(path, true), &fs.ListArgs{NoLog: true, Refresh: false})
+	objs, err := fs.List(ctx, srcDir.GetPath(), &fs.ListArgs{NoLog: true, Refresh: false})
 	if err != nil {
 		return nil, nil, nil, err
 	}
