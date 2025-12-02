@@ -379,7 +379,12 @@ func (d *Crypt) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
 
 func (d *Crypt) BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []model.Obj, dstDir model.Obj, args model.BatchArgs) error {
 
-	batchMover, ok := d.remoteStorage.(driver.BatchMove)
+	srcRemoteStorage, srcRemotePath, err := op.GetStorageAndActualPath(srcDir.GetPath())
+	if err != nil {
+		return err
+	}
+
+	batchMover, ok := srcRemoteStorage.(driver.BatchMove)
 	if !ok {
 		return errs.NotImplement
 	}
@@ -394,16 +399,12 @@ func (d *Crypt) BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []model
 		return err
 	}
 
-	if remoteActualPath, err := d.getActualPathForRemote(srcDir.GetPath(), true); err != nil {
+	op.Cache.DeleteDirectory(srcRemoteStorage, srcRemotePath)
+	dstRemoteStorage, dstRemotePath, err := op.GetStorageAndActualPath(dstDir.GetPath())
+	if err != nil {
 		log.Warnf("Failed to get actual path for remote storage: %v", err)
 	} else {
-		op.Cache.DeleteDirectory(d.remoteStorage, remoteActualPath)
-	}
-
-	if remoteActualPath, err := d.getActualPathForRemote(dstDir.GetPath(), true); err != nil {
-		log.Warnf("Failed to get actual path for remote storage: %v", err)
-	} else {
-		op.Cache.DeleteDirectory(d.remoteStorage, remoteActualPath)
+		op.Cache.DeleteDirectory(dstRemoteStorage, dstRemotePath)
 	}
 
 	return nil
@@ -412,7 +413,12 @@ func (d *Crypt) BatchMove(ctx context.Context, srcDir model.Obj, srcObjs []model
 
 func (d *Crypt) BatchCopy(ctx context.Context, srcDir model.Obj, srcObjs []model.Obj, dstDir model.Obj, args model.BatchArgs) error {
 
-	batchCopier, ok := d.remoteStorage.(driver.BatchCopy)
+	srcRemoteStorage, _, err := op.GetStorageAndActualPath(srcDir.GetPath())
+	if err != nil {
+		return err
+	}
+
+	batchCopier, ok := srcRemoteStorage.(driver.BatchCopy)
 	if !ok {
 		return errs.NotImplement
 	}
@@ -427,10 +433,11 @@ func (d *Crypt) BatchCopy(ctx context.Context, srcDir model.Obj, srcObjs []model
 		return err
 	}
 
-	if remoteActualPath, err := d.getActualPathForRemote(dstDir.GetPath(), true); err != nil {
+	dstRemoteStorage, dstRemotePath, err := op.GetStorageAndActualPath(dstDir.GetPath())
+	if err != nil {
 		log.Warnf("Failed to get actual path for remote storage: %v", err)
 	} else {
-		op.Cache.DeleteDirectory(d.remoteStorage, remoteActualPath)
+		op.Cache.DeleteDirectory(dstRemoteStorage, dstRemotePath)
 	}
 
 	return nil
@@ -439,7 +446,12 @@ func (d *Crypt) BatchCopy(ctx context.Context, srcDir model.Obj, srcObjs []model
 
 func (d *Crypt) BatchRemove(ctx context.Context, batchRemoveObj model.BatchRemoveObj, args model.BatchArgs) error {
 
-	batchRemover, ok := d.remoteStorage.(driver.BatchRemove)
+	srcRemoteStorage, srcRemotePath, err := op.GetStorageAndActualPath(batchRemoveObj.Dir.GetPath())
+	if err != nil {
+		return err
+	}
+
+	batchRemover, ok := srcRemoteStorage.(driver.BatchRemove)
 	if !ok {
 		return errs.NotImplement
 	}
@@ -480,18 +492,19 @@ func (d *Crypt) BatchRemove(ctx context.Context, batchRemoveObj model.BatchRemov
 		return err
 	}
 
-	if remoteActualPath, err := d.getActualPathForRemote(batchRemoveObj.Dir.GetPath(), true); err != nil {
-		log.Warnf("Failed to get actual path for remote storage: %v", err)
-	} else {
-		op.Cache.DeleteDirectory(d.remoteStorage, remoteActualPath)
-	}
+	op.Cache.DeleteDirectory(srcRemoteStorage, srcRemotePath)
 
 	return nil
 }
 
 func (d *Crypt) BatchRename(ctx context.Context, batchRenameObj model.BatchRenameObj, args model.BatchArgs) error {
 
-	batchRenamer, ok := d.remoteStorage.(driver.BatchRename)
+	srcRemoteStorage, srcRemotePath, err := op.GetStorageAndActualPath(batchRenameObj.Dir.GetPath())
+	if err != nil {
+		return err
+	}
+
+	batchRenamer, ok := srcRemoteStorage.(driver.BatchRename)
 	if !ok {
 		return errs.NotImplement
 	}
@@ -559,11 +572,7 @@ func (d *Crypt) BatchRename(ctx context.Context, batchRenameObj model.BatchRenam
 		return err
 	}
 
-	if remoteActualPath, err := d.getActualPathForRemote(batchRenameObj.Dir.GetPath(), true); err != nil {
-		log.Warnf("Failed to get actual path for remote storage: %v", err)
-	} else {
-		op.Cache.DeleteDirectory(d.remoteStorage, remoteActualPath)
-	}
+	op.Cache.DeleteDirectory(srcRemoteStorage, srcRemotePath)
 
 	return nil
 
