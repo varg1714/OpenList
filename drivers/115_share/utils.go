@@ -2,6 +2,7 @@ package _115_share
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -20,6 +21,7 @@ type FileObj struct {
 	FileName string
 	isDir    bool
 	FileID   string
+	Path     string
 }
 
 func (f *FileObj) CreateTime() time.Time {
@@ -51,10 +53,10 @@ func (f *FileObj) GetID() string {
 }
 
 func (f *FileObj) GetPath() string {
-	return ""
+	return f.Path
 }
 
-func transFunc(sf driver115.ShareFile) (model.Obj, error) {
+func transFunc(parent model.Obj, sf driver115.ShareFile) (model.Obj, error) {
 	timeInt, err := strconv.ParseInt(sf.UpdateTime, 10, 64)
 	if err != nil {
 		return nil, err
@@ -74,6 +76,7 @@ func transFunc(sf driver115.ShareFile) (model.Obj, error) {
 		FileName: string(sf.FileName),
 		isDir:    isDir,
 		FileID:   fileID,
+		Path:     filepath.Join(parent.GetPath(), sf.FileID),
 	}, nil
 }
 
@@ -85,9 +88,6 @@ func (d *Pan115Share) login() error {
 		driver115.UA(UserAgent),
 	}
 	d.client = driver115.New(opts...)
-	if _, err := d.client.GetShareSnap(d.ShareCode, d.ReceiveCode, ""); err != nil {
-		return errors.Wrap(err, "failed to get share snap")
-	}
 	cr := &driver115.Credential{}
 	if d.QRCodeToken != "" {
 		s := &driver115.QRCodeSession{
