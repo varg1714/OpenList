@@ -80,7 +80,7 @@ func transFunc(parent model.Obj, sf driver115.ShareFile) (model.Obj, error) {
 		FileName: string(sf.FileName),
 		isDir:    isDir,
 		FileID:   fileID,
-		Path:     filepath.Join(parent.GetPath(), sf.FileID),
+		Path:     filepath.Join(parent.GetPath(), fileID),
 	}, nil
 }
 

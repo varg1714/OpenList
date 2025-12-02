@@ -2,6 +2,7 @@ package _115_share
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -58,7 +59,7 @@ func (d *Pan115Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 		if virDir, ok := dir.(*model.ObjVirtualDir); ok {
 			parentId = virDir.VirtualFile.ParentDir
 		} else {
-			parentId = dir.GetID()
+			parentId = filepath.Base(dir.GetPath())
 		}
 
 		files := make([]driver115.ShareFile, 0)
