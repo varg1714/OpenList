@@ -56,6 +56,10 @@ func (f *FileObj) GetPath() string {
 	return f.Path
 }
 
+func (f *FileObj) SetName(newName string) {
+	f.FileName = newName
+}
+
 func transFunc(parent model.Obj, sf driver115.ShareFile) (model.Obj, error) {
 	timeInt, err := strconv.ParseInt(sf.UpdateTime, 10, 64)
 	if err != nil {
