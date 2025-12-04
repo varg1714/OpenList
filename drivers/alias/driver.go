@@ -73,14 +73,11 @@ func (d *Alias) Drop(ctx context.Context) error {
 	return nil
 }
 
+func (Addition) GetRootPath() string {
+	return "/"
+}
+
 func (d *Alias) Get(ctx context.Context, path string) (model.Obj, error) {
-	if utils.PathEqual(path, "/") {
-		return &model.Object{
-			Name:     "Root",
-			IsFolder: true,
-			Path:     "/",
-		}, nil
-	}
 	root, sub := d.getRootAndPath(path)
 	dsts, ok := d.pathMap[root]
 	if !ok {
@@ -148,6 +145,7 @@ func (d *Alias) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 			tmp, err = utils.SliceConvert(tmp, func(obj model.Obj) (model.Obj, error) {
 				objRes := model.Object{
 					Name:     obj.GetName(),
+					Path:     stdpath.Join(path, obj.GetName()),
 					Size:     obj.GetSize(),
 					Modified: obj.ModTime(),
 					IsFolder: obj.IsDir(),
@@ -234,16 +232,8 @@ func (d *Alias) Other(ctx context.Context, args model.OtherArgs) (interface{}, e
 		if err != nil {
 			continue
 		}
-		other, ok := storage.(driver.Other)
-		if !ok {
-			continue
-		}
-		obj, err := op.GetUnwrap(ctx, storage, actualPath)
-		if err != nil {
-			continue
-		}
-		return other.Other(ctx, model.OtherArgs{
-			Obj:    obj,
+		return op.Other(ctx, storage, model.FsOtherArgs{
+			Path:   actualPath,
 			Method: args.Method,
 			Data:   args.Data,
 		})
@@ -533,6 +523,9 @@ func (d *Alias) ResolveLinkCacheMode(path string) driver.LinkCacheMode {
 	for _, dst := range dsts {
 		storage, actualPath, err := op.GetStorageAndActualPath(stdpath.Join(dst, sub))
 		if err != nil {
+			continue
+		}
+		if storage.Config().CheckStatus && storage.GetStorage().Status != op.WORK {
 			continue
 		}
 		mode := storage.Config().LinkCacheMode
