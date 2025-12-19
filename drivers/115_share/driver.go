@@ -47,6 +47,7 @@ func (d *Pan115Share) WaitLimit(ctx context.Context) error {
 }
 
 func (d *Pan115Share) Drop(ctx context.Context) error {
+	fileListRespCache.Clear()
 	return nil
 }
 

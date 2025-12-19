@@ -41,6 +41,8 @@ func (d *Cloud189Share) Init(ctx context.Context) error {
 }
 
 func (d *Cloud189Share) Drop(ctx context.Context) error {
+	shareTokenCache.Clear()
+	fileListRespCache.Clear()
 	return nil
 }
 

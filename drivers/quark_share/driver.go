@@ -49,6 +49,8 @@ func (d *QuarkShare) Init(ctx context.Context) error {
 }
 
 func (d *QuarkShare) Drop(ctx context.Context) error {
+	shareTokenCache.Clear()
+	fileListRespCache.Clear()
 	return nil
 }
 

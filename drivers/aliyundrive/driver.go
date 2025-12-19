@@ -90,6 +90,8 @@ func (d *AliDrive) Drop(ctx context.Context) error {
 	if d.cron != nil {
 		d.cron.Stop()
 	}
+	shareTokenCache.Clear()
+	fileListRespCache.Clear()
 	return nil
 }
 

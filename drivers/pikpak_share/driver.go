@@ -84,6 +84,8 @@ func (d *PikPakShare) Init(ctx context.Context) error {
 }
 
 func (d *PikPakShare) Drop(ctx context.Context) error {
+	shareTokenCache.Clear()
+	fileListRespCache.Clear()
 	return nil
 }
 
