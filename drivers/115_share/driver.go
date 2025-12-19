@@ -2,13 +2,16 @@ package _115_share
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/OpenListTeam/go-cache"
 	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
 	"golang.org/x/time/rate"
 )
@@ -47,6 +50,8 @@ func (d *Pan115Share) Drop(ctx context.Context) error {
 	return nil
 }
 
+var fileListRespCache = cache.NewMemCache(cache.WithShards[[]driver115.ShareFile](128))
+
 func (d *Pan115Share) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 
 	return virtual_file.List(d.ID, dir, func(virtualFile model.VirtualFile, dir model.Obj) ([]model.Obj, error) {
@@ -62,6 +67,13 @@ func (d *Pan115Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 			parentId = filepath.Base(dir.GetPath())
 		}
 
+		cacheKey := fmt.Sprintf("%s-%s", virtualFile.ShareID, parentId)
+		if resp, exist := fileListRespCache.Get(cacheKey); exist {
+			return utils.SliceConvert(resp, func(src driver115.ShareFile) (model.Obj, error) {
+				return transFunc(dir, src)
+			})
+		}
+
 		files := make([]driver115.ShareFile, 0)
 		fileResp, err := d.client.GetShareSnap(virtualFile.ShareID, virtualFile.SharePwd, parentId, driver115.QueryLimit(int(d.PageSize)))
 		if err != nil {
@@ -72,7 +84,7 @@ func (d *Pan115Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 		count := len(fileResp.Data.List)
 		for total > count {
 			fileResp, err := d.client.GetShareSnap(
-				virtualFile.ShareID, virtualFile.SharePwd, dir.GetID(),
+				virtualFile.ShareID, virtualFile.SharePwd, parentId,
 				driver115.QueryLimit(int(d.PageSize)), driver115.QueryOffset(count),
 			)
 			if err != nil {
@@ -81,6 +93,8 @@ func (d *Pan115Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 			files = append(files, fileResp.Data.List...)
 			count += len(fileResp.Data.List)
 		}
+
+		fileListRespCache.Set(cacheKey, files, cache.WithEx[[]driver115.ShareFile](time.Minute*time.Duration(d.CacheExpiration)))
 
 		return utils.SliceConvert(files, func(src driver115.ShareFile) (model.Obj, error) {
 			return transFunc(dir, src)
