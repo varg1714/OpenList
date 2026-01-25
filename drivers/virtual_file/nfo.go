@@ -173,6 +173,42 @@ func UpdateNfo(mediaInfo MediaInfo) {
 
 }
 
+func SaveSubtitles(mediaInfo MediaInfo, subtitles []string) {
+
+	for i, subtitle := range subtitles {
+		if subtitle == "" {
+			continue
+		}
+
+		ext := utils.SourceExt(subtitle)
+
+		filePath := filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, GetRealName(mediaInfo.FileName),
+			fmt.Sprintf("%s.%d.%s", clearFileName(mediaInfo.FileName), i+1, ext))
+		if utils.Exists(filePath) {
+			continue
+		}
+
+		imgResp, err := base.RestyClient.R().Get(subtitle)
+		if err != nil {
+			utils.Log.Warnf("failed to download the subtitle file: %s, the file page is: %s", err.Error(), subtitle)
+			continue
+		}
+
+		err = os.MkdirAll(filepath.Join(flags.DataDir, "emby", mediaInfo.Source, mediaInfo.Dir, GetRealName(mediaInfo.FileName)), 0777)
+		if err != nil {
+			utils.Log.Warnf("failed to make directory: %s", err.Error())
+			continue
+		}
+
+		err = os.WriteFile(filePath, imgResp.Body(), 0777)
+		if err != nil {
+			utils.Log.Warnf("failed to write file: %s", err.Error())
+			continue
+		}
+	}
+
+}
+
 func ClearUnUsedFiles(source, dir string, fileNames []string) {
 
 	fileNamesSet := make(map[string]bool, len(fileNames))

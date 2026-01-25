@@ -2,14 +2,15 @@ package javdb
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func (d *Javdb) reMatchSubtitles() {
@@ -32,29 +33,9 @@ func (d *Javdb) reMatchSubtitles() {
 			if err1 != nil {
 				utils.Log.Warn("failed to query film:", err1.Error())
 				continue
-			} else {
-				if film.Url != "" {
-					javdbMeta, err2 := av.GetMetaFromJavdb(film.Url)
-					if err2 != nil {
-						utils.Log.Warn("failed to get javdb magnet info:", err2.Error())
-					} else if len(javdbMeta.Magnets) > 0 && javdbMeta.Magnets[0].IsSubTitle() {
-						cache.Subtitle = true
-						cache.Magnet = javdbMeta.Magnets[0].GetMagnet()
-					}
-				}
 			}
 
-			if !cache.Subtitle {
-				sukeMeta, err2 := av.GetMetaFromSuke(cache.Code)
-				if err2 != nil {
-					utils.Log.Warn("failed to get suke magnet info:", err2.Error())
-				} else {
-					if len(sukeMeta.Magnets) > 0 && sukeMeta.Magnets[0].IsSubTitle() {
-						cache.Subtitle = true
-						cache.Magnet = sukeMeta.Magnets[0].GetMagnet()
-					}
-				}
-			}
+			fetchSubtitle(film, &cache)
 
 			if cache.Subtitle {
 				cache.ScanAt = time.Now()
@@ -131,6 +112,47 @@ func (d *Javdb) reMatchSubtitles() {
 			}
 		}
 		utils.Log.Infof("Delete the cached films that do not match the subtitles:[%v]", noMatchCaches)
+	}
+
+}
+
+func fetchSubtitle(film model.Film, cache *model.MagnetCache) {
+	if film.Url != "" {
+		javdbMeta, err2 := av.GetMetaFromJavdb(film.Url)
+		if err2 != nil {
+			utils.Log.Warn("failed to get javdb magnet info:", err2.Error())
+		} else if len(javdbMeta.Magnets) > 0 && javdbMeta.Magnets[0].IsSubTitle() {
+			cache.Subtitle = true
+			cache.Magnet = javdbMeta.Magnets[0].GetMagnet()
+			return
+		}
+	}
+
+	sukeMeta, err2 := av.GetMetaFromSuke(cache.Code)
+	if err2 != nil {
+		utils.Log.Warn("failed to get suke magnet info:", err2.Error())
+	} else {
+		if len(sukeMeta.Magnets) > 0 && sukeMeta.Magnets[0].IsSubTitle() {
+			cache.Subtitle = true
+			cache.Magnet = sukeMeta.Magnets[0].GetMagnet()
+			return
+		}
+	}
+
+	subtitles, err2 := MatchSubtitleCatSubtitles(cache.Code)
+	if err2 != nil {
+		utils.Log.Warn("failed to match subtitles:", err2.Error())
+	} else if len(subtitles) > 0 {
+		cache.Subtitle = true
+		virtual_file.SaveSubtitles(virtual_file.MediaInfo{
+			Source:   DriverName,
+			Dir:      film.Actor,
+			FileName: virtual_file.AppendImageName(film.Name),
+			Release:  film.Date,
+			Title:    film.Title,
+			Actors:   film.Actors,
+			Tags:     film.Tags,
+		}, subtitles)
 	}
 
 }
