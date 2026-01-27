@@ -26,6 +26,7 @@ func (d *Javdb) reMatchSubtitles() {
 	if len(caches) != 0 {
 		var savingCaches []model.MagnetCache
 		var unFindCaches []model.MagnetCache
+		var excludingCaches []model.MagnetCache
 
 		for _, cache := range caches {
 
@@ -67,7 +68,11 @@ func (d *Javdb) reMatchSubtitles() {
 				}
 
 			} else {
-				unFindCaches = append(unFindCaches, cache)
+				if film.Date.Before(time.Now().AddDate(-1, 0, 0)) {
+					excludingCaches = append(excludingCaches, cache)
+				} else {
+					unFindCaches = append(unFindCaches, cache)
+				}
 			}
 
 		}
@@ -91,6 +96,19 @@ func (d *Javdb) reMatchSubtitles() {
 			}
 			utils.Log.Infof("films:[%v] still have not matched with subtitles, update the scan info", names)
 		}
+
+		if len(excludingCaches) > 0 {
+			var names []string
+			for _, cache := range excludingCaches {
+				names = append(names, cache.Name)
+			}
+			err2 := db.ExcludeScanData(DriverName, names)
+			if err2 != nil {
+				utils.Log.Warn("failed to update scan data:", err2.Error())
+			}
+			utils.Log.Infof("films:[%v] still have not matched with subtitles, exclude the scan info", names)
+		}
+
 	}
 
 	noMatchCaches, err2 := db.QueryNoMatchCache(DriverName)
@@ -137,6 +155,10 @@ func fetchSubtitle(film model.Film, cache *model.MagnetCache) {
 			cache.Magnet = sukeMeta.Magnets[0].GetMagnet()
 			return
 		}
+	}
+
+	if !film.Date.Before(time.Now().AddDate(0, -1, 0)) {
+		return
 	}
 
 	subtitles, err2 := MatchSubtitleCatSubtitles(cache.Code)

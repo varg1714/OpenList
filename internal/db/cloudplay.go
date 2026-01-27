@@ -1,10 +1,11 @@
 package db
 
 import (
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/pkg/errors"
 	"gorm.io/gorm"
-	"time"
 )
 
 func CreateMagnetCache(magnetCache model.MagnetCache) error {
@@ -62,7 +63,7 @@ func QueryNoSubtitlesCache(driverType string, limit int) ([]model.MagnetCache, e
 	var caches []model.MagnetCache
 
 	err := errors.WithStack(
-		db.Where("(scan_at is null or scan_at <= ?)", time.Now().AddDate(0, 0, -3)).
+		db.Where("(scan_at is null or scan_at <= ?)", time.Now().AddDate(0, 0, -7)).
 			Where("(scan_count is null or scan_count < 10)").
 			Where("(subtitle is null or subtitle = 0)").
 			Where("driver_type = ?", driverType).
@@ -110,5 +111,13 @@ func UpdateScanData(driveType string, names []string, scanAt time.Time) error {
 		Updates(map[string]any{
 			"scan_at":    scanAt,
 			"scan_count": gorm.Expr("ifnull(scan_count, 0) + ?", 1),
+		}).Error)
+}
+
+func ExcludeScanData(driveType string, names []string) error {
+	return errors.WithStack(db.Model(&model.MagnetCache{}).Where("driver_type = ?", driveType).Where("name in ?", names).
+		Updates(map[string]any{
+			"scan_at":    time.Now(),
+			"scan_count": 1000,
 		}).Error)
 }
