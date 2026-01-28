@@ -36,7 +36,10 @@ func (d *Javdb) reMatchSubtitles() {
 				continue
 			}
 
-			fetchSubtitle(film, &cache)
+			err1 = fetchSubtitle(film, &cache)
+			if err1 != nil {
+				continue
+			}
 
 			if cache.Subtitle {
 				cache.ScanAt = time.Now()
@@ -134,7 +137,7 @@ func (d *Javdb) reMatchSubtitles() {
 
 }
 
-func fetchSubtitle(film model.Film, cache *model.MagnetCache) {
+func fetchSubtitle(film model.Film, cache *model.MagnetCache) error {
 	if film.Url != "" {
 		javdbMeta, err2 := av.GetMetaFromJavdb(film.Url)
 		if err2 != nil {
@@ -142,7 +145,7 @@ func fetchSubtitle(film model.Film, cache *model.MagnetCache) {
 		} else if len(javdbMeta.Magnets) > 0 && javdbMeta.Magnets[0].IsSubTitle() {
 			cache.Subtitle = true
 			cache.Magnet = javdbMeta.Magnets[0].GetMagnet()
-			return
+			return nil
 		}
 	}
 
@@ -153,17 +156,18 @@ func fetchSubtitle(film model.Film, cache *model.MagnetCache) {
 		if len(sukeMeta.Magnets) > 0 && sukeMeta.Magnets[0].IsSubTitle() {
 			cache.Subtitle = true
 			cache.Magnet = sukeMeta.Magnets[0].GetMagnet()
-			return
+			return nil
 		}
 	}
 
 	if !film.Date.Before(time.Now().AddDate(0, -1, 0)) {
-		return
+		return nil
 	}
 
 	subtitles, err2 := MatchSubtitleCatSubtitles(cache.Code)
 	if err2 != nil {
 		utils.Log.Warn("failed to match subtitles:", err2.Error())
+		return err2
 	} else if len(subtitles) > 0 {
 		cache.Subtitle = true
 		cache.SubtitleUrls = subtitles
@@ -177,6 +181,8 @@ func fetchSubtitle(film model.Film, cache *model.MagnetCache) {
 			Tags:     film.Tags,
 		}, subtitles)
 	}
+
+	return nil
 
 }
 

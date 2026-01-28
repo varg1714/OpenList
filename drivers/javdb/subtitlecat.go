@@ -13,7 +13,7 @@ import (
 func MatchSubtitleCatSubtitles(code string) ([]string, error) {
 
 	collector := colly.NewCollector(func(c *colly.Collector) {
-		c.SetRequestTimeout(time.Second * 10)
+		c.SetRequestTimeout(time.Second * 30)
 	})
 
 	var subtitlePages []string
