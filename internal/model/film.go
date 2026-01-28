@@ -25,16 +25,17 @@ type Film struct {
 }
 
 type MagnetCache struct {
-	ID         uint              `gorm:"primarykey"`
-	Magnet     string            `json:"magnet" gorm:"index"`
-	FileId     string            `json:"file_id"`
-	Name       string            `json:"name" gorm:"index"`
-	Code       string            `json:"code" gorm:"index"`
-	DriverType string            `json:"driver_type"`
-	Option     map[string]string `json:"option" gorm:"type:json;serializer:json"`
-	Subtitle   bool              `json:"subtitle"`
-	ScanAt     time.Time         `json:"scan_at"`
-	ScanCount  uint              `json:"scan_count"`
+	ID           uint              `gorm:"primarykey"`
+	Magnet       string            `json:"magnet" gorm:"index"`
+	FileId       string            `json:"file_id"`
+	Name         string            `json:"name" gorm:"index"`
+	Code         string            `json:"code" gorm:"index"`
+	DriverType   string            `json:"driver_type"`
+	Option       map[string]string `json:"option" gorm:"type:json;serializer:json"`
+	Subtitle     bool              `json:"subtitle"`
+	ScanAt       time.Time         `json:"scan_at"`
+	ScanCount    uint              `json:"scan_count"`
+	SubtitleUrls StringArray       `json:"subtitle_urls" gorm:"type:json;serializer:json"`
 }
 
 type MissedFilm struct {

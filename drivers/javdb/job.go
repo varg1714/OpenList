@@ -166,6 +166,7 @@ func fetchSubtitle(film model.Film, cache *model.MagnetCache) {
 		utils.Log.Warn("failed to match subtitles:", err2.Error())
 	} else if len(subtitles) > 0 {
 		cache.Subtitle = true
+		cache.SubtitleUrls = subtitles
 		virtual_file.SaveSubtitles(virtual_file.MediaInfo{
 			Source:   DriverName,
 			Dir:      film.Actor,
