@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -61,6 +62,15 @@ func (d *Pan115Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 			return nil, err
 		}
 
+		var ua string
+		// TODO: will use user agent from header
+		// if args.Header != nil {
+		// 	ua = args.Header.Get("User-Agent")
+		// }
+		if ua == "" {
+			ua = base.UserAgentNT
+		}
+
 		parentId := ""
 		if virDir, ok := dir.(*model.ObjVirtualDir); ok {
 			parentId = virDir.VirtualFile.ParentDir
@@ -76,7 +86,7 @@ func (d *Pan115Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 		}
 
 		files := make([]driver115.ShareFile, 0)
-		fileResp, err := d.client.GetShareSnap(virtualFile.ShareID, virtualFile.SharePwd, parentId, driver115.QueryLimit(int(d.PageSize)))
+		fileResp, err := d.client.GetShareSnapWithUA(ua, virtualFile.ShareID, virtualFile.SharePwd, parentId, driver115.QueryLimit(int(d.PageSize)))
 		if err != nil {
 			return nil, err
 		}
@@ -109,8 +119,16 @@ func (d *Pan115Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 		return nil, err
 	}
 
+	var ua string
+	if args.Header != nil {
+		ua = args.Header.Get("User-Agent")
+	}
+	if ua == "" {
+		ua = base.UserAgent
+	}
+
 	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
-	downloadInfo, err := d.client.DownloadByShareCode(virtualFile.ShareID, virtualFile.SharePwd, file.GetID())
+	downloadInfo, err := d.client.DownloadByShareCodeWithUA(ua, virtualFile.ShareID, virtualFile.SharePwd, file.GetID())
 	if err != nil {
 		return nil, err
 	}
