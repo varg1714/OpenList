@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -130,10 +131,13 @@ func (d *Pornhub) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 		}
 
 		videoLink.URL = link
+		videoLink.Header = http.Header{
+			"Referer": []string{d.ServerUrl},
+		}
 		return videoLink, nil
-	} else {
-		return nil, errors.New("invalid file type")
 	}
+
+	return nil, errors.New("invalid file type")
 
 }
 

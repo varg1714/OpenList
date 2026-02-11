@@ -110,6 +110,9 @@ func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error)
 			return false
 		}
 	}, func(newFilm model.EmbyFileObj, mediaInfo *virtual_file.MediaInfo) {
+		mediaInfo.ImgUrlHeaders = map[string]string{
+			"Referer": d.ServerUrl,
+		}
 		virtual_file.CacheImageAndNfo(*mediaInfo)
 	})
 
