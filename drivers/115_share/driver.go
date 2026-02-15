@@ -2,7 +2,9 @@ package _115_share
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/OpenListTeam/go-cache"
 	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )
 
@@ -119,6 +122,13 @@ func (d *Pan115Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 		return nil, err
 	}
 
+	var fileObj FileObj
+	if fileObjTmp, ok := file.(*FileObj); !ok {
+		return nil, errors.New("not a 115 share file")
+	} else {
+		fileObj = *fileObjTmp
+	}
+
 	var ua string
 	if args.Header != nil {
 		ua = args.Header.Get("User-Agent")
@@ -127,13 +137,37 @@ func (d *Pan115Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 		ua = base.UserAgent
 	}
 
-	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
-	downloadInfo, err := d.client.DownloadByShareCodeWithUA(ua, virtualFile.ShareID, virtualFile.SharePwd, file.GetID())
+	pan115, target, err := d.transferAndFind(ctx, fileObj, ua)
+	if err != nil {
+		return nil, err
+	}
+	if pan115 == nil {
+		return &model.Link{URL: ""}, nil
+	}
+
+	linkArgs := args
+	header := http.Header{}
+	if args.Header != nil {
+		header = args.Header.Clone()
+	}
+	header.Set("User-Agent", ua)
+	linkArgs.Header = header
+
+	link, err := pan115.Link(ctx, target, linkArgs)
 	if err != nil {
 		return nil, err
 	}
 
-	return &model.Link{URL: downloadInfo.URL.URL}, nil
+	go func() {
+		err2 := pan115.Remove(ctx, &model.Object{ID: target.GetID()})
+		if err2 != nil {
+			log.Warnf("failed to remove file: %s, error message: %s", target.GetName(), err2.Error())
+		} else {
+			log.Infof("remove the transferred file: %s", target.GetName())
+		}
+	}()
+
+	return link, err
 }
 
 func (d *Pan115Share) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {

@@ -13,6 +13,8 @@ type Addition struct {
 	LimitRate    float64 `json:"limit_rate" type:"float" default:"2" help:"limit all api request rate (1r/[limit_rate]s)"`
 	ShareCode    string  `json:"share_code" type:"text" required:"true" help:"share code of 115 share link"`
 	ReceiveCode  string  `json:"receive_code" type:"text" required:"true" help:"receive code of 115 share link"`
+	CID          string  `json:"cid" type:"text" required:"true" help:"transfer target folder id"`
+	DriverPath   string  `json:"115DriverPath" type:"text" required:"true" help:"115 driver path for link"`
 	driver.RootID
 }
 
