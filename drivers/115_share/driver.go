@@ -16,7 +16,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/OpenListTeam/go-cache"
 	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )
 
@@ -153,21 +152,7 @@ func (d *Pan115Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 	header.Set("User-Agent", ua)
 	linkArgs.Header = header
 
-	link, err := pan115.Link(ctx, target, linkArgs)
-	if err != nil {
-		return nil, err
-	}
-
-	go func() {
-		err2 := pan115.Remove(ctx, &model.Object{ID: target.GetID()})
-		if err2 != nil {
-			log.Warnf("failed to remove file: %s, error message: %s", target.GetName(), err2.Error())
-		} else {
-			log.Infof("remove the transferred file: %s", target.GetName())
-		}
-	}()
-
-	return link, err
+	return pan115.Link(ctx, target, linkArgs)
 }
 
 func (d *Pan115Share) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {

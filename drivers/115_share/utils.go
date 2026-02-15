@@ -156,14 +156,12 @@ func (d *Pan115Share) transferAndFind(ctx context.Context, file FileObj, ua stri
 	if err != nil {
 		return nil, nil, err
 	}
-	if resp == nil || !receiveResp.State || receiveResp.Errno != 0 {
+	if resp == nil || ((!receiveResp.State || receiveResp.Errno != 0) &&
+		!strings.Contains(receiveResp.Error, "文件已接收，无需重复接收！")) {
 		if receiveResp.Error == "" {
 			receiveResp.Error = "receive api failed"
 		}
 		return nil, nil, fmt.Errorf("receive api error: %s", receiveResp.Error)
-	}
-	if receiveResp.Data.ReceiveTitle == "" {
-		return nil, nil, errors.New("receive_title is empty")
 	}
 
 	storage := op.GetBalancedStorage(d.DriverPath)
