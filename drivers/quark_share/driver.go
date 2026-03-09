@@ -108,11 +108,8 @@ func (d *QuarkShare) Link(ctx context.Context, file model.Obj, args model.LinkAr
 	}
 
 	if link.URL != "" {
-		expirationTime := GetExpirationTime(link.URL)
-		if expirationTime == 0 && d.LinkCacheTime > 0 {
-			expirationTime = time.Duration(d.LinkCacheTime) * time.Second
-		}
-		if expirationTime > 0 {
+		if d.LinkCacheTime > 0 {
+			expirationTime := time.Duration(d.LinkCacheTime) * time.Second
 			link.Expiration = &expirationTime
 		}
 	}
