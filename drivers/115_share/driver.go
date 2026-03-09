@@ -2,7 +2,9 @@ package _115_share
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -119,6 +121,13 @@ func (d *Pan115Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 		return nil, err
 	}
 
+	var fileObj FileObj
+	if fileObjTmp, ok := file.(*FileObj); !ok {
+		return nil, errors.New("not a 115 share file")
+	} else {
+		fileObj = *fileObjTmp
+	}
+
 	var ua string
 	if args.Header != nil {
 		ua = args.Header.Get("User-Agent")
@@ -127,13 +136,23 @@ func (d *Pan115Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 		ua = base.UserAgent
 	}
 
-	virtualFile := virtual_file.GetSubscription(d.ID, file.GetPath())
-	downloadInfo, err := d.client.DownloadByShareCodeWithUA(ua, virtualFile.ShareID, virtualFile.SharePwd, file.GetID())
+	pan115, target, err := d.transferAndFind(ctx, fileObj, ua)
 	if err != nil {
 		return nil, err
 	}
+	if pan115 == nil {
+		return &model.Link{URL: ""}, nil
+	}
 
-	return &model.Link{URL: downloadInfo.URL.URL}, nil
+	linkArgs := args
+	header := http.Header{}
+	if args.Header != nil {
+		header = args.Header.Clone()
+	}
+	header.Set("User-Agent", ua)
+	linkArgs.Header = header
+
+	return pan115.Link(ctx, target, linkArgs)
 }
 
 func (d *Pan115Share) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
