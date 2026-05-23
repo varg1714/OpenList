@@ -138,7 +138,11 @@ func UpdateNfo(mediaInfo MediaInfo) {
 
 	if mediaInfo.Title != "" {
 		media.Title.Inner = fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)
-		media.Plot.Inner = fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)
+		plot := mediaInfo.Synopsis
+		if plot == "" {
+			plot = mediaInfo.Title
+		}
+		media.Plot.Inner = fmt.Sprintf("<![CDATA[%s]]>", plot)
 	}
 
 	if len(mediaInfo.Tags) > 0 {
@@ -269,9 +273,13 @@ func cacheActorNfo(mediaInfo MediaInfo, force bool) int {
 		})
 	}
 
+	plot := mediaInfo.Synopsis
+	if plot == "" {
+		plot = mediaInfo.Title
+	}
 	releaseTime := mediaInfo.Release.Format(time.DateOnly)
 	media := Media{
-		Plot:      Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)},
+		Plot:      Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", plot)},
 		Title:     Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)},
 		Actor:     actorInfos,
 		Release:   releaseTime,
@@ -304,6 +312,7 @@ func SynImageAndNfo(source, dir string, films []model.EmbyFileObj) {
 			Dir:      dir,
 			FileName: AppendImageName(film.Name),
 			Title:    film.Title,
+			Synopsis: film.Synopsis,
 			ImgUrl:   film.Thumb(),
 			Actors:   film.Actors,
 			Release:  film.ReleaseTime,

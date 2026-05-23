@@ -228,6 +228,74 @@ func (d *Javdb) refreshNfo() {
 
 }
 
+func (d *Javdb) scanSynopsis() {
+
+	utils.Log.Info("start scanning synopsis for javdb films")
+	defer utils.Log.Info("finish scanning synopsis")
+
+	limit := d.SynopsisScanLimit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	films, err := db.QueryEmptySynopsisFilms(DriverName, time.Hour*72, limit)
+	if err != nil {
+		utils.Log.Warnf("failed to query empty synopsis films: %s", err.Error())
+		return
+	}
+
+	if len(films) == 0 {
+		return
+	}
+
+	utils.Log.Infof("found %d films without synopsis", len(films))
+
+	for _, film := range films {
+
+		embyObj := model.EmbyFileObj{
+			ObjThumb: model.ObjThumb{
+				Object: model.Object{Name: film.Name},
+			},
+			Title: film.Title,
+			Url:   film.Url,
+		}
+
+		_, result := d.getAiravNamingAddr(embyObj)
+
+		if result.Synopsis != "" {
+			err = db.UpdateFilmSynopsis(film.ID, result.Synopsis)
+			if err != nil {
+				utils.Log.Warnf("failed to update synopsis for film %s: %s", film.Name, err.Error())
+				continue
+			}
+			virtual_file.UpdateNfo(virtual_file.MediaInfo{
+				Source:   DriverName,
+				Dir:      film.Actor,
+				FileName: virtual_file.AppendImageName(film.Name),
+				Title:    film.Title,
+				Synopsis: result.Synopsis,
+				Release:  film.Date,
+				Actors:   film.Actors,
+				Tags:     film.Tags,
+			})
+			utils.Log.Infof("updated synopsis for film: %s", film.Name)
+		} else if film.Date.Before(time.Now().AddDate(0, -1, 0)) {
+			err = db.MarkSynopsisExcluded(film.ID)
+			if err != nil {
+				utils.Log.Warnf("failed to mark synopsis excluded for film %s: %s", film.Name, err.Error())
+			}
+		} else {
+			err = db.UpdateSynopsisScanAt(film.ID)
+			if err != nil {
+				utils.Log.Warnf("failed to update synopsis scan at for film %s: %s", film.Name, err.Error())
+			}
+		}
+
+		time.Sleep(3 * time.Second)
+	}
+
+}
+
 func (d *Javdb) filterFilms() {
 
 	utils.Log.Info("start to filter javdb films")

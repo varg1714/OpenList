@@ -10,6 +10,7 @@ type MediaInfo struct {
 	Dir           string
 	FileName      string
 	Title         string
+	Synopsis      string
 	ImgUrl        string
 	ImgUrlHeaders map[string]string
 	Release       time.Time

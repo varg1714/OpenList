@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -28,6 +29,7 @@ func CreateFilms(source string, actor, actorId string, models []model.EmbyFileOb
 			CreatedAt: obj.Modified,
 			Date:      obj.ReleaseTime,
 			Title:     obj.Title,
+			Synopsis:  obj.Synopsis,
 			Actors:    obj.Actors,
 			Tags:      obj.Tags,
 		})
@@ -75,10 +77,11 @@ func QueryIncompleteFilms(source string, batchSize int) ([]model.Film, error) {
 
 func UpdateFilm(film model.Film) error {
 	return db.Model(&film).Updates(model.Film{
-		Date:   film.Date,
-		Title:  film.Title,
-		Actors: film.Actors,
-		Tags:   film.Tags,
+		Date:     film.Date,
+		Title:    film.Title,
+		Synopsis: film.Synopsis,
+		Actors:   film.Actors,
+		Tags:     film.Tags,
 	}).Error
 }
 
@@ -226,6 +229,39 @@ func QueryNotMatchTagFilms(source string, url []string, tag string, limit int) (
 	find := tx.Find(&result)
 	return result, errors.WithStack(find.Error)
 
+}
+
+func QueryEmptySynopsisFilms(source string, scanInterval time.Duration, limit int) ([]model.Film, error) {
+
+	var films []model.Film
+	err := db.Where("source = ?", source).
+		Where("(synopsis is null or synopsis = '')").
+		Where("(synopsis_excluded = false or synopsis_excluded is null)").
+		Where("(synopsis_scan_at is null or synopsis_scan_at < ?)", time.Now().Add(-scanInterval)).
+		Order("date desc").
+		Limit(limit).
+		Find(&films).Error
+
+	return films, errors.WithStack(err)
+
+}
+
+func UpdateFilmSynopsis(filmId uint, synopsis string) error {
+	return db.Model(&model.Film{}).Where("id = ?", filmId).Updates(map[string]interface{}{
+		"synopsis":         synopsis,
+		"synopsis_scan_at": time.Now(),
+	}).Error
+}
+
+func MarkSynopsisExcluded(filmId uint) error {
+	return db.Model(&model.Film{}).Where("id = ?", filmId).Updates(map[string]interface{}{
+		"synopsis_excluded": true,
+		"synopsis_scan_at":  time.Now(),
+	}).Error
+}
+
+func UpdateSynopsisScanAt(filmId uint) error {
+	return db.Model(&model.Film{}).Where("id = ?", filmId).Update("synopsis_scan_at", time.Now()).Error
 }
 
 func QueryNoTagFilms(source string, limit int) ([]model.Film, error) {

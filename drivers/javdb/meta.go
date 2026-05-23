@@ -31,6 +31,7 @@ type Addition struct {
 	MatchFilmTagLimit     int    `json:"match_film_tag_limit" required:"false" type:"number" `
 	MatchTopFilmsStarter  int    `json:"match_top_film_starter" required:"true" type:"number" `
 	MatchTopFilmsTimer    int    `json:"match_top_film_timer" required:"true" type:"number" `
+	SynopsisScanLimit     int    `json:"synopsis_scan_limit" required:"false" type:"number" default:"20"`
 }
 
 var config = driver.Config{

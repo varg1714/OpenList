@@ -2,16 +2,16 @@ package javdb
 
 import (
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/db"
-	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/internal/open_ai"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"github.com/gocolly/colly/v2"
-	"github.com/gocolly/colly/v2/extensions"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
+	"github.com/OpenListTeam/OpenList/v4/internal/db"
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/gocolly/colly/v2"
+	"github.com/gocolly/colly/v2/extensions"
 )
 
 func (d *Javdb) getAiravPageInfo(urlFunc func(index int) string, index int, data []model.EmbyFileObj) ([]model.EmbyFileObj, bool, error) {
@@ -68,7 +68,7 @@ func (d *Javdb) getAiravPageInfo(urlFunc func(index int) string, index int, data
 
 func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFileObj) {
 
-	actorUrl := ""
+	detailUrl := ""
 	actorPageUrl := ""
 	var matchedFilm model.EmbyFileObj
 
@@ -84,20 +84,20 @@ func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFi
 
 	for _, item := range searchResult {
 		if splitCode(item.Name) == code {
-			actorUrl = item.Url
+			detailUrl = item.Url
 			matchedFilm = item
-			if actorUrl == "" {
+			if detailUrl == "" {
 				return actorPageUrl, item
 			}
 		}
 	}
 
-	if actorUrl == "" {
+	if detailUrl == "" {
 		return actorPageUrl, model.EmbyFileObj{}
 	}
 
 	collector := colly.NewCollector(func(c *colly.Collector) {
-		c.SetRequestTimeout(time.Second * 10)
+		c.SetRequestTimeout(time.Second * 30)
 	})
 
 	collector.OnHTML(".list-group", func(element *colly.HTMLElement) {
@@ -118,95 +118,80 @@ func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFi
 
 	})
 
-	err = collector.Visit(actorUrl)
+	collector.OnHTML(".video-info", func(element *colly.HTMLElement) {
+		matchedFilm.Synopsis = element.ChildText("p.my-3")
+	})
+
+	err = collector.Visit(detailUrl)
 	if err != nil {
-		utils.Log.Info("演员主页爬取失败", err)
+		utils.Log.Info("详情页爬取失败", err)
 	}
 
 	return actorPageUrl, matchedFilm
 
 }
 
-func (d *Javdb) getAiravNamingFilms(films []model.EmbyFileObj, dirName string) (map[string]string, error) {
+func (d *Javdb) getAiravNamingFilms(films []model.EmbyFileObj, dirName string) (map[string]model.EmbyFileObj, error) {
 
-	nameCache := make(map[string]string)
+	nameCache := make(map[string]model.EmbyFileObj)
 	actorCache := make(map[string]bool)
 
 	var savingNamingMapping []model.EmbyFileObj
 
-	// 1. 获取库中已爬取结果
+	// 1. 加载库中已缓存的命名
 	actors := db.QueryByActor("airav", dirName)
 	for index := range actors {
-		title := actors[index].Title
-		nameCache[splitCode(title)] = title
+		film := actors[index]
+		nameCache[splitCode(film.Title)] = model.EmbyFileObj{
+			Title:    film.Title,
+			Synopsis: film.Synopsis,
+		}
 	}
 
-	// 2. 爬取新的数据
+	// 2. 逐影片匹配命名
 	for index := range films {
 
-		code, name := splitName(films[index].Title)
+		code, _ := splitName(films[index].Title)
 
-		// 2.1 仅当未爬取到才爬取
-		if nameCache[code] == "" {
-			// 2.2 首先爬取airav站点的
-			addr, searchResult := d.getAiravNamingAddr(films[index])
+		// 已有缓存，无需重复爬取
+		if _, exists := nameCache[code]; exists {
+			continue
+		}
 
-			if addr != "" && !actorCache[addr] {
-				// 2.2.1 爬取该主演所有作品
-				namingFilms, err := virtual_file.GetFilmsWithStorage("airav", dirName, addr, func(index int) string {
-					return addr + strconv.Itoa(index)
-				},
-					func(urlFunc func(index int) string, index int, data []model.EmbyFileObj) ([]model.EmbyFileObj, bool, error) {
-						return d.getAiravPageInfo(urlFunc, index, data)
-					}, virtual_file.Option{CacheFile: false, MaxPageNum: 40})
+		addr, searchResult := d.getAiravNamingAddr(films[index])
 
-				if err != nil {
-					utils.Log.Info("airav影片列表爬取失败", err)
+		// 2.1 搜索结果（含简介）优先入缓存，避免被演员列表覆盖
+		if searchResult.Url != "" {
+			searchCode := splitCode(searchResult.Title)
+			if _, exists := nameCache[searchCode]; !exists {
+				nameCache[searchCode] = searchResult
+			}
+			if addr == "" || actorCache[addr] {
+				savingNamingMapping = append(savingNamingMapping, searchResult)
+			}
+		}
+
+		// 2.2 爬取该演员主页所有作品（仅填充空缺）
+		if addr != "" && !actorCache[addr] {
+			namingFilms, err := virtual_file.GetFilmsWithStorage("airav", dirName, addr, func(index int) string {
+				return addr + strconv.Itoa(index)
+			},
+				func(urlFunc func(index int) string, index int, data []model.EmbyFileObj) ([]model.EmbyFileObj, bool, error) {
+					return d.getAiravPageInfo(urlFunc, index, data)
+				}, virtual_file.Option{CacheFile: false, MaxPageNum: 40})
+
+			if err != nil {
+				utils.Log.Info("airav影片列表爬取失败", err)
+			}
+			for nameFileIndex := range namingFilms {
+				tempFilm := namingFilms[nameFileIndex]
+				tempCode := splitCode(tempFilm.Title)
+				if _, exists := nameCache[tempCode]; !exists {
+					nameCache[tempCode] = tempFilm
 				}
-				for nameFileIndex := range namingFilms {
-					tempName := namingFilms[nameFileIndex].Title
-					tempCode := splitCode(tempName)
-					if nameCache[tempCode] == "" {
-						nameCache[tempCode] = tempName
-					}
-				}
-
-				actorCache[addr] = true
-
 			}
 
-			if nameCache[code] == "" && searchResult.Url != "" {
-				// 2.2.2 有该作品信息
-				nameCache[splitCode(searchResult.Title)] = virtual_file.AppendFilmName(searchResult.Title)
-				if addr == "" || actorCache[addr] {
-					// 没有爬取到演员主页，直接记录该影片信息
-					savingNamingMapping = append(savingNamingMapping, searchResult)
-				}
-			}
-
-			if nameCache[code] == "" {
-
-				// 2.2.3 AI翻译
-				translatedText := open_ai.Translate(virtual_file.ClearFilmName(name))
-				if translatedText != "" {
-					translatedText = fmt.Sprintf("%s %s", code, translatedText)
-					nameCache[code] = virtual_file.AppendFilmName(translatedText)
-					savingNamingMapping = append(savingNamingMapping, model.EmbyFileObj{
-						ObjThumb: model.ObjThumb{
-							Object: model.Object{Name: translatedText},
-						},
-						Title: translatedText})
-				} else {
-					nameCache[code] = films[index].Title
-					savingNamingMapping = append(savingNamingMapping, model.EmbyFileObj{
-						ObjThumb: model.ObjThumb{
-							Object: model.Object{Name: films[index].Name},
-						},
-						Title: films[index].Title})
-				}
-
-			}
-
+			actorCache[addr] = true
 		}
 
 	}

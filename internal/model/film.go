@@ -10,18 +10,21 @@ import (
 )
 
 type Film struct {
-	ID        uint        `gorm:"primarykey"`
-	Url       string      `json:"url" gorm:"index"`
-	Name      string      `json:"name"`
-	Image     string      `json:"image"`
-	Source    string      `json:"source"`
-	Actor     string      `json:"actor"`
-	ActorId   string      `json:"actor_id"`
-	Date      time.Time   `json:"date"`
-	CreatedAt time.Time   `json:"created_at"`
-	Actors    StringArray `json:"actors" gorm:"type:json;serializer:json"`
-	Title     string      `json:"title"`
-	Tags      StringArray `json:"tags" gorm:"type:json;serializer:json"`
+	ID               uint        `gorm:"primarykey"`
+	Url              string      `json:"url" gorm:"index"`
+	Name             string      `json:"name"`
+	Image            string      `json:"image"`
+	Source           string      `json:"source"`
+	Actor            string      `json:"actor"`
+	ActorId          string      `json:"actor_id"`
+	Date             time.Time   `json:"date"`
+	CreatedAt        time.Time   `json:"created_at"`
+	Actors           StringArray `json:"actors" gorm:"type:json;serializer:json"`
+	Title            string      `json:"title"`
+	Synopsis         string      `json:"synopsis"`
+	SynopsisScanAt   time.Time   `json:"synopsis_scan_at"`
+	SynopsisExcluded bool        `json:"synopsis_excluded"`
+	Tags             StringArray `json:"tags" gorm:"type:json;serializer:json"`
 }
 
 type MagnetCache struct {

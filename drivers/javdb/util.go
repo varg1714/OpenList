@@ -108,23 +108,65 @@ func (d *Javdb) mappingNames(dirName string, javFilms []model.EmbyFileObj) ([]mo
 		return javFilms, nil
 	}
 
-	// 2.1 获取所有映射名称
-	namingFilms, err := d.getAiravNamingFilms(noTitleFilms, dirName)
-	if err != nil || len(namingFilms) == 0 {
-		utils.Log.Infof("failed to get name mappings, error message: %v", err)
+	// 2.1 Airav 爬取
+	nameMapping, err := d.getAiravNamingFilms(noTitleFilms, dirName)
+	if err != nil {
+		utils.Log.Infof("failed to get name mappings from airav, error: %v", err)
 		return javFilms, nil
 	}
 
-	// 2.2 进行映射
+	// 2.2 全量 AI 翻译/校验（airav 结果可能不是中文或不够通顺）
+	var translateItems []open_ai.TranslateItem
+	var translateFilms []model.EmbyFileObj
+	for _, film := range noTitleFilms {
+		code := splitCode(film.Title)
+		_, name := splitName(film.Title)
+		item := open_ai.TranslateItem{
+			Origin: virtual_file.ClearFilmName(name),
+		}
+		if matched, exists := nameMapping[code]; exists {
+			item.Candidate = matched.Title
+		}
+		translateItems = append(translateItems, item)
+		translateFilms = append(translateFilms, film)
+	}
+
+	translations := open_ai.BatchTranslate(translateItems)
+	for i, translated := range translations {
+		film := translateFilms[i]
+		code, _ := splitName(film.Title)
+		if translated != "" {
+			title := fmt.Sprintf("%s %s", code, translated)
+			embyObj := model.EmbyFileObj{
+				ObjThumb: model.ObjThumb{Object: model.Object{Name: title}},
+				Title:    title,
+			}
+			if existing, exists := nameMapping[code]; exists && existing.Synopsis != "" {
+				embyObj.Synopsis = existing.Synopsis
+			}
+			nameMapping[code] = embyObj
+		} else if _, exists := nameMapping[code]; !exists {
+			nameMapping[code] = film
+		}
+	}
+
+	if len(nameMapping) == 0 {
+		return javFilms, nil
+	}
+
+	// 2.3 进行映射
 	var savingFilms []model.EmbyFileObj
 	var deletingFilms []string
 
 	for index, film := range javFilms {
 		if !film.Translated {
 			code := splitCode(film.Name)
-			if newName, exist := namingFilms[code]; exist {
-				javFilms[index].Name = virtual_file.AppendFilmName(virtual_file.CutString(virtual_file.ClearFilmName(newName)))
-				javFilms[index].Title = virtual_file.ClearFilmName(newName)
+			if matchedFilm, exist := nameMapping[code]; exist {
+				javFilms[index].Name = virtual_file.AppendFilmName(virtual_file.CutString(virtual_file.ClearFilmName(matchedFilm.Title)))
+				javFilms[index].Title = virtual_file.ClearFilmName(matchedFilm.Title)
+				if matchedFilm.Synopsis != "" {
+					javFilms[index].Synopsis = matchedFilm.Synopsis
+				}
 
 				savingFilms = append(savingFilms, javFilms[index])
 				deletingFilms = append(deletingFilms, film.Url)
@@ -149,6 +191,7 @@ func (d *Javdb) mappingNames(dirName string, javFilms []model.EmbyFileObj) ([]mo
 			Dir:      dirName,
 			FileName: virtual_file.AppendImageName(film.Name),
 			Title:    film.Title,
+			Synopsis: film.Synopsis,
 			ImgUrl:   film.Thumb(),
 			Actors:   []string{dirName},
 			Release:  film.ReleaseTime,
@@ -217,6 +260,7 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	if airavFilm.Name != "" {
 		cachingFilm.Title = airavFilm.Title
 		cachingFilm.Name = airavFilm.Name
+		cachingFilm.Synopsis = airavFilm.Synopsis
 	} else {
 		tempCode, name := splitName(cachingFilm.Name)
 
@@ -243,6 +287,7 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 		Dir:      "个人收藏",
 		FileName: virtual_file.AppendImageName(cachingFilm.Name),
 		Title:    cachingFilm.Title,
+		Synopsis: cachingFilm.Synopsis,
 		ImgUrl:   cachingFilm.Thumb(),
 		Actors:   cachingFilm.Actors,
 		Release:  cachingFilm.ReleaseTime,
@@ -291,6 +336,7 @@ func (d *Javdb) updateExistFilm(existFilm *model.Film, actors, tags []string) {
 		Dir:      embyFile.Path,
 		FileName: virtual_file.AppendImageName(embyFile.Name),
 		Title:    embyFile.Title,
+		Synopsis: embyFile.Synopsis,
 		Actors:   embyFile.Actors,
 		Release:  embyFile.ReleaseTime,
 		Tags:     embyFile.Tags,
@@ -434,6 +480,7 @@ func (d *Javdb) updateFilmMeta(javdbMeta av.Meta, embyObj *model.EmbyFileObj) {
 		Dir:      embyObj.Path,
 		FileName: virtual_file.AppendImageName(embyObj.Name),
 		Title:    embyObj.Title,
+		Synopsis: embyObj.Synopsis,
 		Actors:   actorNames,
 		Release:  embyObj.ReleaseTime,
 		Tags:     tags,

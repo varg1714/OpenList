@@ -108,6 +108,7 @@ type EmbyFileObj struct {
 	ObjThumb
 	Url         string
 	Title       string
+	Synopsis    string
 	Actors      []string
 	ReleaseTime time.Time
 	Translated  bool
