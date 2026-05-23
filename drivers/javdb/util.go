@@ -260,19 +260,21 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	if err != nil {
 		utils.Log.Info("addStar: airav详情页爬取失败", err)
 	}
-	if airavFilm.Name != "" {
-		cachingFilm.Title = airavFilm.Title
-		cachingFilm.Name = airavFilm.Name
-		cachingFilm.Synopsis = airavFilm.Synopsis
-	} else {
-		tempCode, name := splitName(cachingFilm.Name)
 
-		translatedText := open_ai.Translate(virtual_file.ClearFilmName(name))
-		if translatedText != "" {
-			translatedText = fmt.Sprintf("%s %s", tempCode, translatedText)
-			cachingFilm.Name = translatedText
-			cachingFilm.Title = translatedText
-		}
+	tempCode, name := splitName(cachingFilm.Name)
+	item := open_ai.TranslateItem{
+		Origin: virtual_file.ClearFilmName(name),
+	}
+	if airavFilm.Name != "" {
+		item.Candidate = airavFilm.Title
+		cachingFilm.Synopsis = airavFilm.Synopsis
+	}
+
+	translations := open_ai.BatchTranslate([]open_ai.TranslateItem{item})
+	if len(translations) > 0 && translations[0] != "" {
+		translatedTitle := fmt.Sprintf("%s %s", tempCode, translations[0])
+		cachingFilm.Name = translatedTitle
+		cachingFilm.Title = translatedTitle
 	}
 
 	d.fetchFilmMeta(cachingFilm.Url, &cachingFilm)

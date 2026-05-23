@@ -122,6 +122,11 @@ func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFi
 		matchedFilm.Synopsis = element.ChildText("p.my-3")
 	})
 
+	collector.OnHTML(".video-title.my-3", func(element *colly.HTMLElement) {
+		matchedFilm.Name = element.ChildText("h1")
+		matchedFilm.Title = element.ChildText("h1")
+	})
+
 	err = collector.Visit(detailUrl)
 	if err != nil {
 		utils.Log.Info("详情页爬取失败", err)
