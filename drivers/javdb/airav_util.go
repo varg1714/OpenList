@@ -66,7 +66,7 @@ func (d *Javdb) getAiravPageInfo(urlFunc func(index int) string, index int, data
 
 }
 
-func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFileObj) {
+func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFileObj, error) {
 
 	detailUrl := ""
 	actorPageUrl := ""
@@ -79,7 +79,7 @@ func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFi
 	}, 1, []model.EmbyFileObj{})
 	if err != nil {
 		utils.Log.Info("airav页面爬取错误", err)
-		return actorPageUrl, model.EmbyFileObj{}
+		return actorPageUrl, model.EmbyFileObj{}, err
 	}
 
 	for _, item := range searchResult {
@@ -87,13 +87,13 @@ func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFi
 			detailUrl = item.Url
 			matchedFilm = item
 			if detailUrl == "" {
-				return actorPageUrl, item
+				return actorPageUrl, item, nil
 			}
 		}
 	}
 
 	if detailUrl == "" {
-		return actorPageUrl, model.EmbyFileObj{}
+		return actorPageUrl, model.EmbyFileObj{}, nil
 	}
 
 	collector := colly.NewCollector(func(c *colly.Collector) {
@@ -125,9 +125,10 @@ func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFi
 	err = collector.Visit(detailUrl)
 	if err != nil {
 		utils.Log.Info("详情页爬取失败", err)
+		return actorPageUrl, matchedFilm, err
 	}
 
-	return actorPageUrl, matchedFilm
+	return actorPageUrl, matchedFilm, nil
 
 }
 
@@ -158,7 +159,11 @@ func (d *Javdb) getAiravNamingFilms(films []model.EmbyFileObj, dirName string) (
 			continue
 		}
 
-		addr, searchResult := d.getAiravNamingAddr(films[index])
+		addr, searchResult, err := d.getAiravNamingAddr(films[index])
+		if err != nil {
+			utils.Log.Info("airav详情页爬取错误", err)
+			continue
+		}
 
 		// 2.1 搜索结果（含简介）优先入缓存，避免被演员列表覆盖
 		if searchResult.Url != "" {

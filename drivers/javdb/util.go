@@ -256,7 +256,10 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	}
 
 	cachingFilm := javFilms[0]
-	_, airavFilm := d.getAiravNamingAddr(cachingFilm)
+	_, airavFilm, err := d.getAiravNamingAddr(cachingFilm)
+	if err != nil {
+		utils.Log.Info("addStar: airav详情页爬取失败", err)
+	}
 	if airavFilm.Name != "" {
 		cachingFilm.Title = airavFilm.Title
 		cachingFilm.Name = airavFilm.Name

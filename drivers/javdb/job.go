@@ -260,7 +260,16 @@ func (d *Javdb) scanSynopsis() {
 			Url:   film.Url,
 		}
 
-		_, result := d.getAiravNamingAddr(embyObj)
+		_, result, err := d.getAiravNamingAddr(embyObj)
+
+		if err != nil {
+			utils.Log.Infof("scanSynopsis: failed to fetch airav page for %s: %s", film.Name, err.Error())
+			err = db.UpdateSynopsisScanAt(film.ID)
+			if err != nil {
+				utils.Log.Warnf("failed to update synopsis scan at for film %s: %s", film.Name, err.Error())
+			}
+			continue
+		}
 
 		if result.Synopsis != "" {
 			err = db.UpdateFilmSynopsis(film.ID, result.Synopsis)
