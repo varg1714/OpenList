@@ -19,7 +19,7 @@ func (d *Javdb) getAiravPageInfo(urlFunc func(index int) string, index int, data
 	nextPage := false
 
 	collector := colly.NewCollector(func(c *colly.Collector) {
-		c.SetRequestTimeout(time.Second * 20)
+		c.SetRequestTimeout(time.Second * 120)
 	})
 	extensions.RandomUserAgent(collector)
 
