@@ -10,6 +10,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/open_ai"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
@@ -250,59 +251,115 @@ func (d *Javdb) scanSynopsis() {
 
 	utils.Log.Infof("found %d films without synopsis", len(films))
 
+	var dmmFilms []model.Film
+	var dmmSynopses []string
+
 	for _, film := range films {
-
-		embyObj := model.EmbyFileObj{
-			ObjThumb: model.ObjThumb{
-				Object: model.Object{Name: film.Name},
-			},
-			Title: film.Title,
-			Url:   film.Url,
-		}
-
-		_, result, err := d.getAiravNamingAddr(embyObj)
-
-		if err != nil {
-			utils.Log.Infof("scanSynopsis: failed to fetch airav page for %s: %s", film.Name, err.Error())
-			err = db.UpdateSynopsisScanAt(film.ID)
-			if err != nil {
-				utils.Log.Warnf("failed to update synopsis scan at for film %s: %s", film.Name, err.Error())
-			}
-			continue
-		}
-
-		if result.Synopsis != "" {
-			err = db.UpdateFilmSynopsis(film.ID, result.Synopsis)
-			if err != nil {
-				utils.Log.Warnf("failed to update synopsis for film %s: %s", film.Name, err.Error())
-				continue
-			}
-			virtual_file.UpdateNfo(virtual_file.MediaInfo{
-				Source:   DriverName,
-				Dir:      film.Actor,
-				FileName: virtual_file.AppendImageName(film.Name),
-				Title:    film.Title,
-				Synopsis: result.Synopsis,
-				Release:  film.Date,
-				Actors:   film.Actors,
-				Tags:     film.Tags,
-			})
-			utils.Log.Infof("updated synopsis for film: %s", film.Name)
-		} else if film.Date.Before(time.Now().AddDate(0, -1, 0)) {
-			err = db.MarkSynopsisExcluded(film.ID)
-			if err != nil {
-				utils.Log.Warnf("failed to mark synopsis excluded for film %s: %s", film.Name, err.Error())
-			}
-		} else {
-			err = db.UpdateSynopsisScanAt(film.ID)
-			if err != nil {
-				utils.Log.Warnf("failed to update synopsis scan at for film %s: %s", film.Name, err.Error())
-			}
-		}
-
+		d.scanFilmSynopsis(&film, &dmmFilms, &dmmSynopses)
 		time.Sleep(3 * time.Second)
 	}
 
+	d.flushDmmSynopses(dmmFilms, dmmSynopses)
+}
+
+// scanFilmSynopsis 扫描单个影片的简介：先尝试 airav，失败则尝试 DMM
+func (d *Javdb) scanFilmSynopsis(film *model.Film, dmmFilms *[]model.Film, dmmSynopses *[]string) {
+
+	embyObj := model.EmbyFileObj{
+		ObjThumb: model.ObjThumb{
+			Object: model.Object{Name: film.Name},
+		},
+		Title: film.Title,
+		Url:   film.Url,
+	}
+
+	_, result, err := d.getAiravNamingAddr(embyObj)
+
+	if err != nil {
+		utils.Log.Infof("scanSynopsis: failed to fetch airav page for %s: %s", film.Name, err.Error())
+	} else if result.Synopsis != "" {
+		d.saveScanResult(film, result.Synopsis, "airav")
+		return
+	}
+
+	// airav 失败或未找到，尝试 DMM
+	code := splitCode(film.Name)
+	dmmSynopsis := d.fetchDmmSynopsis(code)
+	if dmmSynopsis != "" {
+		*dmmFilms = append(*dmmFilms, *film)
+		*dmmSynopses = append(*dmmSynopses, dmmSynopsis)
+	} else {
+		d.saveScanResult(film, "", "")
+	}
+}
+
+// saveScanResult 保存扫描结果：有简介则写入 DB+NFO，无简介则标记排除或重试
+func (d *Javdb) saveScanResult(film *model.Film, synopsis, source string) {
+
+	if synopsis != "" {
+		err := db.UpdateFilmSynopsis(film.ID, synopsis)
+		if err != nil {
+			utils.Log.Warnf("failed to update synopsis for film %s: %s", film.Name, err.Error())
+			return
+		}
+		d.updateNfo(film, synopsis)
+		utils.Log.Infof("updated synopsis for film: %s (%s)", film.Name, source)
+		return
+	}
+
+	if film.Date.Before(time.Now().AddDate(0, -1, 0)) {
+		err := db.MarkSynopsisExcluded(film.ID)
+		if err != nil {
+			utils.Log.Warnf("failed to mark synopsis excluded for film %s: %s", film.Name, err.Error())
+		}
+	} else {
+		err := db.UpdateSynopsisScanAt(film.ID)
+		if err != nil {
+			utils.Log.Warnf("failed to update synopsis scan at for film %s: %s", film.Name, err.Error())
+		}
+	}
+}
+
+// flushDmmSynopses 批量 AI 翻译 DMM 简介并写入 DB+NFO
+func (d *Javdb) flushDmmSynopses(films []model.Film, synopses []string) {
+
+	if len(synopses) == 0 {
+		return
+	}
+
+	items := make([]open_ai.TranslateItem, len(synopses))
+	for i, s := range synopses {
+		items[i] = open_ai.TranslateItem{Origin: s}
+	}
+
+	translations := open_ai.BatchTranslate(items)
+	for i, translated := range translations {
+		film := films[i]
+		if translated == "" {
+			translated = synopses[i]
+		}
+		err := db.UpdateFilmSynopsis(film.ID, translated)
+		if err != nil {
+			utils.Log.Warnf("failed to update synopsis for film %s: %s", film.Name, err.Error())
+			continue
+		}
+		d.updateNfo(&film, translated)
+		utils.Log.Infof("updated synopsis for film: %s (dmm)", film.Name)
+	}
+}
+
+// updateNfo 更新影片的 NFO 文件
+func (d *Javdb) updateNfo(film *model.Film, synopsis string) {
+	virtual_file.UpdateNfo(virtual_file.MediaInfo{
+		Source:   DriverName,
+		Dir:      film.Actor,
+		FileName: virtual_file.AppendImageName(film.Name),
+		Title:    film.Title,
+		Synopsis: synopsis,
+		Release:  film.Date,
+		Actors:   film.Actors,
+		Tags:     film.Tags,
+	})
 }
 
 func (d *Javdb) filterFilms() {
