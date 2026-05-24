@@ -14,6 +14,28 @@ import (
 
 var TIMEOUT = 120 * time.Second
 
+// buildRequestBody 构建请求体，合并 open_ai_extra_body 配置中的额外参数
+func buildRequestBody(model string, messages []map[string]any) base.Json {
+	body := base.Json{
+		"model":    model,
+		"messages": messages,
+	}
+
+	extraBody := setting.GetStr(conf.OpenAiExtraBody)
+	if extraBody != "" {
+		var extra map[string]interface{}
+		if err := json.Unmarshal([]byte(extraBody), &extra); err != nil {
+			utils.Log.Warnf("open_ai_extra_body 解析失败: %s", err.Error())
+		} else {
+			for k, v := range extra {
+				body[k] = v
+			}
+		}
+	}
+
+	return body
+}
+
 func Translate(text string) string {
 
 	openAiUrl := setting.GetStr(conf.OpenAiUrl)
@@ -39,31 +61,24 @@ func Translate(text string) string {
 		response, err := base.RestyClient.SetTimeout(TIMEOUT).R().SetAuthToken(openAiApiKey).SetHeaders(map[string]string{
 			"Content-Type": "application/json",
 			"Accept":       "application/json",
-		}).SetBody(base.Json{
-			"messages": func() []map[string]any {
+		}).SetBody(buildRequestBody(model, func() []map[string]any {
 
-				var param []map[string]any
+			var param []map[string]any
 
-				if translatePromote != "" {
-					param = append(param, map[string]any{
-						"role":    "system",
-						"content": translatePromote,
-					})
-				}
-
+			if translatePromote != "" {
 				param = append(param, map[string]any{
-					"role":    "user",
-					"content": text,
+					"role":    "system",
+					"content": translatePromote,
 				})
+			}
 
-				return param
-			}(),
-			"model":             model,
-			"temperature":       0.5,
-			"presence_penalty":  0,
-			"frequency_penalty": 0,
-			"top_p":             1,
-		}).SetResult(&result).Post(fmt.Sprintf("%s/v1/chat/completions", openAiUrl))
+			param = append(param, map[string]any{
+				"role":    "user",
+				"content": text,
+			})
+
+			return param
+		}())).SetResult(&result).Post(fmt.Sprintf("%s/v1/chat/completions", openAiUrl))
 
 		if err != nil {
 			var detail string
@@ -75,7 +90,7 @@ func Translate(text string) string {
 		}
 
 		if len(result.Choices) == 0 || result.Choices[0].Message.Content == "" {
-			utils.Log.Warnf("翻译结果为空,响应信息为:%s", response.String())
+			utils.Log.Warnf("翻译结果为空,状态码:%d,响应体:%s", response.StatusCode(), string(response.Body()))
 			return ""
 		}
 
@@ -158,14 +173,7 @@ func BatchTranslate(items []TranslateItem) []string {
 		response, err := base.RestyClient.SetTimeout(TIMEOUT).R().SetAuthToken(openAiApiKey).SetHeaders(map[string]string{
 			"Content-Type": "application/json",
 			"Accept":       "application/json",
-		}).SetBody(base.Json{
-			"messages":          param,
-			"model":             model,
-			"temperature":       0.5,
-			"presence_penalty":  0,
-			"frequency_penalty": 0,
-			"top_p":             1,
-		}).SetResult(&result).Post(fmt.Sprintf("%s/v1/chat/completions", openAiUrl))
+		}).SetBody(buildRequestBody(model, param)).SetResult(&result).Post(fmt.Sprintf("%s/v1/chat/completions", openAiUrl))
 
 		if err != nil {
 			var detail string

@@ -165,6 +165,7 @@ const (
 	OpenAiApiKey           = "open_ai_api_key"
 	OpenAiTranslatePromote = "open_ai_translate_promote"
 	OpenAiTranslateModel   = "open_ai_translate_model"
+	OpenAiExtraBody        = "open_ai_extra_body"
 )
 
 const (

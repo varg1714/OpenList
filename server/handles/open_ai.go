@@ -13,6 +13,7 @@ type SetOpenAiUrlReq struct {
 	OpenAiApiKey           string `json:"open_ai_api_key" form:"open_ai_api_key"`
 	OpenAiTranslatePromote string `json:"open_ai_translate_promote" form:"open_ai_translate_promote"`
 	OpenAiTranslateModel   string `json:"open_ai_translate_model" form:"open_ai_translate_model"`
+	OpenAiExtraBody        string `json:"open_ai_extra_body" form:"open_ai_extra_body"`
 }
 
 func SetOpenAi(c *gin.Context) {
@@ -27,6 +28,7 @@ func SetOpenAi(c *gin.Context) {
 		{Key: conf.OpenAiApiKey, Value: req.OpenAiApiKey, Type: conf.TypeString, Group: model.OpenAi, Flag: model.PRIVATE},
 		{Key: conf.OpenAiTranslatePromote, Value: req.OpenAiTranslatePromote, Type: conf.TypeString, Group: model.OpenAi, Flag: model.PRIVATE},
 		{Key: conf.OpenAiTranslateModel, Value: req.OpenAiTranslateModel, Type: conf.TypeString, Group: model.OpenAi, Flag: model.PRIVATE},
+		{Key: conf.OpenAiExtraBody, Value: req.OpenAiExtraBody, Type: conf.TypeText, Group: model.OpenAi, Flag: model.PRIVATE},
 	}
 	if err := op.SaveSettingItems(items); err != nil {
 		common.ErrorResp(c, err, 500)
