@@ -82,18 +82,39 @@ func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFi
 		return actorPageUrl, model.EmbyFileObj{}, err
 	}
 
+	// 优先级匹配：完全匹配 > 前缀匹配，有名称 > 仅code
+	var bestScore int
 	for _, item := range searchResult {
-		if splitCode(item.Name) == code {
+		itemCode, namePart := splitName(item.Name)
+
+		var matchScore int
+		if itemCode == code {
+			// 完全匹配
+			matchScore = 4
+		} else if strings.HasPrefix(itemCode, code) {
+			// 前缀匹配
+			matchScore = 2
+		} else {
+			continue
+		}
+
+		if namePart != "" && namePart != itemCode {
+			matchScore += 1 // 有名称部分
+		}
+
+		if matchScore > bestScore {
+			bestScore = matchScore
 			detailUrl = item.Url
 			matchedFilm = item
-			if detailUrl == "" {
-				return actorPageUrl, item, nil
-			}
 		}
 	}
 
-	if detailUrl == "" {
+	if matchedFilm.Name == "" {
 		return actorPageUrl, model.EmbyFileObj{}, nil
+	}
+
+	if detailUrl == "" {
+		return actorPageUrl, matchedFilm, nil
 	}
 
 	collector := colly.NewCollector(func(c *colly.Collector) {

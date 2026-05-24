@@ -29,7 +29,7 @@ func DeleteImageAndNfo(source, dir, fileName string) error {
 
 	sourceName := fileName[0:strings.LastIndex(fileName, ".")]
 	realPath := filepath.Join(flags.DataDir, "emby", source, dir, GetRealName(sourceName))
-	return os.Remove(realPath)
+	return os.RemoveAll(realPath)
 
 }
 
