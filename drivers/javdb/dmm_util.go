@@ -3,7 +3,7 @@ package javdb
 import (
 	"fmt"
 	"net/http"
-	"regexp"
+	"net/url"
 	"strings"
 	"time"
 
@@ -12,28 +12,40 @@ import (
 	"github.com/gocolly/colly/v2/extensions"
 )
 
-var (
-	dmmCodeRegexp    = regexp.MustCompile(`[^a-z0-9]`)
-	dmmHtmlTagRegexp = regexp.MustCompile(`<[^>]*>`)
-	dmmBrRegexp      = regexp.MustCompile(`<br\s*/?>`)
-)
-
-// transformDmmCode 将 javdb code 转为 DMM 格式：小写 + 去除非字母数字字符
-// "SSIS-001" → "ssis001"
+// transformDmmCode 小写 + 去除 -
+// "SSIS-001" → "ssis001"，用于详情页 cid 参数
 func transformDmmCode(code string) string {
+	return strings.ReplaceAll(strings.ToLower(code), "-", "")
+}
+
+// transformDmmSearchCode 小写 + -替换为空格
+// "SSIS-001" → "ssis 001"，用于搜索页 searchstr 参数
+func transformDmmSearchCode(code string) string {
+	return strings.ReplaceAll(strings.ToLower(code), "-", " ")
+}
+
+// codeMatchesCode 检查 code（原始格式 xxx-001）的 - 前后部分是否都是 target 的子串
+func codeMatchesCode(code, target string) bool {
 	code = strings.ToLower(code)
-	return dmmCodeRegexp.ReplaceAllString(code, "")
+	target = strings.ToLower(target)
+	parts := strings.SplitN(code, "-", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	return strings.Contains(target, parts[0]) && strings.Contains(target, parts[1])
 }
 
 // newDmmCollector 创建带 age_check cookie 的 DMM collector
-func newDmmCollector() *colly.Collector {
+func newDmmCollector(pageUrl string) *colly.Collector {
 	collector := colly.NewCollector(func(c *colly.Collector) {
 		c.SetRequestTimeout(time.Second * 30)
 	})
 	extensions.RandomUserAgent(collector)
-	_ = collector.SetCookies("https://www.dmm.co.jp", []*http.Cookie{
-		{Name: "age_check_done", Value: "1"},
-	})
+	if u, err := url.Parse(pageUrl); err == nil {
+		_ = collector.SetCookies(fmt.Sprintf("%s://%s", u.Scheme, u.Host), []*http.Cookie{
+			{Name: "age_check_done", Value: "1"},
+		})
+	}
 	return collector
 }
 
@@ -50,40 +62,42 @@ func (d *Javdb) fetchDmmSynopsis(code string) string {
 
 	if is404 || synopsis == "" {
 		time.Sleep(1 * time.Second)
-		synopsis, _ = fetchDmmDetailPage(d.fetchDmmSearchResult(dmmCode))
+		synopsis, _ = fetchDmmDetailPage(d.fetchDmmSearchResult(code))
 	}
 
 	return synopsis
 }
 
 // fetchDmmSearchResult 通过 DMM 搜索获取第一个匹配的详情页地址
-func (d *Javdb) fetchDmmSearchResult(dmmCode string) string {
+func (d *Javdb) fetchDmmSearchResult(code string) string {
 
-	searchUrl := fmt.Sprintf("https://www.dmm.co.jp/search/=/searchstr=%s/limit=30/sort=rankprofile/", dmmCode)
-	collector := newDmmCollector()
+	searchUrl := fmt.Sprintf("https://www.dmm.co.jp/search/=/searchstr=%s/limit=30/sort=rankprofile/", transformDmmSearchCode(code))
+	collector := newDmmCollector(searchUrl)
 
 	var detailUrl string
-	found := false
 
 	collector.OnHTML(".mx-3.mt-1\\.5.mb-3.h-40", func(element *colly.HTMLElement) {
-		if found {
+		if detailUrl != "" {
 			return
 		}
 		element.ForEach("a", func(i int, el *colly.HTMLElement) {
-			if found {
+			if detailUrl != "" {
 				return
 			}
 			href := el.Attr("href")
-			if strings.Contains(href, "/detail") {
+			if !strings.Contains(href, "/detail") || !strings.Contains(href, "www.dmm.co.jp") {
+				return
+			}
+			cid := parseCidFromPath(href)
+			if cid != "" && codeMatchesCode(code, cid) {
 				detailUrl = href
-				found = true
 			}
 		})
 	})
 
 	err := collector.Visit(searchUrl)
 	if err != nil {
-		utils.Log.Debugf("DMM搜索页访问失败: %s, %v", searchUrl, err)
+		utils.Log.Warnf("DMM搜索页访问失败: %s, %v", searchUrl, err)
 		return ""
 	}
 
@@ -98,6 +112,19 @@ func (d *Javdb) fetchDmmSearchResult(dmmCode string) string {
 	return detailUrl
 }
 
+// parseCidFromPath 从路径格式中提取 cid，如 /detail/=/cid=mvg155/
+func parseCidFromPath(href string) string {
+	idx := strings.Index(href, "cid=")
+	if idx == -1 {
+		return ""
+	}
+	cid := href[idx+4:]
+	if end := strings.IndexAny(cid, "/?&"); end != -1 {
+		cid = cid[:end]
+	}
+	return cid
+}
+
 // fetchDmmDetailPage 访问 DMM 详情页并提取简介
 // 返回 (synopsis, is404)
 func fetchDmmDetailPage(url string) (string, bool) {
@@ -106,12 +133,21 @@ func fetchDmmDetailPage(url string) (string, bool) {
 		return "", false
 	}
 
-	collector := newDmmCollector()
+	collector := newDmmCollector(url)
 
 	var synopsis string
 
+	// 规则一：.mg-b20.lh4 p.mg-b20
 	collector.OnHTML(".mg-b20.lh4", func(element *colly.HTMLElement) {
-		synopsis = extractPlainText(element, "p.mg-b20")
+		synopsis = strings.TrimSpace(element.DOM.Find("p.mg-b20").First().Text())
+	})
+
+	// 规则二：.product-description-block .ignore-new-line
+	collector.OnHTML(".product-description-block", func(element *colly.HTMLElement) {
+		if synopsis != "" {
+			return
+		}
+		synopsis = strings.TrimSpace(element.DOM.Find(".ignore-new-line").First().Text())
 	})
 
 	err := collector.Visit(url)
@@ -119,42 +155,9 @@ func fetchDmmDetailPage(url string) (string, bool) {
 		if strings.Contains(err.Error(), "Not Found") {
 			return "", true
 		}
-		utils.Log.Debugf("DMM详情页访问失败: %s, %v", url, err)
+		utils.Log.Warnf("DMM详情页访问失败: %s, %v", url, err)
 		return "", false
 	}
 
 	return synopsis, false
-}
-
-// extractPlainText 提取元素的纯文本，将 <br/> 替换为换行符
-func extractPlainText(element *colly.HTMLElement, childSelector string) string {
-
-	var html string
-	if childSelector != "" {
-		var err error
-		html, err = element.DOM.Find(childSelector).First().Html()
-		if err != nil {
-			return ""
-		}
-	} else {
-		var err error
-		html, err = element.DOM.Html()
-		if err != nil {
-			return ""
-		}
-	}
-
-	if html == "" {
-		utils.Log.Debugf("DMM: extractPlainText 未找到子元素 %s", childSelector)
-		return ""
-	}
-
-	// <br/> → 换行符
-	html = dmmBrRegexp.ReplaceAllString(html, "\n")
-	// 去除剩余 HTML 标签
-	html = dmmHtmlTagRegexp.ReplaceAllString(html, "")
-	// 清理首尾空白
-	html = strings.TrimSpace(html)
-
-	return html
 }
