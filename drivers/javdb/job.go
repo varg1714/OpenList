@@ -284,7 +284,15 @@ func (d *Javdb) scanFilmSynopsis(film *model.Film, dmmFilms *[]model.Film, dmmSy
 
 	// airav 失败或未找到，尝试 DMM
 	code := splitCode(film.Name)
-	dmmSynopsis := d.fetchDmmSynopsis(code)
+	dmmSynopsis, err := d.fetchDmmSynopsis(code)
+	if err != nil {
+		utils.Log.Infof("scanSynopsis: DMM爬取失败 %s: %s", film.Name, err.Error())
+		err = db.UpdateSynopsisScanAt(film.ID)
+		if err != nil {
+			utils.Log.Warnf("failed to update synopsis scan at for film %s: %s", film.Name, err.Error())
+		}
+		return
+	}
 	if dmmSynopsis != "" {
 		*dmmFilms = append(*dmmFilms, *film)
 		*dmmSynopses = append(*dmmSynopses, dmmSynopsis)

@@ -49,23 +49,31 @@ func newDmmCollector(pageUrl string) *colly.Collector {
 	return collector
 }
 
-// fetchDmmSynopsis 从 DMM 站点爬取影片简介，返回纯文本（<br/>保留为换行符）
-func (d *Javdb) fetchDmmSynopsis(code string) string {
+// fetchDmmSynopsis 从 DMM 站点爬取影片简介，返回纯文本
+// 返回 (synopsis, error)：404/未找到返回 ("", nil)，网络错误返回 ("", err)
+func (d *Javdb) fetchDmmSynopsis(code string) (string, error) {
 
 	dmmCode := transformDmmCode(code)
 	if dmmCode == "" {
-		return ""
+		return "", nil
 	}
 
 	detailUrl := fmt.Sprintf("https://www.dmm.co.jp/mono/dvd/-/detail/=/cid=%s/", dmmCode)
-	synopsis, is404 := fetchDmmDetailPage(detailUrl)
+	synopsis, err := tryFetchDmmDetailPage(detailUrl)
 
-	if is404 || synopsis == "" {
-		time.Sleep(1 * time.Second)
-		synopsis, _ = fetchDmmDetailPage(d.fetchDmmSearchResult(code))
+	if err != nil {
+		return "", err
 	}
 
-	return synopsis
+	if synopsis == "" {
+		time.Sleep(1 * time.Second)
+		synopsis, err = tryFetchDmmDetailPage(d.fetchDmmSearchResult(code))
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return synopsis, nil
 }
 
 // fetchDmmSearchResult 通过 DMM 搜索获取第一个匹配的详情页地址
@@ -125,12 +133,12 @@ func parseCidFromPath(href string) string {
 	return cid
 }
 
-// fetchDmmDetailPage 访问 DMM 详情页并提取简介
-// 返回 (synopsis, is404)
-func fetchDmmDetailPage(url string) (string, bool) {
+// tryFetchDmmDetailPage 访问 DMM 详情页并提取简介
+// 404/未找到返回 ("", nil)，网络错误返回 ("", err)
+func tryFetchDmmDetailPage(url string) (string, error) {
 
 	if url == "" {
-		return "", false
+		return "", nil
 	}
 
 	collector := newDmmCollector(url)
@@ -153,11 +161,11 @@ func fetchDmmDetailPage(url string) (string, bool) {
 	err := collector.Visit(url)
 	if err != nil {
 		if strings.Contains(err.Error(), "Not Found") {
-			return "", true
+			return "", nil
 		}
 		utils.Log.Warnf("DMM详情页访问失败: %s, %v", url, err)
-		return "", false
+		return "", err
 	}
 
-	return synopsis, false
+	return synopsis, nil
 }
