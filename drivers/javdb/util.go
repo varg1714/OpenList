@@ -125,7 +125,8 @@ func (d *Javdb) mappingNames(dirName string, javFilms []model.EmbyFileObj) ([]mo
 			Origin: virtual_file.ClearFilmName(name),
 		}
 		if matched, exists := nameMapping[code]; exists {
-			item.Candidate = matched.Title
+			_, candidateName := splitName(matched.Title)
+			item.Candidate = virtual_file.ClearFilmName(candidateName)
 		}
 		translateItems = append(translateItems, item)
 		translateFilms = append(translateFilms, film)
