@@ -267,7 +267,8 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 		Origin: virtual_file.ClearFilmName(name),
 	}
 	if airavFilm.Name != "" {
-		item.Candidate = airavFilm.Title
+		_, candidateName := splitName(airavFilm.Title)
+		item.Candidate = virtual_file.ClearFilmName(candidateName)
 		cachingFilm.Synopsis = airavFilm.Synopsis
 	}
 
