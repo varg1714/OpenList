@@ -39,6 +39,15 @@ func CreateFilms(source string, actor, actorId string, models []model.EmbyFileOb
 
 }
 
+func QueryFilmsByActorAndNamePrefix(source, actor, namePrefix string) []model.Film {
+	films := make([]model.Film, 0)
+	db.Where("source = ?", source).
+		Where("actor = ?", actor).
+		Where("name LIKE ?", namePrefix+"%").
+		Find(&films)
+	return films
+}
+
 func QueryByActor(source string, actor string) []model.Film {
 
 	films := make([]model.Film, 0)

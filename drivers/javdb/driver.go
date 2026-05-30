@@ -158,6 +158,10 @@ func (d *Javdb) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 
 }
 
+func (d *Javdb) Get(ctx context.Context, path string) (model.Obj, error) {
+	return virtual_file.ResolveActorTreeObj(DriverName, strconv.Itoa(int(d.ID)), path, d.RootID.GetRootId(), d.Storage.Modified)
+}
+
 func (d *Javdb) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 
 	mockedLink := &model.Link{

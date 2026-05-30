@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
+	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -105,6 +107,48 @@ func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 		return results, nil
 	}
 
+}
+
+func (d *Pornhub) Get(ctx context.Context, path string) (model.Obj, error) {
+	if path == "" || path == "/" {
+		return &model.Object{
+			ID:       d.RootID.GetRootId(),
+			Name:     "root",
+			Size:     0,
+			Modified: d.Storage.Modified,
+			IsFolder: true,
+		}, nil
+	}
+
+	path = strings.Trim(path, "/")
+	parts := strings.SplitN(path, "/", 2)
+
+	actors := db.QueryActor(strconv.Itoa(int(d.ID)))
+	var targetActor *model.Actor
+	for _, actor := range actors {
+		if actor.Name == parts[0] {
+			targetActor = &actor
+			break
+		}
+	}
+	if targetActor == nil {
+		return nil, errs.ObjectNotFound
+	}
+
+	if len(parts) == 1 {
+		return &model.ObjThumb{
+			Object: model.Object{
+				Name:     targetActor.Name,
+				IsFolder: true,
+				ID:       targetActor.Name,
+				Size:     622857143,
+				Modified: targetActor.UpdatedAt,
+			},
+		}, nil
+	}
+
+	groupName, fileName := virtual_file.SplitFilmPath(parts[1])
+	return virtual_file.ResolveFilmObj(DriverName, parts[0], groupName, fileName)
 }
 
 func (d *Pornhub) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {

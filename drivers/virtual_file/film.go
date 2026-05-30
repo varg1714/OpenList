@@ -2,12 +2,14 @@ package virtual_file
 
 import (
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/db"
-	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/db"
+	"github.com/OpenListTeam/OpenList/v4/internal/errs"
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
 var realNameRegexp = regexp.MustCompile("(.+?)(?:-cd\\d+)?(?:-background)?")
@@ -370,4 +372,173 @@ func WrapEmbyFilms(films []model.EmbyFileObj) []model.EmbyFileDirWrapper {
 
 func GetRealName(name string) string {
 	return realNameRegexp.ReplaceAllString(clearFileName(name), "$1")
+}
+
+// SplitFilmPath splits the remainder of a path after the actor/collection level
+// into a film group name and optional file name.
+func SplitFilmPath(rest string) (groupName, fileName string) {
+	parts := strings.SplitN(rest, "/", 2)
+	groupName = parts[0]
+	if len(parts) == 2 {
+		fileName = parts[1]
+	}
+	return
+}
+
+// ResolveFilmObj looks up a film group folder or individual file from DB by actor and name.
+//
+//	source:    driver name (e.g. "pornhub", "javdb")
+//	actor:     DB Film.Actor value — scopes the query to a single actor or collection
+//	groupName: the GetRealName of the target film group
+//	fileName:  full EmbyFileObj.Name if looking for a specific file, empty if looking up the group folder
+func ResolveFilmObj(source, actor, groupName, fileName string) (model.Obj, error) {
+	if fileName != "" {
+		fileName = AppendFilmName(ClearFilmName(fileName))
+	}
+
+	namePrefix := groupName
+	if fileName != "" {
+		namePrefix = fileName
+	}
+
+	films := db.QueryFilmsByActorAndNamePrefix(source, actor, ClearFilmName(namePrefix))
+	if len(films) == 0 {
+		return nil, errs.ObjectNotFound
+	}
+
+	embyFilms := make([]model.EmbyFileObj, 0, len(films))
+	for _, film := range films {
+		obj := ConvertFilmToEmbyFile(film, actor)
+		if GetRealName(obj.Name) != groupName {
+			continue
+		}
+		if fileName != "" && obj.Name != fileName {
+			continue
+		}
+		embyFilms = append(embyFilms, obj)
+	}
+	if len(embyFilms) == 0 {
+		return nil, errs.ObjectNotFound
+	}
+
+	// individual file
+	if fileName != "" {
+		return &embyFilms[0], nil
+	}
+
+	// film group folder
+	wrapped := WrapEmbyFilms(embyFilms)
+	for i := range wrapped {
+		if wrapped[i].GetName() == groupName {
+			return &wrapped[i], nil
+		}
+	}
+	return nil, errs.ObjectNotFound
+}
+
+// ResolveActorTreeObj handles Get for drivers with the 关注演员/个人收藏 tree structure
+// (javdb, fc2). Drivers with a simpler actor-only tree (pornhub) call ResolveFilmObj directly.
+func ResolveActorTreeObj(source, storageID, path, rootID string, storageModified time.Time) (model.Obj, error) {
+	if path == "" || path == "/" {
+		return &model.Object{
+			ID:       rootID,
+			Name:     "root",
+			Size:     0,
+			Modified: storageModified,
+			IsFolder: true,
+		}, nil
+	}
+
+	path = strings.Trim(path, "/")
+	parts := strings.SplitN(path, "/", 2)
+
+	switch parts[0] {
+	case "关注演员":
+		if len(parts) == 1 {
+			return &model.ObjThumb{
+				Object: model.Object{
+					Name:     "关注演员",
+					IsFolder: true,
+					ID:       "关注演员",
+					Size:     622857143,
+					Modified: time.Now(),
+				},
+			}, nil
+		}
+
+		subParts := strings.SplitN(parts[1], "/", 2)
+		actorName := subParts[0]
+
+		actors := db.QueryActor(storageID)
+		var targetActor *model.Actor
+		for _, actor := range actors {
+			if actor.Name == actorName {
+				targetActor = &actor
+				break
+			}
+		}
+		if targetActor == nil {
+			return nil, errs.ObjectNotFound
+		}
+
+		if len(subParts) == 1 {
+			return &model.ObjThumb{
+				Object: model.Object{
+					Name:     actorName,
+					IsFolder: true,
+					ID:       actorName,
+					Size:     622857143,
+					Modified: targetActor.UpdatedAt,
+				},
+			}, nil
+		}
+
+		groupName, fileName := SplitFilmPath(subParts[1])
+		return ResolveFilmObj(source, actorName, groupName, fileName)
+
+	case "个人收藏":
+		if len(parts) == 1 {
+			return &model.ObjThumb{
+				Object: model.Object{
+					Name:     "个人收藏",
+					IsFolder: true,
+					ID:       "个人收藏",
+					Size:     622857143,
+					Modified: time.Now(),
+				},
+			}, nil
+		}
+
+		groupName, fileName := SplitFilmPath(parts[1])
+		return ResolveFilmObj(source, "个人收藏", groupName, fileName)
+
+	default:
+		// actor name directly
+		actors := db.QueryActor(storageID)
+		var targetActor *model.Actor
+		for _, actor := range actors {
+			if actor.Name == parts[0] {
+				targetActor = &actor
+				break
+			}
+		}
+		if targetActor == nil {
+			return nil, errs.ObjectNotFound
+		}
+
+		if len(parts) == 1 {
+			return &model.ObjThumb{
+				Object: model.Object{
+					Name:     targetActor.Name,
+					IsFolder: true,
+					ID:       targetActor.Name,
+					Size:     622857143,
+					Modified: targetActor.UpdatedAt,
+				},
+			}, nil
+		}
+
+		groupName, fileName := SplitFilmPath(parts[1])
+		return ResolveFilmObj(source, parts[0], groupName, fileName)
+	}
 }

@@ -143,6 +143,10 @@ func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]m
 
 }
 
+func (d *FC2) Get(ctx context.Context, path string) (model.Obj, error) {
+	return virtual_file.ResolveActorTreeObj("fc2", strconv.Itoa(int(d.ID)), path, d.RootID.GetRootId(), d.Storage.Modified)
+}
+
 func (d *FC2) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 
 	mockedLink := &model.Link{
