@@ -48,15 +48,17 @@ func (d *Javdb) reMatchSubtitles() {
 
 				subtitleTag := false
 				for _, tag := range film.Tags {
-					if tag == "字幕" {
+					if tag == model.TagSubtitle {
 						subtitleTag = true
 						break
 					}
 				}
 
 				if !subtitleTag {
-					film.Tags = append(film.Tags, "字幕")
-					err2 := db.UpdateFilm(film)
+					hadNoTags := len(film.Tags) == 0
+					film.Tags = append(film.Tags, model.TagSubtitle)
+					film.SubtitleOnly = hadNoTags
+					err2 := db.UpdateFilmActorsAndTags(film.ID, film.Actors, film.Tags, film.SubtitleOnly)
 					if err2 != nil {
 						utils.Log.Warn("failed to update film:", err2.Error())
 					}

@@ -389,12 +389,33 @@ func (d *Javdb) getMagnet(file model.Obj, reMatchFilmMeta bool) (string, error) 
 		if err2 != nil {
 			utils.Log.Warn("failed to get suke magnet info:", err2.Error())
 			return "", err2
-		} else {
-			if len(sukeMeta.Magnets) > 0 {
-				return sukeMeta.Magnets[0].GetMagnet(), nil
+		}
+		if len(sukeMeta.Magnets) == 0 {
+			return "", err
+		}
+
+		magnet := sukeMeta.Magnets[0].GetMagnet()
+		subtitle := sukeMeta.Magnets[0].IsSubTitle()
+
+		if magnetCache.Magnet == "" {
+			err3 := db.CreateMagnetCache(model.MagnetCache{
+				DriverType: DriverName,
+				Magnet:     magnet,
+				Name:       embyObj.GetName(),
+				Subtitle:   subtitle,
+				Code:       av.GetFilmCode(embyObj.GetName()),
+				ScanAt:     time.Now(),
+			})
+			if err3 != nil {
+				utils.Log.Warn("failed to create magnet cache from suke:", err3.Error())
 			}
 		}
-		return "", err
+
+		if subtitle {
+			d.addSubtitleTag(embyObj.GetName())
+		}
+
+		return magnet, nil
 	}
 
 	d.updateFilmMeta(javdbMeta, embyObj)
@@ -421,7 +442,7 @@ func (d *Javdb) cacheMagnet(javdbMeta av.Meta, embyObj *model.EmbyFileObj) (stri
 		} else {
 			if len(sukeMeta.Magnets) > 0 {
 				magnet = sukeMeta.Magnets[0].GetMagnet()
-				subtitle = true
+				subtitle = sukeMeta.Magnets[0].IsSubTitle()
 			}
 		}
 
@@ -440,6 +461,11 @@ func (d *Javdb) cacheMagnet(javdbMeta av.Meta, embyObj *model.EmbyFileObj) (stri
 		Code:       av.GetFilmCode(embyObj.GetName()),
 		ScanAt:     time.Now(),
 	})
+
+	if subtitle {
+		d.addSubtitleTag(embyObj.GetName())
+	}
+
 	return magnet, err
 }
 
@@ -495,11 +521,7 @@ func (d *Javdb) updateFilmMeta(javdbMeta av.Meta, embyObj *model.EmbyFileObj) {
 
 	tempId, err1 := strconv.ParseInt(embyObj.ID, 10, 64)
 	if err1 == nil {
-		err1 = db.UpdateFilm(model.Film{
-			ID:     uint(tempId),
-			Actors: actorNames,
-			Tags:   tags,
-		})
+		err1 = db.UpdateFilmActorsAndTags(uint(tempId), actorNames, tags, false)
 		if err1 != nil {
 			utils.Log.Warnf("failed to save film: %s, error message: %s", embyObj.GetName(), err1.Error())
 		}
@@ -507,6 +529,29 @@ func (d *Javdb) updateFilmMeta(javdbMeta av.Meta, embyObj *model.EmbyFileObj) {
 		utils.Log.Warnf("failed to parse films: %s id to int, error message: %s", embyObj.GetName(), err1.Error())
 	}
 
+}
+
+func (d *Javdb) addSubtitleTag(name string) {
+	code := av.GetFilmCode(name)
+	film, err := db.QueryFilmByCode(DriverName, code)
+	if err != nil {
+		utils.Log.Warnf("failed to query film for subtitle tag: %s", err.Error())
+		return
+	}
+
+	for _, tag := range film.Tags {
+		if tag == model.TagSubtitle {
+			return
+		}
+	}
+
+	newTags := append(film.Tags, model.TagSubtitle)
+	subtitleOnly := len(film.Tags) == 0
+
+	err = db.UpdateFilmTags(film.ID, newTags, subtitleOnly)
+	if err != nil {
+		utils.Log.Warnf("failed to add subtitle tag to film %s: %s", name, err.Error())
+	}
 }
 
 func (d *Javdb) deleteFilm(dir, fileName, id string) error {

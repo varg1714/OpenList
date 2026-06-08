@@ -25,6 +25,7 @@ type Film struct {
 	SynopsisScanAt   time.Time   `json:"synopsis_scan_at"`
 	SynopsisExcluded bool        `json:"synopsis_excluded"`
 	Tags             StringArray `json:"tags" gorm:"type:json;serializer:json"`
+	SubtitleOnly     bool        `json:"subtitle_only"`
 }
 
 type MagnetCache struct {
@@ -57,6 +58,8 @@ const (
 	Subscription = iota
 	VirtualDirection
 )
+
+const TagSubtitle = "字幕"
 
 type VirtualFileInfo struct {
 	DirType         uint          `json:"dirType"`

@@ -86,12 +86,37 @@ func QueryIncompleteFilms(source string, batchSize int) ([]model.Film, error) {
 
 func UpdateFilm(film model.Film) error {
 	return db.Model(&film).Updates(model.Film{
-		Date:     film.Date,
-		Title:    film.Title,
-		Synopsis: film.Synopsis,
-		Actors:   film.Actors,
-		Tags:     film.Tags,
+		Date:         film.Date,
+		Title:        film.Title,
+		Synopsis:     film.Synopsis,
+		Actors:       film.Actors,
+		Tags:         film.Tags,
+		SubtitleOnly: film.SubtitleOnly,
 	}).Error
+}
+
+func UpdateFilmTags(id uint, tags model.StringArray, subtitleOnly bool) error {
+	return db.Model(&model.Film{}).Where("id = ?", id).Updates(map[string]any{
+		"tags":          tags,
+		"subtitle_only": subtitleOnly,
+	}).Error
+}
+
+// UpdateFilmActorsAndTags 更新影片的 actors/tags/subtitle_only 列。
+// subtitle_only 始终写入（即使为 false），以修正 struct 形式 Updates 会跳过 bool 零值、
+// 导致 subtitle_only 无法被重置回 false 的问题。actors/tags 仅在非空时写入，保持与旧
+// struct 形式一致的零值跳过语义，避免把已有值覆盖为 NULL。不触碰 date/title/synopsis 列。
+func UpdateFilmActorsAndTags(id uint, actors, tags model.StringArray, subtitleOnly bool) error {
+	updates := map[string]any{
+		"subtitle_only": subtitleOnly,
+	}
+	if len(actors) > 0 {
+		updates["actors"] = actors
+	}
+	if len(tags) > 0 {
+		updates["tags"] = tags
+	}
+	return db.Model(&model.Film{}).Where("id = ?", id).Updates(updates).Error
 }
 
 func QueryByUrls(actor string, urls []string) []string {
@@ -277,7 +302,7 @@ func QueryNoTagFilms(source string, limit int) ([]model.Film, error) {
 
 	var result []model.Film
 
-	tx := db.Where("source = ?", source).Where("tags is null").Where("name not like 'FC2-%'").Limit(limit).Find(&result)
+	tx := db.Where("source = ?", source).Where("(tags is null or tags = '[]' or subtitle_only = ?)", true).Where("name not like 'FC2-%'").Limit(limit).Find(&result)
 
 	return result, errors.WithStack(tx.Error)
 
