@@ -1,11 +1,17 @@
 package javdb
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -13,6 +19,212 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/open_ai"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
+
+const (
+	maxSampleImageCount          = 50
+	maxSampleImageRequestsPerRun = 100
+)
+
+func sampleImageURL(imageURL string, index int) (string, error) {
+	if index < 1 || index > maxSampleImageCount {
+		return "", fmt.Errorf("unsupported sample image index: %d", index)
+	}
+
+	parsed, err := url.Parse(imageURL)
+	if err != nil {
+		return "", err
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	trustedHost := hostname == "jdbstatic.com" || strings.HasSuffix(hostname, ".jdbstatic.com")
+	if parsed.Scheme != "https" || !trustedHost || parsed.RawPath != "" || !strings.HasSuffix(parsed.Path, ".jpg") {
+		return "", fmt.Errorf("unsupported cover URL: %s", imageURL)
+	}
+
+	segments := strings.Split(parsed.Path, "/")
+	foundCovers := false
+	for segmentIndex := range segments {
+		if segments[segmentIndex] == "covers" {
+			segments[segmentIndex] = "samples"
+			foundCovers = true
+			break
+		}
+	}
+	if !foundCovers {
+		return "", fmt.Errorf("unsupported cover URL: %s", imageURL)
+	}
+
+	parsed.Path = strings.TrimSuffix(strings.Join(segments, "/"), ".jpg") + fmt.Sprintf("_l_%d.jpg", index)
+	parsed.RawPath = ""
+	return parsed.String(), nil
+}
+
+func (d *Javdb) scanSampleImages() {
+	utils.Log.Info("start scanning sample images for javdb films")
+	defer utils.Log.Info("finish scanning sample images")
+
+	films, err := db.QuerySampleImageFilms(DriverName, 72*time.Hour, 20)
+	if err != nil {
+		utils.Log.Warnf("failed to query sample-image films: %s", err.Error())
+		return
+	}
+
+	remainingRequests := maxSampleImageRequestsPerRun
+	for filmIndex := range films {
+		if d.scanFilmSampleImagesWithBudget(context.Background(), &films[filmIndex], &remainingRequests) {
+			return
+		}
+	}
+}
+
+func (d *Javdb) scanFilmSampleImages(ctx context.Context, film *model.Film) {
+	d.scanFilmSampleImagesWithBudget(ctx, film, nil)
+}
+
+func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.Film, remainingRequests *int) bool {
+	if film.SampleImageComplete {
+		return false
+	}
+	if film.SampleImageCount >= maxSampleImageCount {
+		if err := db.MarkSampleImageComplete(film.ID); err != nil {
+			utils.Log.Warnf("failed to mark sample images complete for film %s: %s", film.Name, err.Error())
+		}
+		return false
+	}
+
+	filmDirectory, err := sampleImageFilmDirectory(film)
+	if err != nil {
+		d.updateSampleImageScanAt(film, err)
+		return false
+	}
+	for index := film.SampleImageCount + 1; index <= maxSampleImageCount; index++ {
+		remoteURL, err := sampleImageURL(film.Image, index)
+		if err != nil {
+			d.updateSampleImageScanAt(film, err)
+			return false
+		}
+
+		destination := filepath.Join(filmDirectory, fmt.Sprintf("fanart%d.jpg", index))
+		if err := ensureSampleImageDestination(destination); err != nil {
+			d.updateSampleImageScanAt(film, err)
+			return false
+		}
+		info, statErr := os.Lstat(destination)
+		requestNeeded := os.IsNotExist(statErr)
+		if statErr == nil && info.Mode().IsRegular() {
+			requestNeeded = false
+		}
+		if requestNeeded && remainingRequests != nil {
+			if *remainingRequests == 0 {
+				return true
+			}
+			*remainingRequests--
+		}
+		_, err = virtual_file.CacheHTTPFile(ctx, virtual_file.HTTPFileCacheRequest{
+			URL:         remoteURL,
+			Destination: destination,
+			Client:      d.client,
+			Headers: map[string]string{
+				"Referer": film.Url,
+			},
+		})
+		if err != nil {
+			var statusError *virtual_file.HTTPStatusError
+			if errors.As(err, &statusError) && statusError.StatusCode == 403 {
+				if markErr := db.MarkSampleImageComplete(film.ID); markErr != nil {
+					utils.Log.Warnf("failed to mark sample images complete for film %s: %s", film.Name, markErr.Error())
+				}
+				return false
+			}
+			d.updateSampleImageScanAt(film, err)
+			return false
+		}
+
+		complete := index == maxSampleImageCount
+		if err := db.UpdateSampleImageProgress(film.ID, index, complete); err != nil {
+			utils.Log.Warnf("failed to update sample-image progress for film %s: %s", film.Name, err.Error())
+			return false
+		}
+		film.SampleImageCount = index
+		film.SampleImageComplete = complete
+		if complete {
+			return false
+		}
+	}
+	return false
+}
+
+func sampleImageFilmDirectory(film *model.Film) (string, error) {
+	filmDirectoryName := virtual_file.GetRealName(virtual_file.AppendImageName(film.Name))
+	if err := validateSampleImagePathComponent("actor", film.Actor); err != nil {
+		return "", err
+	}
+	if err := validateSampleImagePathComponent("film directory", filmDirectoryName); err != nil {
+		return "", err
+	}
+	root := filepath.Join(flags.DataDir, "emby", DriverName)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+	actorDirectory := filepath.Join(root, film.Actor)
+	if err := ensureSampleImageDirectory(actorDirectory); err != nil {
+		return "", err
+	}
+	filmDirectory := filepath.Join(actorDirectory, filmDirectoryName)
+	if err := ensureSampleImageDirectory(filmDirectory); err != nil {
+		return "", err
+	}
+	return filmDirectory, nil
+}
+
+func validateSampleImagePathComponent(label, component string) error {
+	if component == "" || component == "." || component == ".." || filepath.IsAbs(component) || strings.ContainsAny(component, `/\`) {
+		return fmt.Errorf("unsafe sample-image %s: %q", label, component)
+	}
+	return nil
+}
+
+func ensureSampleImageDirectory(directory string) error {
+	info, err := os.Lstat(directory)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("unsafe sample-image directory: %s", directory)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		if !os.IsExist(err) {
+			return err
+		}
+		return ensureSampleImageDirectory(directory)
+	}
+	return nil
+}
+
+func ensureSampleImageDestination(destination string) error {
+	root, err := filepath.Abs(filepath.Join(flags.DataDir, "emby", DriverName))
+	if err != nil {
+		return err
+	}
+	absoluteDestination, err := filepath.Abs(destination)
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(root, absoluteDestination)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return fmt.Errorf("sample-image destination escapes cache root: %s", destination)
+	}
+	return nil
+}
+
+func (d *Javdb) updateSampleImageScanAt(film *model.Film, scanErr error) {
+	utils.Log.Warnf("failed to cache sample image for film %s: %s", film.Name, scanErr.Error())
+	if err := db.UpdateSampleImageScanAt(film.ID); err != nil {
+		utils.Log.Warnf("failed to update sample-image scan time for film %s: %s", film.Name, err.Error())
+	}
+}
 
 func (d *Javdb) reMatchSubtitles() {
 

@@ -2,11 +2,13 @@ package javdb
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -17,6 +19,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/emirpasic/gods/v2/maps/linkedhashmap"
+	"github.com/go-resty/resty/v2"
 )
 
 type Javdb struct {
@@ -27,6 +30,7 @@ type Javdb struct {
 	DriveId          string
 	cron             *cron.Cron
 	matchTopFilmCorn *cron.Cron
+	client           *resty.Client
 }
 
 func (d *Javdb) Config() driver.Config {
@@ -38,6 +42,9 @@ func (d *Javdb) GetAddition() driver.Additional {
 }
 
 func (d *Javdb) Init(ctx context.Context) error {
+	if d.client == nil {
+		d.client = newSampleImageClient()
+	}
 
 	duration := time.Minute * time.Duration(d.SubtitleScanTime)
 	if duration <= 0 {
@@ -53,7 +60,7 @@ func (d *Javdb) Init(ctx context.Context) error {
 		}
 		d.filterFilms()
 		d.reMatchTags()
-
+		d.scanSampleImages()
 	})
 
 	matchTopFilmsTimer := time.Hour * time.Duration(d.MatchTopFilmsTimer)
@@ -67,6 +74,13 @@ func (d *Javdb) Init(ctx context.Context) error {
 	})
 
 	return nil
+}
+
+func newSampleImageClient() *resty.Client {
+	return base.NewRestyClient().
+		SetRetryCount(0).
+		SetTLSClientConfig(&tls.Config{MinVersion: tls.VersionTLS12}).
+		SetRedirectPolicy(resty.NoRedirectPolicy())
 }
 
 func (d *Javdb) Drop(ctx context.Context) error {
