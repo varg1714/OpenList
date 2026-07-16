@@ -8,6 +8,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/pkg/errors"
+	"gorm.io/gorm"
 )
 
 func CreateFilms(source string, actor, actorId string, models []model.EmbyFileObj) error {
@@ -296,6 +297,44 @@ func MarkSynopsisExcluded(filmId uint) error {
 
 func UpdateSynopsisScanAt(filmId uint) error {
 	return db.Model(&model.Film{}).Where("id = ?", filmId).Update("synopsis_scan_at", time.Now()).Error
+}
+
+func QuerySampleImageFilms(source string, scanInterval time.Duration, limit int) ([]model.Film, error) {
+	var films []model.Film
+	err := db.Where("source = ?", source).
+		Where("image is not null and image <> ''").
+		Where("(sample_image_complete = false or sample_image_complete is null)").
+		Where("(sample_image_scan_at is null or sample_image_scan_at < ?)", time.Now().Add(-scanInterval)).
+		Order("date desc, id desc").
+		Limit(limit).
+		Find(&films).Error
+
+	return films, errors.WithStack(err)
+}
+
+func UpdateSampleImageProgress(filmId uint, count int, complete bool) error {
+	updates := map[string]interface{}{
+		"sample_image_count": gorm.Expr(
+			"CASE WHEN COALESCE(sample_image_count, 0) < ? THEN ? ELSE COALESCE(sample_image_count, 0) END",
+			count,
+			count,
+		),
+	}
+	if complete {
+		updates["sample_image_complete"] = true
+	}
+	return db.Model(&model.Film{}).Where("id = ?", filmId).Updates(updates).Error
+}
+
+func MarkSampleImageComplete(filmId uint) error {
+	return db.Model(&model.Film{}).Where("id = ?", filmId).Updates(map[string]interface{}{
+		"sample_image_complete": true,
+		"sample_image_scan_at":  time.Now(),
+	}).Error
+}
+
+func UpdateSampleImageScanAt(filmId uint) error {
+	return db.Model(&model.Film{}).Where("id = ?", filmId).Update("sample_image_scan_at", time.Now()).Error
 }
 
 func QueryNoTagFilms(source string, limit int) ([]model.Film, error) {
