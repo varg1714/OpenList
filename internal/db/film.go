@@ -312,6 +312,61 @@ func QuerySampleImageFilms(source string, scanInterval time.Duration, limit int)
 	return films, errors.WithStack(err)
 }
 
+type FC2SampleImageGroup struct {
+	Source           string
+	Actor            string
+	URL              string `gorm:"column:url"`
+	SampleImageCount int
+}
+
+func QueryFC2SampleImageGroups(scanInterval time.Duration, limit int) ([]FC2SampleImageGroup, error) {
+	var groups []FC2SampleImageGroup
+	query := db.Model(&model.Film{}).
+		Select("source, actor, url, MAX(COALESCE(sample_image_count, 0)) AS sample_image_count").
+		Where("source = ?", "fc2").
+		Where("url IS NOT NULL AND url <> ''").
+		Group("source, actor, url").
+		Having("SUM(CASE WHEN sample_image_complete = ? THEN 1 ELSE 0 END) = 0", true).
+		Having("MAX(sample_image_scan_at) IS NULL OR MAX(sample_image_scan_at) < ?", time.Now().Add(-scanInterval)).
+		Order("actor ASC, url ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+
+	return groups, errors.WithStack(query.Scan(&groups).Error)
+}
+
+func UpdateFC2SampleImageGroupProgress(actor, url string, count int, complete bool) error {
+	updates := map[string]interface{}{
+		"sample_image_count": gorm.Expr(
+			"CASE WHEN COALESCE(sample_image_count, 0) < ? THEN ? ELSE COALESCE(sample_image_count, 0) END",
+			count,
+			count,
+		),
+	}
+	if complete {
+		updates["sample_image_complete"] = true
+	}
+	return db.Model(&model.Film{}).
+		Where("source = ? AND actor = ? AND url = ?", "fc2", actor, url).
+		Updates(updates).Error
+}
+
+func MarkFC2SampleImageGroupComplete(actor, url string) error {
+	return db.Model(&model.Film{}).
+		Where("source = ? AND actor = ? AND url = ?", "fc2", actor, url).
+		Updates(map[string]interface{}{
+			"sample_image_complete": true,
+			"sample_image_scan_at":  time.Now(),
+		}).Error
+}
+
+func UpdateFC2SampleImageGroupScanAt(actor, url string) error {
+	return db.Model(&model.Film{}).
+		Where("source = ? AND actor = ? AND url = ?", "fc2", actor, url).
+		Update("sample_image_scan_at", time.Now()).Error
+}
+
 func UpdateSampleImageProgress(filmId uint, count int, complete bool) error {
 	updates := map[string]interface{}{
 		"sample_image_count": gorm.Expr(

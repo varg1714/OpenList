@@ -58,6 +58,39 @@ func QueryMagnetCacheByCode(code string) model.MagnetCache {
 
 }
 
+func QueryMagnetCacheByDriverAndCode(driverType, code string) model.MagnetCache {
+	fileCache := model.MagnetCache{
+		DriverType: driverType,
+		Code:       code,
+	}
+
+	db.Where(fileCache).First(&fileCache)
+
+	return fileCache
+}
+
+func QueryFC2MagnetCacheByCode(code string) (model.MagnetCache, error) {
+	var fileCache model.MagnetCache
+	err := db.Where("driver_type = ? AND code = ?", "fc2", code).First(&fileCache).Error
+	if err == nil {
+		return fileCache, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.MagnetCache{}, errors.WithStack(err)
+	}
+
+	fileCache = model.MagnetCache{}
+	err = db.Where("code = ? AND (driver_type = ? OR driver_type IS NULL)", code, "").First(&fileCache).Error
+	if err != nil {
+		return model.MagnetCache{}, errors.WithStack(err)
+	}
+	if err := db.Model(&model.MagnetCache{}).Where("id = ?", fileCache.ID).Update("driver_type", "fc2").Error; err != nil {
+		return model.MagnetCache{}, errors.WithStack(err)
+	}
+	fileCache.DriverType = "fc2"
+	return fileCache, nil
+}
+
 func QueryNoSubtitlesCache(driverType string, limit int) ([]model.MagnetCache, error) {
 
 	var caches []model.MagnetCache

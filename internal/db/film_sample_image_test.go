@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,7 +25,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	db = testDB
-	if err := AutoMigrate(new(model.Film)); err != nil {
+	if err := AutoMigrate(new(model.Film), new(model.MagnetCache)); err != nil {
 		panic(err)
 	}
 
@@ -43,10 +45,236 @@ func setupFilmSampleImageTestDB(t *testing.T) {
 	if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.Film{}).Error; err != nil {
 		t.Fatalf("reset films: %v", err)
 	}
+	if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.MagnetCache{}).Error; err != nil {
+		t.Fatalf("reset magnet caches: %v", err)
+	}
 
 	t.Cleanup(func() {
 		conf.Conf = previousConf
 	})
+}
+
+func TestQueryFC2SampleImageGroups(t *testing.T) {
+	setupFilmSampleImageTestDB(t)
+
+	now := time.Now()
+	stale := now.Add(-2 * time.Hour)
+	films := []model.Film{
+		{Name: "FC2-100-cd1", Source: "fc2", Actor: "alice", Url: "FC2-100", SampleImageCount: 1, SampleImageScanAt: stale},
+		{Name: "FC2-100-cd2", Source: "fc2", Actor: "alice", Url: "FC2-100", SampleImageCount: 7, SampleImageScanAt: stale},
+		{Name: "FC2-100-cd3", Source: "fc2", Actor: "alice", Url: "FC2-100", SampleImageCount: 4},
+		{Name: "FC2-100-cd1", Source: "fc2", Actor: "bob", Url: "FC2-100", SampleImageCount: 3, SampleImageScanAt: stale},
+		{Name: "empty-url", Source: "fc2", Actor: "alice", Url: "", SampleImageScanAt: stale},
+		{Name: "wrong-source", Source: "javdb", Actor: "alice", Url: "FC2-200", SampleImageScanAt: stale},
+		{Name: "fresh-cd1", Source: "fc2", Actor: "fresh", Url: "FC2-300", SampleImageScanAt: stale},
+		{Name: "fresh-cd2", Source: "fc2", Actor: "fresh", Url: "FC2-300", SampleImageScanAt: now},
+		{Name: "complete-cd1", Source: "fc2", Actor: "complete", Url: "FC2-400", SampleImageScanAt: stale},
+		{Name: "complete-cd2", Source: "fc2", Actor: "complete", Url: "FC2-400", SampleImageComplete: true, SampleImageScanAt: stale},
+	}
+	if err := db.Create(&films).Error; err != nil {
+		t.Fatalf("create films: %v", err)
+	}
+	if err := db.Model(&model.Film{}).Where("name = ?", "FC2-100-cd3").Update("sample_image_scan_at", nil).Error; err != nil {
+		t.Fatalf("set null scan time: %v", err)
+	}
+
+	groups, err := QueryFC2SampleImageGroups(time.Hour, 20)
+	if err != nil {
+		t.Fatalf("query FC2 sample-image groups: %v", err)
+	}
+	want := []FC2SampleImageGroup{
+		{Source: "fc2", Actor: "alice", URL: "FC2-100", SampleImageCount: 7},
+		{Source: "fc2", Actor: "bob", URL: "FC2-100", SampleImageCount: 3},
+	}
+	if len(groups) != len(want) {
+		t.Fatalf("got %d groups (%+v), want %d", len(groups), groups, len(want))
+	}
+	for i := range want {
+		if groups[i] != want[i] {
+			t.Errorf("group %d = %+v, want %+v", i, groups[i], want[i])
+		}
+	}
+}
+
+func TestQueryFC2SampleImageGroupsLimitAppliesAfterGrouping(t *testing.T) {
+	setupFilmSampleImageTestDB(t)
+
+	films := make([]model.Film, 0, 63)
+	for group := 0; group < 21; group++ {
+		for cd := 1; cd <= 3; cd++ {
+			films = append(films, model.Film{
+				Name:   "sibling",
+				Source: "fc2",
+				Actor:  "actor",
+				Url:    "FC2-" + string(rune('A'+group)),
+			})
+		}
+	}
+	if err := db.Create(&films).Error; err != nil {
+		t.Fatalf("create films: %v", err)
+	}
+
+	groups, err := QueryFC2SampleImageGroups(time.Hour, 20)
+	if err != nil {
+		t.Fatalf("query FC2 sample-image groups: %v", err)
+	}
+	if len(groups) != 20 {
+		t.Fatalf("got %d groups, want limit of 20 groups", len(groups))
+	}
+	for i := 1; i < len(groups); i++ {
+		if groups[i-1].URL >= groups[i].URL {
+			t.Fatalf("groups are not deterministically ordered: %q before %q", groups[i-1].URL, groups[i].URL)
+		}
+	}
+}
+
+func TestFC2SampleImageGroupUpdateHelpers(t *testing.T) {
+	setupFilmSampleImageTestDB(t)
+
+	oldScanAt := time.Now().Add(-24 * time.Hour)
+	films := []model.Film{
+		{Name: "FC2-500-cd1", Source: "fc2", Actor: "alice", Url: "FC2-500", SampleImageCount: 9, SampleImageScanAt: oldScanAt},
+		{Name: "FC2-500-cd2", Source: "fc2", Actor: "alice", Url: "FC2-500", SampleImageCount: 2, SampleImageScanAt: oldScanAt},
+		{Name: "FC2-500-cd3", Source: "fc2", Actor: "alice", Url: "FC2-500", SampleImageCount: 0, SampleImageScanAt: oldScanAt},
+		{Name: "other-actor", Source: "fc2", Actor: "bob", Url: "FC2-500", SampleImageCount: 1, SampleImageScanAt: oldScanAt},
+		{Name: "other-source", Source: "javdb", Actor: "alice", Url: "FC2-500", SampleImageCount: 1, SampleImageScanAt: oldScanAt},
+		{Name: "other-url", Source: "fc2", Actor: "alice", Url: "FC2-501", SampleImageCount: 1, SampleImageScanAt: oldScanAt},
+	}
+	if err := db.Create(&films).Error; err != nil {
+		t.Fatalf("create films: %v", err)
+	}
+
+	if err := UpdateFC2SampleImageGroupProgress("alice", "FC2-500", 8, false); err != nil {
+		t.Fatalf("update group progress: %v", err)
+	}
+	if err := UpdateFC2SampleImageGroupProgress("alice", "FC2-500", 12, true); err != nil {
+		t.Fatalf("complete group progress: %v", err)
+	}
+	assertFC2GroupState(t, "alice", "FC2-500", 12, true, oldScanAt)
+
+	if err := db.Model(&model.Film{}).Where("source = ? AND actor = ? AND url = ?", "fc2", "alice", "FC2-500").Updates(map[string]interface{}{
+		"sample_image_complete": false,
+		"sample_image_scan_at":  oldScanAt,
+	}).Error; err != nil {
+		t.Fatalf("reset group state: %v", err)
+	}
+	beforeComplete := time.Now()
+	if err := MarkFC2SampleImageGroupComplete("alice", "FC2-500"); err != nil {
+		t.Fatalf("mark group complete: %v", err)
+	}
+	assertFC2GroupScanState(t, "alice", "FC2-500", true, beforeComplete)
+
+	if err := db.Model(&model.Film{}).Where("source = ? AND actor = ? AND url = ?", "fc2", "alice", "FC2-500").Updates(map[string]interface{}{
+		"sample_image_complete": false,
+		"sample_image_scan_at":  oldScanAt,
+	}).Error; err != nil {
+		t.Fatalf("reset group scan state: %v", err)
+	}
+	beforeScan := time.Now()
+	if err := UpdateFC2SampleImageGroupScanAt("alice", "FC2-500"); err != nil {
+		t.Fatalf("update group scan time: %v", err)
+	}
+	assertFC2GroupScanState(t, "alice", "FC2-500", false, beforeScan)
+
+	for _, untouchedID := range []uint{films[3].ID, films[4].ID, films[5].ID} {
+		untouched := loadFilmForSampleImageTest(t, untouchedID)
+		if untouched.SampleImageCount != 1 || untouched.SampleImageComplete || !untouched.SampleImageScanAt.Equal(oldScanAt) {
+			t.Errorf("unrelated film %d changed: %+v", untouchedID, untouched)
+		}
+	}
+}
+
+func TestQueryFC2MagnetCacheByCodePrefersExactDriver(t *testing.T) {
+	setupFilmSampleImageTestDB(t)
+
+	caches := []model.MagnetCache{
+		{Name: "javdb", DriverType: "javdb", Code: "ABC-123", Magnet: "magnet:javdb"},
+		{Name: "legacy", DriverType: "", Code: "ABC-123", Magnet: "magnet:legacy"},
+		{Name: "fc2", DriverType: "fc2", Code: "ABC-123", Magnet: "magnet:fc2"},
+	}
+	if err := db.Create(&caches).Error; err != nil {
+		t.Fatalf("create magnet caches: %v", err)
+	}
+
+	got, err := QueryFC2MagnetCacheByCode("ABC-123")
+	if err != nil {
+		t.Fatalf("query FC2 magnet cache: %v", err)
+	}
+	if got.ID != caches[2].ID || got.Magnet != caches[2].Magnet {
+		t.Fatalf("got cache %+v, want %+v", got, caches[2])
+	}
+}
+
+func TestQueryFC2MagnetCacheByCodeMigratesLegacyDriverType(t *testing.T) {
+	for _, driverType := range []any{"", nil} {
+		t.Run(fmt.Sprintf("driver_type_%v", driverType), func(t *testing.T) {
+			setupFilmSampleImageTestDB(t)
+
+			legacy := model.MagnetCache{Name: "legacy", Code: "FC2-LEGACY", Magnet: "magnet:legacy"}
+			if err := db.Create(&legacy).Error; err != nil {
+				t.Fatalf("create legacy magnet cache: %v", err)
+			}
+			if err := db.Model(&legacy).Update("driver_type", driverType).Error; err != nil {
+				t.Fatalf("set legacy driver type: %v", err)
+			}
+			if err := db.Create(&model.MagnetCache{DriverType: "javdb", Code: legacy.Code, Magnet: "magnet:wrong"}).Error; err != nil {
+				t.Fatalf("create other-driver magnet cache: %v", err)
+			}
+
+			got, err := QueryFC2MagnetCacheByCode(legacy.Code)
+			if err != nil {
+				t.Fatalf("query FC2 magnet cache: %v", err)
+			}
+			if got.ID != legacy.ID || got.Magnet != legacy.Magnet || got.DriverType != "fc2" {
+				t.Fatalf("got cache %+v, want migrated legacy cache %+v", got, legacy)
+			}
+
+			var persisted model.MagnetCache
+			if err := db.First(&persisted, legacy.ID).Error; err != nil {
+				t.Fatalf("reload migrated magnet cache: %v", err)
+			}
+			if persisted.DriverType != "fc2" {
+				t.Fatalf("persisted driver type = %q, want fc2", persisted.DriverType)
+			}
+		})
+	}
+}
+
+func TestQueryFC2MagnetCacheByCodeNotFound(t *testing.T) {
+	setupFilmSampleImageTestDB(t)
+	if err := db.Create(&model.MagnetCache{DriverType: "javdb", Code: "FC2-MISSING", Magnet: "magnet:wrong"}).Error; err != nil {
+		t.Fatalf("create other-driver magnet cache: %v", err)
+	}
+
+	got, err := QueryFC2MagnetCacheByCode("FC2-MISSING")
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("error = %v, want gorm.ErrRecordNotFound", err)
+	}
+	if got.ID != 0 {
+		t.Fatalf("got cache %+v, want zero value", got)
+	}
+}
+
+func TestQueryFC2MagnetCacheByCodePropagatesDatabaseErrors(t *testing.T) {
+	previousDB := db
+	brokenDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open broken test database: %v", err)
+	}
+	sqlDB, err := brokenDB.DB()
+	if err != nil {
+		t.Fatalf("get SQL database: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close SQL database: %v", err)
+	}
+	db = brokenDB
+	t.Cleanup(func() { db = previousDB })
+
+	_, err = QueryFC2MagnetCacheByCode("FC2-ERROR")
+	if err == nil || errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("error = %v, want database error", err)
+	}
 }
 
 func TestQuerySampleImageFilms(t *testing.T) {
@@ -169,6 +397,44 @@ func loadFilmForSampleImageTest(t *testing.T, filmID uint) model.Film {
 		t.Fatalf("load film: %v", err)
 	}
 	return film
+}
+
+func assertFC2GroupState(t *testing.T, actor, url string, count int, complete bool, scanAt time.Time) {
+	t.Helper()
+
+	var films []model.Film
+	if err := db.Where("source = ? AND actor = ? AND url = ?", "fc2", actor, url).Order("id").Find(&films).Error; err != nil {
+		t.Fatalf("load FC2 group: %v", err)
+	}
+	if len(films) != 3 {
+		t.Fatalf("got %d FC2 siblings, want 3", len(films))
+	}
+	for _, film := range films {
+		if film.SampleImageCount != count || film.SampleImageComplete != complete {
+			t.Errorf("film %d progress = (%d, %t), want (%d, %t)", film.ID, film.SampleImageCount, film.SampleImageComplete, count, complete)
+		}
+		if !film.SampleImageScanAt.Equal(scanAt) {
+			t.Errorf("film %d scan time = %s, want unchanged %s", film.ID, film.SampleImageScanAt, scanAt)
+		}
+	}
+}
+
+func assertFC2GroupScanState(t *testing.T, actor, url string, complete bool, earliest time.Time) {
+	t.Helper()
+
+	var films []model.Film
+	if err := db.Where("source = ? AND actor = ? AND url = ?", "fc2", actor, url).Order("id").Find(&films).Error; err != nil {
+		t.Fatalf("load FC2 group: %v", err)
+	}
+	if len(films) != 3 {
+		t.Fatalf("got %d FC2 siblings, want 3", len(films))
+	}
+	for _, film := range films {
+		if film.SampleImageCount != 12 || film.SampleImageComplete != complete {
+			t.Errorf("film %d state = (%d, %t), want (12, %t)", film.ID, film.SampleImageCount, film.SampleImageComplete, complete)
+		}
+		assertScanTimeUpdated(t, film.SampleImageScanAt, earliest)
+	}
 }
 
 func assertScanTimeUpdated(t *testing.T, scanAt, earliest time.Time) {
