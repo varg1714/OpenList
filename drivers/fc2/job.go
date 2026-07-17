@@ -1,6 +1,12 @@
 package fc2
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,7 +16,154 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/open_ai"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"gorm.io/gorm"
 )
+
+const (
+	maxSampleImageCount          = 50
+	maxSampleImageRequestsPerRun = 100
+)
+
+func (d *FC2) scanSampleImages() {
+	utils.Log.Info("start scanning sample images for fc2 films")
+	defer utils.Log.Info("finish scanning sample images for fc2 films")
+
+	groups, err := db.QueryFC2SampleImageGroups(72*time.Hour, 20)
+	if err != nil {
+		utils.Log.Warnf("failed to query FC2 sample-image groups: %s", err.Error())
+		return
+	}
+
+	remainingRequests := maxSampleImageRequestsPerRun
+	for _, group := range groups {
+		if d.scanSampleImageGroup(context.Background(), group, &remainingRequests) {
+			return
+		}
+	}
+}
+
+func (d *FC2) scanSampleImageGroup(ctx context.Context, group db.FC2SampleImageGroup, remainingRequests *int) bool {
+	if group.SampleImageCount >= maxSampleImageCount {
+		d.markSampleImageGroupComplete(group)
+		return false
+	}
+
+	magnetCache, err := db.QueryFC2MagnetCacheByCode(group.URL)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		d.updateSampleImageGroupScanAt(group, fmt.Errorf("missing FC2 magnet cache for %s", group.URL))
+		return false
+	}
+	if err != nil {
+		d.updateSampleImageGroupScanAt(group, fmt.Errorf("failed to query FC2 magnet cache for %s: %w", group.URL, err))
+		return false
+	}
+	if magnetCache.Magnet == "" {
+		d.updateSampleImageGroupScanAt(group, fmt.Errorf("empty FC2 magnet cache for %s", group.URL))
+		return false
+	}
+	if *remainingRequests == 0 {
+		return true
+	}
+	*remainingRequests--
+	whatLinkInfo, err := d.getWhatLinkInfo(magnetCache.Magnet)
+	if err != nil {
+		d.updateSampleImageGroupScanAt(group, err)
+		return false
+	}
+
+	screenshots := append([]WhatLinkScreenshot(nil), whatLinkInfo.Screenshots...)
+	sort.Slice(screenshots, func(i, j int) bool {
+		if screenshots[i].Time == screenshots[j].Time {
+			return screenshots[i].Screenshot < screenshots[j].Screenshot
+		}
+		return screenshots[i].Time < screenshots[j].Time
+	})
+	if len(screenshots) > maxSampleImageCount {
+		screenshots = screenshots[:maxSampleImageCount]
+	}
+	if group.SampleImageCount >= len(screenshots) {
+		d.markSampleImageGroupComplete(group)
+		return false
+	}
+
+	for index := group.SampleImageCount + 1; index <= len(screenshots); index++ {
+		screenshotURL := screenshots[index-1].Screenshot
+		if err := validateScreenshotURL(screenshotURL); err != nil {
+			d.updateSampleImageGroupScanAt(group, err)
+			return false
+		}
+
+		destination, err := virtual_file.FanartPath("fc2", group.Actor, group.URL, index)
+		if err != nil {
+			d.updateSampleImageGroupScanAt(group, err)
+			return false
+		}
+		_, statErr := os.Lstat(destination)
+		requestNeeded := os.IsNotExist(statErr)
+		if requestNeeded && *remainingRequests == 0 {
+			return true
+		}
+		if requestNeeded {
+			*remainingRequests--
+		}
+
+		_, err = virtual_file.CacheFanart(ctx, virtual_file.FanartCacheRequest{
+			Source:   "fc2",
+			Dir:      group.Actor,
+			FilmName: group.URL,
+			Index:    index,
+			URL:      screenshotURL,
+			Headers: map[string]string{
+				"Referer": "https://mypikpak.com/",
+			},
+			Client: d.client,
+		})
+		if err != nil {
+			var statusError *virtual_file.HTTPStatusError
+			if errors.As(err, &statusError) && statusError.StatusCode >= 400 && statusError.StatusCode < 600 {
+				utils.Log.Warnf("skip FC2 sample image %d for %s after HTTP %d: %s", index, group.URL, statusError.StatusCode, screenshotURL)
+				if err := db.UpdateFC2SampleImageGroupProgress(group.Actor, group.URL, index, false); err != nil {
+					utils.Log.Warnf("failed to update FC2 sample-image progress for %s: %s", group.URL, err.Error())
+					return false
+				}
+				continue
+			}
+			d.updateSampleImageGroupScanAt(group, err)
+			return false
+		}
+		if err := db.UpdateFC2SampleImageGroupProgress(group.Actor, group.URL, index, false); err != nil {
+			utils.Log.Warnf("failed to update FC2 sample-image progress for %s: %s", group.URL, err.Error())
+			return false
+		}
+	}
+
+	d.markSampleImageGroupComplete(group)
+	return false
+}
+
+func validateScreenshotURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("invalid screenshot URL: %q", rawURL)
+	}
+	return nil
+}
+
+func (d *FC2) markSampleImageGroupComplete(group db.FC2SampleImageGroup) {
+	if err := db.MarkFC2SampleImageGroupComplete(group.Actor, group.URL); err != nil {
+		utils.Log.Warnf("failed to mark FC2 sample images complete for %s: %s", group.URL, err.Error())
+	}
+}
+
+func (d *FC2) updateSampleImageGroupScanAt(group db.FC2SampleImageGroup, cause error) {
+	utils.Log.Warnf("failed to scan FC2 sample images for %s: %s", group.URL, cause.Error())
+	if err := db.UpdateFC2SampleImageGroupScanAt(group.Actor, group.URL); err != nil {
+		utils.Log.Warnf("failed to update FC2 sample-image scan time for %s: %s", group.URL, err.Error())
+	}
+}
 
 func (d *FC2) reMatchReleaseTime() {
 

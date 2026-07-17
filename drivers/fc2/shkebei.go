@@ -39,14 +39,19 @@ func (d *FC2) getMagnet(file model.Obj) (string, error) {
 	magnet := magnetUrl.ReplaceAllString(tempMagnet, "$1")
 
 	if magnet != "" {
-		err = db.CreateMagnetCache(model.MagnetCache{
-			Magnet: magnet,
-			Name:   file.GetName(),
-			Code:   code,
-			ScanAt: time.Now(),
-		})
+		err = cacheFC2Magnet(file.GetName(), code, magnet)
 	}
 
 	return magnet, err
 
+}
+
+func cacheFC2Magnet(name, code, magnet string) error {
+	return db.CreateMagnetCache(model.MagnetCache{
+		DriverType: "fc2",
+		Magnet:     magnet,
+		Name:       name,
+		Code:       code,
+		ScanAt:     time.Now(),
+	})
 }

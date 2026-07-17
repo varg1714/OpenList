@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -19,6 +20,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/go-resty/resty/v2"
 )
 
 type FC2 struct {
@@ -28,6 +30,7 @@ type FC2 struct {
 	ShareToken  string
 	DriveId     string
 	cron        *cron.Cron
+	client      *resty.Client
 }
 
 func (d *FC2) Config() driver.Config {
@@ -39,6 +42,9 @@ func (d *FC2) GetAddition() driver.Additional {
 }
 
 func (d *FC2) Init(ctx context.Context) error {
+	if d.client == nil {
+		d.client = newFC2HTTPClient()
+	}
 
 	duration := time.Minute * time.Duration(d.ReleaseScanTime)
 	if duration <= 0 {
@@ -51,9 +57,16 @@ func (d *FC2) Init(ctx context.Context) error {
 		if d.RefreshNfo {
 			d.refreshNfo()
 		}
+		d.scanSampleImages()
 	})
 
 	return nil
+}
+
+func newFC2HTTPClient() *resty.Client {
+	return base.NewRestyClient().
+		SetRetryCount(0).
+		SetRedirectPolicy(resty.NoRedirectPolicy())
 }
 
 func (d *FC2) Drop(ctx context.Context) error {

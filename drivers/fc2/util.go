@@ -264,9 +264,11 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	}
 	if len(noImageFiles) > 0 {
 
-		whatLinkInfo := d.getWhatLinkInfo(magnet)
+		whatLinkInfo, whatLinkErr := d.getWhatLinkInfo(magnet)
 		imgs := whatLinkInfo.Screenshots
-		if len(imgs) > 0 {
+		if whatLinkErr != nil {
+			utils.Log.Infof("磁力图片获取失败: %s", whatLinkErr.Error())
+		} else if len(imgs) > 0 {
 			for index, file := range noImageFiles {
 				_ = virtual_file.CacheImage(virtual_file.MediaInfo{
 					Source:   "fc2",
@@ -334,22 +336,30 @@ func buildCacheFile(fileCount int, fc2Id string, title string, releaseTime time.
 	return cachingFiles
 }
 
-func (d *FC2) getWhatLinkInfo(magnet string) WhatLinkInfo {
-
+func (d *FC2) getWhatLinkInfo(magnet string) (WhatLinkInfo, error) {
 	var whatLinkInfo WhatLinkInfo
-
-	_, err := base.RestyClient.R().SetHeaders(map[string]string{
+	client := d.client
+	if client == nil {
+		client = newFC2HTTPClient()
+	}
+	response, err := client.R().SetHeaders(map[string]string{
 		"Referer": "https://mypikpak.net/",
 		"Origin":  "https://mypikpak.net/",
 	}).SetQueryParam("url", magnet).SetResult(&whatLinkInfo).Get("https://whatslink.info/api/v1/link")
-
 	if err != nil {
-		utils.Log.Info("磁力图片获取失败", err.Error())
-		return whatLinkInfo
+		return whatLinkInfo, err
 	}
-
-	return whatLinkInfo
-
+	if response == nil || response.StatusCode() != 200 {
+		status := 0
+		if response != nil {
+			status = response.StatusCode()
+		}
+		return whatLinkInfo, fmt.Errorf("WhatsLink returned HTTP %d", status)
+	}
+	if whatLinkInfo.Error != "" {
+		return whatLinkInfo, fmt.Errorf("WhatsLink API error: %s", whatLinkInfo.Error)
+	}
+	return whatLinkInfo, nil
 }
 
 func (d *FC2) getPageFilms(url string) ([]string, error) {
