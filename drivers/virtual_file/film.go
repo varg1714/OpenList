@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -217,18 +218,21 @@ func CutString(name string) string {
 	prettyNameRegexp, _ := regexp.Compile("[\\/\\\\\\*\\?\\:\\\"\\<\\>\\|]")
 	name = prettyNameRegexp.ReplaceAllString(name, "")
 
-	// 将字符串转换为 rune 切片
-	runes := []rune(name)
-
-	if len(runes) <= 70 {
-		return name
+	const (
+		maxRunes         = 70
+		maxBaseNameBytes = 251
+	)
+	runeCount := 0
+	byteCount := 0
+	for index, current := range name {
+		runeBytes := utf8.RuneLen(current)
+		if runeCount == maxRunes || byteCount+runeBytes > maxBaseNameBytes {
+			return name[:index]
+		}
+		runeCount++
+		byteCount += runeBytes
 	}
-
-	// 检查长度并截取
-	runes = runes[:70]
-
-	// 将 rune 切片转换回字符串
-	return string(runes)
+	return name
 
 }
 
