@@ -285,8 +285,7 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 		cachingFilm.Tags = append(cachingFilm.Tags, tag)
 	}
 
-	err = db.CreateFilms(DriverName, "个人收藏", "个人收藏", []model.EmbyFileObj{cachingFilm})
-	cachingFilm.Name = virtual_file.AppendFilmName(virtual_file.CutString(virtual_file.ClearFilmName(cachingFilm.Name)))
+	err = createStarFilm(&cachingFilm)
 	cachingFilm.Path = "个人收藏"
 
 	_ = virtual_file.CacheImageAndNfo(virtual_file.MediaInfo{
@@ -303,6 +302,11 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 
 	return cachingFilm, err
 
+}
+
+func createStarFilm(cachingFilm *model.EmbyFileObj) error {
+	cachingFilm.Name = virtual_file.AppendFilmName(virtual_file.CutString(virtual_file.ClearFilmName(cachingFilm.Name)))
+	return db.CreateFilms(DriverName, "个人收藏", "个人收藏", []model.EmbyFileObj{*cachingFilm})
 }
 
 func (d *Javdb) updateExistFilm(existFilm *model.Film, actors, tags []string) {
@@ -504,7 +508,7 @@ func (d *Javdb) updateFilmMeta(javdbMeta av.Meta, embyObj *model.EmbyFileObj) {
 		}
 	}
 
-	for tag, _ := range tagMap {
+	for tag := range tagMap {
 		tags = append(tags, tag)
 	}
 

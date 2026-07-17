@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -91,11 +89,6 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 		return false
 	}
 
-	filmDirectory, err := sampleImageFilmDirectory(film)
-	if err != nil {
-		d.updateSampleImageScanAt(film, err)
-		return false
-	}
 	for index := film.SampleImageCount + 1; index <= maxSampleImageCount; index++ {
 		remoteURL, err := sampleImageURL(film.Image, index)
 		if err != nil {
@@ -103,8 +96,8 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 			return false
 		}
 
-		destination := filepath.Join(filmDirectory, fmt.Sprintf("fanart%d.jpg", index))
-		if err := ensureSampleImageDestination(destination); err != nil {
+		destination, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		if err != nil {
 			d.updateSampleImageScanAt(film, err)
 			return false
 		}
@@ -119,10 +112,13 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 			}
 			*remainingRequests--
 		}
-		_, err = virtual_file.CacheHTTPFile(ctx, virtual_file.HTTPFileCacheRequest{
-			URL:         remoteURL,
-			Destination: destination,
-			Client:      d.client,
+		_, err = virtual_file.CacheFanart(ctx, virtual_file.FanartCacheRequest{
+			Source:   DriverName,
+			Dir:      film.Actor,
+			FilmName: film.Name,
+			Index:    index,
+			URL:      remoteURL,
+			Client:   d.client,
 			Headers: map[string]string{
 				"Referer": film.Url,
 			},
@@ -151,72 +147,6 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 		}
 	}
 	return false
-}
-
-func sampleImageFilmDirectory(film *model.Film) (string, error) {
-	filmDirectoryName := virtual_file.GetRealName(virtual_file.AppendImageName(film.Name))
-	if err := validateSampleImagePathComponent("actor", film.Actor); err != nil {
-		return "", err
-	}
-	if err := validateSampleImagePathComponent("film directory", filmDirectoryName); err != nil {
-		return "", err
-	}
-	root := filepath.Join(flags.DataDir, "emby", DriverName)
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", err
-	}
-	actorDirectory := filepath.Join(root, film.Actor)
-	if err := ensureSampleImageDirectory(actorDirectory); err != nil {
-		return "", err
-	}
-	filmDirectory := filepath.Join(actorDirectory, filmDirectoryName)
-	if err := ensureSampleImageDirectory(filmDirectory); err != nil {
-		return "", err
-	}
-	return filmDirectory, nil
-}
-
-func validateSampleImagePathComponent(label, component string) error {
-	if component == "" || component == "." || component == ".." || filepath.IsAbs(component) || strings.ContainsAny(component, `/\`) {
-		return fmt.Errorf("unsafe sample-image %s: %q", label, component)
-	}
-	return nil
-}
-
-func ensureSampleImageDirectory(directory string) error {
-	info, err := os.Lstat(directory)
-	if err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return fmt.Errorf("unsafe sample-image directory: %s", directory)
-		}
-		return nil
-	}
-	if !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.Mkdir(directory, 0o755); err != nil {
-		if !os.IsExist(err) {
-			return err
-		}
-		return ensureSampleImageDirectory(directory)
-	}
-	return nil
-}
-
-func ensureSampleImageDestination(destination string) error {
-	root, err := filepath.Abs(filepath.Join(flags.DataDir, "emby", DriverName))
-	if err != nil {
-		return err
-	}
-	absoluteDestination, err := filepath.Abs(destination)
-	if err != nil {
-		return err
-	}
-	relative, err := filepath.Rel(root, absoluteDestination)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return fmt.Errorf("sample-image destination escapes cache root: %s", destination)
-	}
-	return nil
 }
 
 func (d *Javdb) updateSampleImageScanAt(film *model.Film, scanErr error) {

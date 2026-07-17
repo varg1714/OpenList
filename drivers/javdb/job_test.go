@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -307,6 +308,72 @@ func TestScanFilmSampleImagesUsesSequentialFanartNames(t *testing.T) {
 		if string(content) != want {
 			t.Errorf("fanart%d.jpg = %q, want %q", index+1, content, want)
 		}
+	}
+}
+
+func TestScanFilmSampleImagesUsesSharedCanonicalPathForHistoricalLongName(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if requests.Add(1) == 1 {
+			_, _ = response.Write([]byte("historical fanart"))
+			return
+		}
+		response.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	film := createSampleImageFilm(t, "https://img.jdbstatic.com", "historical", 0, time.Time{})
+	film.Name = strings.Repeat("界", 100) + ".mp4"
+	if err := db.GetDb().Model(&film).Update("name", film.Name).Error; err != nil {
+		t.Fatalf("update historical film name: %v", err)
+	}
+
+	newSampleImageDriver(server).scanFilmSampleImages(context.Background(), &film)
+
+	wantPath, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read canonical fanart path: %v", err)
+	}
+	if string(content) != "historical fanart" {
+		t.Fatalf("fanart content = %q, want historical fanart", content)
+	}
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.SampleImageCount != 1 || !stored.SampleImageComplete {
+		t.Fatalf("progress = (%d, %t), want (1, true)", stored.SampleImageCount, stored.SampleImageComplete)
+	}
+}
+
+func TestCreateStarFilmPersistsAndReturnsNormalizedName(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+
+	film := model.EmbyFileObj{
+		ObjThumb: model.ObjThumb{Object: model.Object{
+			Name: strings.Repeat("界", 100) + ".jpg",
+		}},
+		Url: "https://javdb.com/v/test-normalized-star",
+	}
+	want := virtual_file.AppendFilmName(virtual_file.CutString(virtual_file.ClearFilmName(film.Name)))
+
+	err := createStarFilm(&film)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if film.Name != want {
+		t.Fatalf("returned cache name = %q, want %q", film.Name, want)
+	}
+
+	var stored model.Film
+	if err := db.GetDb().Where("url = ?", film.Url).First(&stored).Error; err != nil {
+		t.Fatalf("load persisted star: %v", err)
+	}
+	if stored.Name != want {
+		t.Fatalf("persisted name = %q, want %q", stored.Name, want)
 	}
 }
 
