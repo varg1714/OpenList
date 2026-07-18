@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
@@ -181,6 +182,20 @@ func TestDMMPosterCIDAndCandidateOrder(t *testing.T) {
 	if got := dmmPosterCandidates(cid); !reflect.DeepEqual(got, want) {
 		t.Fatalf("candidates = %v, want %v", got, want)
 	}
+	monoCID, err := dmmMonoPosterCID("ABF-007.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if monoCID != "abf007" {
+		t.Fatalf("mono CID = %q, want abf007", monoCID)
+	}
+	wantMono := []string{
+		"https://pics.dmm.co.jp/mono/movie/adult/118abf007/118abf007pl.jpg",
+		"https://pics.dmm.co.jp/mono/movie/adult/1abf007/1abf007pl.jpg",
+	}
+	if got := dmmMonoPosterCandidates(monoCID); !reflect.DeepEqual(got, wantMono) {
+		t.Fatalf("mono candidates = %v, want %v", got, wantMono)
+	}
 
 	longCID, err := dmmPosterCID("Ab12-123456.jpg")
 	if err != nil || longCID != "ab12123456" {
@@ -218,6 +233,78 @@ func TestDMMPosterSearchImageURL(t *testing.T) {
 	}
 }
 
+func TestCropDMMMonoPoster(t *testing.T) {
+	if _, err := cropDMMMonoPoster(bytes.Repeat([]byte{1}, minDMMMonoPosterBytes-1)); err == nil {
+		t.Fatal("small response body accepted")
+	}
+	if _, err := cropDMMMonoPoster(testCompositeJPEG(t, 799, 541)); err == nil {
+		t.Fatal("799px-wide image accepted")
+	}
+
+	cropped, err := cropDMMMonoPoster(testSegmentedCompositeJPEG(t, 541))
+	if err != nil {
+		t.Fatal(err)
+	}
+	croppedImage, format, err := image.Decode(bytes.NewReader(cropped))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if format != "jpeg" || croppedImage.Bounds().Dx() != 380 || croppedImage.Bounds().Dy() != 541 {
+		t.Fatalf("cropped image = %s %dx%d, want jpeg 380x541", format, croppedImage.Bounds().Dx(), croppedImage.Bounds().Dy())
+	}
+	r, g, b, _ := croppedImage.At(190, 270).RGBA()
+	if b < 0xc000 || r > 0x3000 || g > 0x3000 {
+		t.Fatalf("cropped center color = (%04x, %04x, %04x), want blue from third segment", r, g, b)
+	}
+}
+
+func testSegmentedCompositeJPEG(t *testing.T, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 800, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < 800; x++ {
+			pixel := color.RGBA{R: 255, A: 255}
+			if x >= 380 && x < 420 {
+				pixel = color.RGBA{G: 255, A: 255}
+			} else if x >= 420 {
+				pixel = color.RGBA{B: 255, A: 255}
+			}
+			img.SetRGBA(x, y, pixel)
+		}
+	}
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, img, &jpeg.Options{Quality: 95}); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() < minDMMMonoPosterBytes {
+		output.Write(make([]byte, minDMMMonoPosterBytes-output.Len()))
+	}
+	return output.Bytes()
+}
+
+func testCompositeJPEG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetRGBA(x, y, color.RGBA{
+				R: uint8((x*17 + y*31) % 256),
+				G: uint8((x*43 + y*7) % 256),
+				B: uint8((x*3 + y*61) % 256),
+				A: 255,
+			})
+		}
+	}
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, img, &jpeg.Options{Quality: 95}); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() < minDMMMonoPosterBytes {
+		t.Fatalf("test JPEG size = %d, want at least %d", output.Len(), minDMMMonoPosterBytes)
+	}
+	return output.Bytes()
+}
+
 func TestScanDMMPosterHTTPDecisions(t *testing.T) {
 	validImage := tinyPNG(t)
 	truncatedImage := validImage[:33]
@@ -231,10 +318,10 @@ func TestScanDMMPosterHTTPDecisions(t *testing.T) {
 	}{
 		{name: "first candidate success", statuses: []int{http.StatusOK}, bodies: [][]byte{validImage}, wantRequests: 1, wantStatus: model.DMMPosterStatusSuccess, wantPoster: true},
 		{name: "fallback candidate success", statuses: []int{http.StatusNotFound, http.StatusOK}, bodies: [][]byte{nil, validImage}, wantRequests: 2, wantStatus: model.DMMPosterStatusSuccess, wantPoster: true},
-		{name: "both candidates not found", statuses: []int{http.StatusNotFound, http.StatusGone}, wantRequests: 2, wantStatus: model.DMMPosterStatusNotFound},
-		{name: "mixed not found and transient", statuses: []int{http.StatusNotFound, http.StatusTooManyRequests}, wantRequests: 2, wantStatus: model.DMMPosterStatusTransientError},
-		{name: "invalid image falls back then remains transient", statuses: []int{http.StatusOK, http.StatusNotFound}, bodies: [][]byte{[]byte("not an image"), nil}, wantRequests: 2, wantStatus: model.DMMPosterStatusTransientError},
-		{name: "truncated image falls back then remains transient", statuses: []int{http.StatusOK, http.StatusNotFound}, bodies: [][]byte{truncatedImage, nil}, wantRequests: 2, wantStatus: model.DMMPosterStatusTransientError},
+		{name: "all candidates not found", statuses: []int{http.StatusNotFound, http.StatusGone}, wantRequests: 5, wantStatus: model.DMMPosterStatusNotFound},
+		{name: "mixed not found and transient", statuses: []int{http.StatusNotFound, http.StatusTooManyRequests}, wantRequests: 5, wantStatus: model.DMMPosterStatusTransientError},
+		{name: "invalid image falls back then remains transient", statuses: []int{http.StatusOK, http.StatusNotFound}, bodies: [][]byte{[]byte("not an image"), nil}, wantRequests: 5, wantStatus: model.DMMPosterStatusTransientError},
+		{name: "truncated image falls back then remains transient", statuses: []int{http.StatusOK, http.StatusNotFound}, bodies: [][]byte{truncatedImage, nil}, wantRequests: 5, wantStatus: model.DMMPosterStatusTransientError},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -243,7 +330,16 @@ func TestScanDMMPosterHTTPDecisions(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 				index := int(requests.Add(1)) - 1
 				if index >= len(test.statuses) {
-					t.Fatalf("unexpected request %s", request.URL.Path)
+					switch {
+					case strings.HasPrefix(request.URL.Path, "/mono/movie/adult/"):
+						response.WriteHeader(http.StatusNotFound)
+					case strings.HasPrefix(request.URL.Path, "/search/=/searchstr="):
+						response.WriteHeader(http.StatusOK)
+					default:
+						t.Errorf("unexpected request %s", request.URL.Path)
+						response.WriteHeader(http.StatusNotFound)
+					}
+					return
 				}
 				response.WriteHeader(test.statuses[index])
 				if index < len(test.bodies) {
@@ -307,6 +403,166 @@ func TestScanDMMPosterHTTPDecisions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestScanDMMPosterMonoFallbackOrder(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	validComposite := testCompositeJPEG(t, 800, 541)
+	var requestedPaths []string
+	var requestsMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestsMu.Lock()
+		requestedPaths = append(requestedPaths, request.URL.Path)
+		requestsMu.Unlock()
+		switch request.URL.Path {
+		case "/pics_dig/digital/video/1abf00007/1abf00007ps.jpg",
+			"/pics_dig/digital/video/abf00007/abf00007ps.jpg":
+			response.WriteHeader(http.StatusNotFound)
+		case "/mono/movie/adult/118abf007/118abf007pl.jpg":
+			_, _ = response.Write(bytes.Repeat([]byte{1}, 3180))
+		case "/mono/movie/adult/1abf007/1abf007pl.jpg":
+			_, _ = response.Write(validComposite)
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	film, paths := prepareDMMPosterTestFilm(t, server.URL, "ABF-007")
+	newSampleImageDriver(server).scanDMMPoster(context.Background(), &film)
+
+	wantPaths := []string{
+		"/pics_dig/digital/video/1abf00007/1abf00007ps.jpg",
+		"/pics_dig/digital/video/abf00007/abf00007ps.jpg",
+		"/mono/movie/adult/118abf007/118abf007pl.jpg",
+		"/mono/movie/adult/1abf007/1abf007pl.jpg",
+	}
+	if !reflect.DeepEqual(requestedPaths, wantPaths) {
+		t.Fatalf("request paths = %v, want %v", requestedPaths, wantPaths)
+	}
+	assertCroppedDMMPoster(t, film, paths)
+}
+
+func TestScanDMMPosterSearchFallback(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	validComposite := testCompositeJPEG(t, 800, 541)
+	var requestedPaths []string
+	var requestsMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestsMu.Lock()
+		requestedPaths = append(requestedPaths, request.URL.Path)
+		requestsMu.Unlock()
+		switch {
+		case strings.HasPrefix(request.URL.Path, "/pics_dig/digital/video/"),
+			request.URL.Path == "/mono/movie/adult/118abf007/118abf007pl.jpg",
+			request.URL.Path == "/mono/movie/adult/1abf007/1abf007pl.jpg":
+			response.WriteHeader(http.StatusNotFound)
+		case strings.HasPrefix(request.URL.Path, "/search/=/searchstr=abf 007/"):
+			_, _ = response.Write([]byte(`
+				<div class="border-b border-dotted border-gray-300">
+					<img src="https://pics.dmm.co.jp/mono/movie/adult/other001/other001ps.jpg">
+				</div>
+				<div class="border-b border-dotted border-gray-300">
+					<img src="https://pics.dmm.co.jp/mono/movie/adult/searchabf007/searchabf007ps.jpg">
+				</div>`))
+		case request.URL.Path == "/mono/movie/adult/searchabf007/searchabf007pl.jpg":
+			_, _ = response.Write(validComposite)
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	film, paths := prepareDMMPosterTestFilm(t, server.URL, "ABF-007")
+	newSampleImageDriver(server).scanDMMPoster(context.Background(), &film)
+
+	if len(requestedPaths) != 6 {
+		t.Fatalf("request paths = %v, want 6 requests", requestedPaths)
+	}
+	if !strings.HasPrefix(requestedPaths[4], "/search/=/searchstr=abf 007/") {
+		t.Fatalf("fifth request = %q, want DMM search", requestedPaths[4])
+	}
+	if requestedPaths[5] != "/mono/movie/adult/searchabf007/searchabf007pl.jpg" {
+		t.Fatalf("sixth request = %q, want matched pl.jpg", requestedPaths[5])
+	}
+	assertCroppedDMMPoster(t, film, paths)
+}
+
+func TestScanDMMPosterCorruptMonoRemainsTransient(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasPrefix(request.URL.Path, "/pics_dig/digital/video/"):
+			response.WriteHeader(http.StatusNotFound)
+		case request.URL.Path == "/mono/movie/adult/118abf007/118abf007pl.jpg":
+			_, _ = response.Write(bytes.Repeat([]byte("corrupt"), minDMMMonoPosterBytes/7+1))
+		case request.URL.Path == "/mono/movie/adult/1abf007/1abf007pl.jpg":
+			response.WriteHeader(http.StatusNotFound)
+		case strings.HasPrefix(request.URL.Path, "/search/=/searchstr=abf 007/"):
+			response.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	film, paths := prepareDMMPosterTestFilm(t, server.URL, "ABF-007")
+	newSampleImageDriver(server).scanDMMPoster(context.Background(), &film)
+
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.DMMPosterStatus != model.DMMPosterStatusTransientError {
+		t.Fatalf("DMM status = %q, want transient_error", stored.DMMPosterStatus)
+	}
+	if content, err := os.ReadFile(paths.LegacyPoster); err != nil || string(content) != "old poster" {
+		t.Fatalf("legacy poster changed: content=%q error=%v", content, err)
+	}
+	if _, err := os.Lstat(paths.Poster); !os.IsNotExist(err) {
+		t.Fatalf("poster.jpg created for corrupt mono response: %v", err)
+	}
+}
+
+func prepareDMMPosterTestFilm(t *testing.T, serverURL, name string) (model.Film, virtual_file.PosterPathSet) {
+	t.Helper()
+	film := createSampleImageFilm(t, serverURL, name, 0, time.Time{})
+	paths, err := virtual_file.PosterPaths(DriverName, film.Actor, film.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Poster), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.LegacyPoster, []byte("old poster"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(paths.LegacyPoster), paths.Background); err != nil {
+		t.Fatal(err)
+	}
+	return film, paths
+}
+
+func assertCroppedDMMPoster(t *testing.T, film model.Film, paths virtual_file.PosterPathSet) {
+	t.Helper()
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.DMMPosterStatus != model.DMMPosterStatusSuccess || stored.DMMPosterScanAt.IsZero() {
+		t.Fatalf("stored DMM state = (%q, %s), want success", stored.DMMPosterStatus, stored.DMMPosterScanAt)
+	}
+	content, err := os.ReadFile(paths.Poster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if format != "jpeg" || config.Width != 380 || config.Height != 541 {
+		t.Fatalf("poster = %s %dx%d, want jpeg 380x541", format, config.Width, config.Height)
+	}
+	if _, err := os.Lstat(paths.LegacyPoster); !os.IsNotExist(err) {
+		t.Fatalf("legacy poster retained after success: %v", err)
+	}
+	if _, err := os.Lstat(paths.Background); !os.IsNotExist(err) {
+		t.Fatalf("background symlink retained after success: %v", err)
 	}
 }
 

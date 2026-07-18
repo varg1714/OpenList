@@ -6,8 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/draw"
 	_ "image/gif"
-	_ "image/jpeg"
+	"image/jpeg"
 	_ "image/png"
 	"io"
 	"net/http"
@@ -30,11 +31,15 @@ const (
 	maxSampleImageCount          = 50
 	maxSampleImageRequestsPerRun = 100
 	maxDMMPosterBytes            = 16 << 20
+	minDMMMonoPosterBytes        = 50 << 10
 	maxDMMPosterDimension        = 12000
 	maxDMMPosterPixels           = 60_000_000
 )
 
-var dmmFilmCodePattern = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)$`)
+var (
+	dmmFilmCodePattern       = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)$`)
+	errDMMMonoPosterUnusable = errors.New("DMM mono poster is unusable")
+)
 
 func dmmPosterCID(name string) (string, error) {
 	canonicalName := virtual_file.CutString(virtual_file.ClearFilmName(splitCode(name)))
@@ -49,6 +54,15 @@ func dmmPosterCID(name string) (string, error) {
 	return strings.ToLower(matches[1]) + numeric, nil
 }
 
+func dmmMonoPosterCID(name string) (string, error) {
+	canonicalName := virtual_file.CutString(virtual_file.ClearFilmName(splitCode(name)))
+	matches := dmmFilmCodePattern.FindStringSubmatch(canonicalName)
+	if len(matches) != 3 {
+		return "", fmt.Errorf("unsupported DMM film code: %q", canonicalName)
+	}
+	return strings.ToLower(matches[1]) + matches[2], nil
+}
+
 func dmmPosterCandidates(cid string) []string {
 	firstCID := "1" + cid
 	const root = "https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/"
@@ -56,6 +70,44 @@ func dmmPosterCandidates(cid string) []string {
 		root + firstCID + "/" + firstCID + "ps.jpg",
 		root + cid + "/" + cid + "ps.jpg",
 	}
+}
+
+func dmmMonoPosterCandidates(cid string) []string {
+	const root = "https://pics.dmm.co.jp/mono/movie/adult/"
+	return []string{
+		root + "118" + cid + "/118" + cid + "pl.jpg",
+		root + "1" + cid + "/1" + cid + "pl.jpg",
+	}
+}
+
+func cropDMMMonoPoster(content []byte) ([]byte, error) {
+	if len(content) < minDMMMonoPosterBytes {
+		return nil, fmt.Errorf("%w: response is too small: %d bytes", errDMMMonoPosterUnusable, len(content))
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(content))
+	if err != nil {
+		return nil, fmt.Errorf("invalid DMM mono poster image: %w", err)
+	}
+	if config.Width != 800 {
+		return nil, fmt.Errorf("%w: unexpected width: got %d, want 800", errDMMMonoPosterUnusable, config.Width)
+	}
+	if config.Height <= 0 || config.Height > maxDMMPosterDimension ||
+		int64(config.Width)*int64(config.Height) > maxDMMPosterPixels {
+		return nil, fmt.Errorf("%w: dimensions exceed limits: %dx%d", errDMMMonoPosterUnusable, config.Width, config.Height)
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(content))
+	if err != nil {
+		return nil, fmt.Errorf("invalid DMM mono poster image data: %w", err)
+	}
+	bounds := decoded.Bounds()
+	cropped := image.NewRGBA(image.Rect(0, 0, 380, bounds.Dy()))
+	draw.Draw(cropped, cropped.Bounds(), decoded, image.Pt(bounds.Min.X+420, bounds.Min.Y), draw.Src)
+
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, cropped, &jpeg.Options{Quality: 95}); err != nil {
+		return nil, fmt.Errorf("encode cropped DMM mono poster: %w", err)
+	}
+	return output.Bytes(), nil
 }
 
 func (d *Javdb) scanDMMPosters() {
@@ -81,9 +133,11 @@ func (d *Javdb) scanDMMPoster(ctx context.Context, film *model.Film) {
 
 	definitiveMisses := 0
 	hadTransientFailure := false
+	var failures []error
 	for _, candidate := range dmmPosterCandidates(cid) {
 		content, definitiveMiss, fetchErr := d.downloadDMMPoster(ctx, candidate)
 		if fetchErr != nil {
+			failures = append(failures, fmt.Errorf("fetch %s: %w", candidate, fetchErr))
 			if definitiveMiss {
 				definitiveMisses++
 			} else {
@@ -105,11 +159,71 @@ func (d *Javdb) scanDMMPoster(ctx context.Context, film *model.Film) {
 		return
 	}
 
+	monoCID, err := dmmMonoPosterCID(film.Name)
+	if err != nil {
+		d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, err)
+		return
+	}
+	for _, candidate := range dmmMonoPosterCandidates(monoCID) {
+		content, definitiveMiss, fetchErr := d.downloadDMMMonoPoster(ctx, candidate)
+		if fetchErr != nil {
+			failures = append(failures, fmt.Errorf("fetch and crop %s: %w", candidate, fetchErr))
+			if definitiveMiss {
+				definitiveMisses++
+			} else {
+				hadTransientFailure = true
+			}
+			continue
+		}
+		d.publishDMMPoster(film, content)
+		return
+	}
+
+	code := virtual_file.CutString(virtual_file.ClearFilmName(splitCode(film.Name)))
+	searchCandidate, searchErr := d.fetchDmmPosterSearchImageURL(code)
+	if searchErr != nil {
+		hadTransientFailure = true
+		failures = append(failures, searchErr)
+	} else if searchCandidate == "" {
+		definitiveMisses++
+		failures = append(failures, fmt.Errorf("DMM search returned no matching poster for %s", code))
+	} else {
+		content, definitiveMiss, fetchErr := d.downloadDMMMonoPoster(ctx, searchCandidate)
+		if fetchErr != nil {
+			failures = append(failures, fmt.Errorf("fetch and crop search result %s: %w", searchCandidate, fetchErr))
+			if definitiveMiss {
+				definitiveMisses++
+			} else {
+				hadTransientFailure = true
+			}
+		} else {
+			d.publishDMMPoster(film, content)
+			return
+		}
+	}
+
 	status := model.DMMPosterStatusTransientError
-	if definitiveMisses == 2 && !hadTransientFailure {
+	if definitiveMisses > 0 && !hadTransientFailure {
 		status = model.DMMPosterStatusNotFound
 	}
-	d.updateDMMPosterStatus(film, status, fmt.Errorf("no usable DMM poster found for %s", film.Name))
+	cause := errors.Join(failures...)
+	if cause == nil {
+		cause = fmt.Errorf("no usable DMM poster found for %s", film.Name)
+	}
+	d.updateDMMPosterStatus(film, status, cause)
+}
+
+func (d *Javdb) publishDMMPoster(film *model.Film, content []byte) {
+	result, err := virtual_file.ReplacePoster(DriverName, film.Actor, film.Name, content)
+	if err != nil {
+		d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, err)
+		return
+	}
+	if !result.Published {
+		d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, errors.New("DMM poster replacement did not publish a file"))
+		return
+	}
+	d.updateDMMPosterStatus(film, model.DMMPosterStatusSuccess, nil)
 }
 
 func (d *Javdb) downloadDMMPoster(ctx context.Context, candidate string) ([]byte, bool, error) {
@@ -151,6 +265,39 @@ func (d *Javdb) downloadDMMPoster(ctx context.Context, candidate string) ([]byte
 		return nil, false, fmt.Errorf("invalid DMM poster image data: %w", err)
 	}
 	return content, false, nil
+}
+
+func (d *Javdb) downloadDMMMonoPoster(ctx context.Context, candidate string) ([]byte, bool, error) {
+	client := d.client
+	if client == nil {
+		client = newSampleImageClient()
+	}
+	response, err := client.R().SetContext(ctx).SetDoNotParseResponse(true).Get(candidate)
+	if err != nil {
+		return nil, false, err
+	}
+	body := response.RawBody()
+	defer body.Close()
+
+	if response.StatusCode() != http.StatusOK {
+		definitiveMiss := response.StatusCode() == http.StatusNotFound || response.StatusCode() == http.StatusGone
+		return nil, definitiveMiss, fmt.Errorf("DMM mono poster request returned HTTP %d", response.StatusCode())
+	}
+	if response.RawResponse.ContentLength > maxDMMPosterBytes {
+		return nil, false, fmt.Errorf("DMM mono poster exceeds maximum size of %d bytes", maxDMMPosterBytes)
+	}
+	content, err := io.ReadAll(io.LimitReader(body, maxDMMPosterBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(content) > maxDMMPosterBytes {
+		return nil, false, fmt.Errorf("DMM mono poster exceeds maximum size of %d bytes", maxDMMPosterBytes)
+	}
+	cropped, err := cropDMMMonoPoster(content)
+	if err != nil {
+		return nil, errors.Is(err, errDMMMonoPosterUnusable), err
+	}
+	return cropped, false, nil
 }
 
 func (d *Javdb) updateDMMPosterStatus(film *model.Film, status string, cause error) {
