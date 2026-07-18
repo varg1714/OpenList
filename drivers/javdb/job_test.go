@@ -233,6 +233,18 @@ func TestDMMPosterSearchImageURL(t *testing.T) {
 	}
 }
 
+func TestDMMPosterSearchImageURLLiveREBD1046(t *testing.T) {
+	if os.Getenv("DMM_LIVE_TEST") != "1" {
+		t.Skip("set DMM_LIVE_TEST=1 to query the live DMM search page")
+	}
+
+	got, err := (&Javdb{}).fetchDmmPosterSearchImageURL("REBD-1046")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("fetchDmmPosterSearchImageURL(%q) = %q", "REBD-1046", got)
+}
+
 func TestCropDMMMonoPoster(t *testing.T) {
 	if _, err := cropDMMMonoPoster(bytes.Repeat([]byte{1}, minDMMMonoPosterBytes-1)); err == nil {
 		t.Fatal("small response body accepted")
