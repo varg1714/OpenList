@@ -147,16 +147,16 @@ func (d *Javdb) scanDMMPoster(ctx context.Context, film *model.Film) {
 			continue
 		}
 
-		result, replaceErr := virtual_file.ReplacePoster(DriverName, film.Actor, film.Name, content)
-		if replaceErr != nil {
-			d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, replaceErr)
+		result, publishErr := virtual_file.PublishPoster(DriverName, film.Actor, film.Name, content)
+		if publishErr != nil {
+			d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, publishErr)
 			return
 		}
 		if result.Published {
 			d.updateDMMPosterStatus(film, model.DMMPosterStatusSuccess, nil)
 			return
 		}
-		d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, errors.New("DMM poster replacement did not publish a file"))
+		d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, errors.New("DMM poster publication produced no file"))
 		return
 	}
 
@@ -215,13 +215,13 @@ func (d *Javdb) scanDMMPoster(ctx context.Context, film *model.Film) {
 }
 
 func (d *Javdb) publishDMMPoster(film *model.Film, content []byte) {
-	result, err := virtual_file.ReplacePoster(DriverName, film.Actor, film.Name, content)
+	result, err := virtual_file.PublishPoster(DriverName, film.Actor, film.Name, content)
 	if err != nil {
 		d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, err)
 		return
 	}
 	if !result.Published {
-		d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, errors.New("DMM poster replacement did not publish a file"))
+		d.updateDMMPosterStatus(film, model.DMMPosterStatusTransientError, errors.New("DMM poster publication produced no file"))
 		return
 	}
 	d.updateDMMPosterStatus(film, model.DMMPosterStatusSuccess, nil)

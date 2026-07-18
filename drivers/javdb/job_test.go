@@ -418,6 +418,88 @@ func TestScanDMMPosterHTTPDecisions(t *testing.T) {
 	}
 }
 
+func TestScanDMMPosterCreatesPosterWhenMissing(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	validImage := tinyPNG(t)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = response.Write(validImage)
+	}))
+	defer server.Close()
+
+	film := createSampleImageFilm(t, server.URL, "MIDV-169", 0, time.Time{})
+	paths, err := virtual_file.PosterPaths(DriverName, film.Actor, film.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Dir(paths.Poster)); !os.IsNotExist(err) {
+		t.Fatalf("poster directory exists before scan: %v", err)
+	}
+
+	newSampleImageDriver(server).scanDMMPoster(context.Background(), &film)
+
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.DMMPosterStatus != model.DMMPosterStatusSuccess || stored.DMMPosterScanAt.IsZero() {
+		t.Fatalf("stored DMM state = (%q, %s), want success", stored.DMMPosterStatus, stored.DMMPosterScanAt)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1", got)
+	}
+	content, err := os.ReadFile(paths.Poster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(content, validImage) {
+		t.Fatal("published poster content differs from downloaded image")
+	}
+	if _, err := os.Lstat(paths.LegacyPoster); !os.IsNotExist(err) {
+		t.Fatalf("legacy poster unexpectedly exists: %v", err)
+	}
+	if _, err := os.Lstat(paths.Background); !os.IsNotExist(err) {
+		t.Fatalf("background unexpectedly exists: %v", err)
+	}
+}
+
+func TestScanDMMPosterMonoFallbackCreatesPosterWhenMissing(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	validComposite := testCompositeJPEG(t, 800, 541)
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestedPaths = append(requestedPaths, request.URL.Path)
+		switch {
+		case strings.HasPrefix(request.URL.Path, "/pics_dig/digital/video/"):
+			response.WriteHeader(http.StatusNotFound)
+		case request.URL.Path == "/mono/movie/adult/118abf007/118abf007pl.jpg":
+			_, _ = response.Write(validComposite)
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	film := createSampleImageFilm(t, server.URL, "ABF-007", 0, time.Time{})
+	paths, err := virtual_file.PosterPaths(DriverName, film.Actor, film.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Dir(paths.Poster)); !os.IsNotExist(err) {
+		t.Fatalf("poster directory exists before scan: %v", err)
+	}
+
+	newSampleImageDriver(server).scanDMMPoster(context.Background(), &film)
+
+	wantPaths := []string{
+		"/pics_dig/digital/video/1abf00007/1abf00007ps.jpg",
+		"/pics_dig/digital/video/abf00007/abf00007ps.jpg",
+		"/mono/movie/adult/118abf007/118abf007pl.jpg",
+	}
+	if !reflect.DeepEqual(requestedPaths, wantPaths) {
+		t.Fatalf("request paths = %v, want %v", requestedPaths, wantPaths)
+	}
+	assertCroppedDMMPoster(t, film, paths)
+}
+
 func TestScanDMMPosterMonoFallbackOrder(t *testing.T) {
 	setupJavdbSampleImageTest(t)
 	validComposite := testCompositeJPEG(t, 800, 541)
