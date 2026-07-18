@@ -61,6 +61,7 @@ func (d *Javdb) Init(ctx context.Context) error {
 		d.filterFilms()
 		d.reMatchTags()
 		d.scanSampleImages()
+		d.scanDMMPosters()
 	})
 
 	matchTopFilmsTimer := time.Hour * time.Duration(d.MatchTopFilmsTimer)

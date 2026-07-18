@@ -1,9 +1,13 @@
 package javdb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -156,6 +160,167 @@ func TestSampleImageURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDMMPosterCIDAndCandidateOrder(t *testing.T) {
+	cid, err := dmmPosterCID("MIDV-169.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cid != "midv00169" {
+		t.Fatalf("CID = %q, want midv00169", cid)
+	}
+	translatedCID, err := dmmPosterCID("MIDV-169 translated title.mp4")
+	if err != nil || translatedCID != "midv00169" {
+		t.Fatalf("translated-title CID = %q, error = %v, want midv00169", translatedCID, err)
+	}
+	want := []string{
+		"https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/1midv00169/1midv00169ps.jpg",
+		"https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/midv00169/midv00169ps.jpg",
+	}
+	if got := dmmPosterCandidates(cid); !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+
+	longCID, err := dmmPosterCID("Ab12-123456.jpg")
+	if err != nil || longCID != "ab12123456" {
+		t.Fatalf("long CID = %q, error = %v", longCID, err)
+	}
+	for _, invalid := range []string{"MIDV.mp4", "MIDV-ABC.mp4", "MIDV-169-extra.mp4"} {
+		if _, err := dmmPosterCID(invalid); err == nil {
+			t.Errorf("dmmPosterCID(%q) error = nil", invalid)
+		}
+	}
+}
+
+func TestScanDMMPosterHTTPDecisions(t *testing.T) {
+	validImage := tinyPNG(t)
+	truncatedImage := validImage[:33]
+	tests := []struct {
+		name         string
+		statuses     []int
+		bodies       [][]byte
+		wantRequests int
+		wantStatus   string
+		wantPoster   bool
+	}{
+		{name: "first candidate success", statuses: []int{http.StatusOK}, bodies: [][]byte{validImage}, wantRequests: 1, wantStatus: model.DMMPosterStatusSuccess, wantPoster: true},
+		{name: "fallback candidate success", statuses: []int{http.StatusNotFound, http.StatusOK}, bodies: [][]byte{nil, validImage}, wantRequests: 2, wantStatus: model.DMMPosterStatusSuccess, wantPoster: true},
+		{name: "both candidates not found", statuses: []int{http.StatusNotFound, http.StatusGone}, wantRequests: 2, wantStatus: model.DMMPosterStatusNotFound},
+		{name: "mixed not found and transient", statuses: []int{http.StatusNotFound, http.StatusTooManyRequests}, wantRequests: 2, wantStatus: model.DMMPosterStatusTransientError},
+		{name: "invalid image falls back then remains transient", statuses: []int{http.StatusOK, http.StatusNotFound}, bodies: [][]byte{[]byte("not an image"), nil}, wantRequests: 2, wantStatus: model.DMMPosterStatusTransientError},
+		{name: "truncated image falls back then remains transient", statuses: []int{http.StatusOK, http.StatusNotFound}, bodies: [][]byte{truncatedImage, nil}, wantRequests: 2, wantStatus: model.DMMPosterStatusTransientError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupJavdbSampleImageTest(t)
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				index := int(requests.Add(1)) - 1
+				if index >= len(test.statuses) {
+					t.Fatalf("unexpected request %s", request.URL.Path)
+				}
+				response.WriteHeader(test.statuses[index])
+				if index < len(test.bodies) {
+					_, _ = response.Write(test.bodies[index])
+				}
+			}))
+			defer server.Close()
+
+			film := createSampleImageFilm(t, server.URL, "MIDV-169", 0, time.Time{})
+			paths, err := virtual_file.PosterPaths(DriverName, film.Actor, film.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(paths.Poster), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacyPoster := paths.LegacyPoster
+			if err := os.WriteFile(legacyPoster, []byte("old poster"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Base(legacyPoster), paths.Background); err != nil {
+				t.Fatal(err)
+			}
+
+			newSampleImageDriver(server).scanDMMPoster(context.Background(), &film)
+
+			stored := loadSampleImageFilm(t, film.ID)
+			if stored.DMMPosterStatus != test.wantStatus || stored.DMMPosterScanAt.IsZero() {
+				t.Fatalf("stored DMM state = (%q, %s), want (%q, nonzero)", stored.DMMPosterStatus, stored.DMMPosterScanAt, test.wantStatus)
+			}
+			if got := int(requests.Load()); got != test.wantRequests {
+				t.Fatalf("requests = %d, want %d", got, test.wantRequests)
+			}
+			if test.wantPoster {
+				content, err := os.ReadFile(paths.Poster)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if bytes.Equal(content, []byte("old poster")) {
+					t.Fatal("poster was not replaced")
+				}
+				if _, err := os.Lstat(legacyPoster); !os.IsNotExist(err) {
+					t.Fatalf("legacy poster retained after success: %v", err)
+				}
+				if _, err := os.Lstat(paths.Background); !os.IsNotExist(err) {
+					t.Fatalf("background symlink retained after success: %v", err)
+				}
+			} else {
+				content, err := os.ReadFile(legacyPoster)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(content) != "old poster" {
+					t.Fatalf("poster changed on failure: %q", content)
+				}
+				if _, err := os.Lstat(paths.Poster); !os.IsNotExist(err) {
+					t.Fatalf("poster.jpg created on failure: %v", err)
+				}
+				if info, err := os.Lstat(paths.Background); err != nil || info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("background symlink changed on failure: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestScanDMMPosterInvalidCodeMakesNoRequestOrFilesystemMutation(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	film := createSampleImageFilm(t, server.URL, "invalid-code-extra", 0, time.Time{})
+
+	newSampleImageDriver(server).scanDMMPoster(context.Background(), &film)
+
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.DMMPosterStatus != model.DMMPosterStatusTransientError || stored.DMMPosterScanAt.IsZero() {
+		t.Fatalf("stored DMM state = (%q, %s)", stored.DMMPosterStatus, stored.DMMPosterScanAt)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("requests = %d, want 0", requests.Load())
+	}
+	paths, err := virtual_file.PosterPaths(DriverName, film.Actor, film.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Dir(paths.Poster)); !os.IsNotExist(err) {
+		t.Fatalf("filesystem mutated for invalid code: %v", err)
+	}
+}
+
+func tinyPNG(t *testing.T) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.RGBA{R: 1, G: 2, B: 3, A: 255})
+	if err := png.Encode(&output, img); err != nil {
+		t.Fatal(err)
+	}
+	return output.Bytes()
 }
 
 func TestScanFilmSampleImagesDownloadsUntil403(t *testing.T) {
