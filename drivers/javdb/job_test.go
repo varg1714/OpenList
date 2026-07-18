@@ -757,6 +757,211 @@ func TestScanFilmSampleImagesUsesSequentialFanartNames(t *testing.T) {
 	}
 }
 
+func TestScanFilmSampleImagesPromotesFirstLandscape(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	portrait := testCompositeJPEG(t, 400, 600)
+	landscape := testCompositeJPEG(t, 600, 400)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/samples/orientation_l_1.jpg":
+			_, _ = response.Write(portrait)
+		case "/samples/orientation_l_2.jpg":
+			_, _ = response.Write(landscape)
+		default:
+			response.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer server.Close()
+
+	film := createSampleImageFilm(t, "https://img.jdbstatic.com", "orientation", 0, time.Time{})
+	newSampleImageDriver(server).scanFilmSampleImages(context.Background(), &film)
+
+	assertSampleImageDimensions(t, sampleImagePath(film, 1), 600, 400)
+	assertSampleImageDimensions(t, sampleImagePath(film, 2), 400, 600)
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.SampleImageCount != 2 || !stored.SampleImageComplete {
+		t.Fatalf("progress = (%d, %t), want (2, true)", stored.SampleImageCount, stored.SampleImageComplete)
+	}
+}
+
+func TestScanFilmSampleImagesPromotesCachedLandscapeOnResume(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	film := createSampleImageFilm(t, "https://img.jdbstatic.com", "resume-orientation", 2, time.Time{})
+	if err := os.MkdirAll(filepath.Dir(sampleImagePath(film, 1)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sampleImagePath(film, 1), testCompositeJPEG(t, 400, 600), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sampleImagePath(film, 2), testCompositeJPEG(t, 600, 400), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.URL.Path)
+		response.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	newSampleImageDriver(server).scanFilmSampleImages(context.Background(), &film)
+
+	if want := []string{"/samples/resume-orientation_l_3.jpg"}; !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests = %v, want %v", requests, want)
+	}
+	assertSampleImageDimensions(t, sampleImagePath(film, 1), 600, 400)
+	assertSampleImageDimensions(t, sampleImagePath(film, 2), 400, 600)
+}
+
+func TestScanFilmSampleImagesPromotesLandscapeOverInvalidPrimary(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	film := createSampleImageFilm(t, "https://img.jdbstatic.com", "invalid-primary", 2, time.Time{})
+	if err := os.MkdirAll(filepath.Dir(sampleImagePath(film, 1)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sampleImagePath(film, 1), []byte("not an image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sampleImagePath(film, 2), testCompositeJPEG(t, 600, 400), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	newSampleImageDriver(server).scanFilmSampleImages(context.Background(), &film)
+
+	assertSampleImageDimensions(t, sampleImagePath(film, 1), 600, 400)
+	content, err := os.ReadFile(sampleImagePath(film, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "not an image" {
+		t.Fatalf("fanart2 content = %q, want displaced invalid primary", content)
+	}
+}
+
+func TestScanFilmSampleImagesRecoveryFailureDoesNotComplete(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	film := createSampleImageFilm(t, "https://img.jdbstatic.com", "recovery-failure", 2, time.Time{})
+	directory := filepath.Dir(sampleImagePath(film, 1))
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sampleImagePath(film, 1), testCompositeJPEG(t, 400, 600), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sampleImagePath(film, 2), testCompositeJPEG(t, 600, 400), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(directory, ".fanart1.jpg-fanart2.jpg.swap-old")
+	if err := os.Mkdir(marker, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		response.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+	started := time.Now()
+
+	newSampleImageDriver(server).scanFilmSampleImages(context.Background(), &film)
+
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.SampleImageComplete || stored.SampleImageCount != 2 {
+		t.Fatalf("progress = (%d, %t), want (2, false)", stored.SampleImageCount, stored.SampleImageComplete)
+	}
+	if stored.SampleImageScanAt.Before(started) {
+		t.Fatalf("scan time = %s, want at or after %s", stored.SampleImageScanAt, started)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("requests = %d, want 0", requests.Load())
+	}
+}
+
+func TestScanFilmSampleImagesSkipsLaterInspectionWhenPrimaryIsLandscape(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	film := createSampleImageFilm(t, "https://img.jdbstatic.com", "landscape-primary", 3, time.Time{})
+	directory := filepath.Dir(sampleImagePath(film, 1))
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sampleImagePath(film, 1), testCompositeJPEG(t, 600, 400), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sampleImagePath(film, 2), testCompositeJPEG(t, 400, 600), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(sampleImagePath(film, 3), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.URL.Path)
+		response.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	newSampleImageDriver(server).scanFilmSampleImages(context.Background(), &film)
+
+	if want := []string{"/samples/landscape-primary_l_4.jpg"}; !reflect.DeepEqual(requests, want) {
+		t.Fatalf("requests = %v, want %v", requests, want)
+	}
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
+		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
+	}
+}
+
+func TestScanFilmSampleImagesCachesLandscapeReadyForCurrentRun(t *testing.T) {
+	setupJavdbSampleImageTest(t)
+	originalPromote := promoteLandscapeFanartCandidate
+	var promotionCalls atomic.Int32
+	promoteLandscapeFanartCandidate = func(string, string, string, int) (bool, error) {
+		promotionCalls.Add(1)
+		return true, nil
+	}
+	t.Cleanup(func() { promoteLandscapeFanartCandidate = originalPromote })
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/samples/ready-cache_l_1.jpg", "/samples/ready-cache_l_2.jpg", "/samples/ready-cache_l_3.jpg":
+			_, _ = response.Write([]byte("sample image"))
+		default:
+			response.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer server.Close()
+	film := createSampleImageFilm(t, "https://img.jdbstatic.com", "ready-cache", 0, time.Time{})
+
+	newSampleImageDriver(server).scanFilmSampleImages(context.Background(), &film)
+
+	if got := promotionCalls.Load(); got != 1 {
+		t.Fatalf("promotion calls = %d, want 1", got)
+	}
+	stored := loadSampleImageFilm(t, film.ID)
+	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
+		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
+	}
+}
+
+func assertSampleImageDimensions(t *testing.T, path string, wantWidth, wantHeight int) {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	config, _, err := image.DecodeConfig(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Width != wantWidth || config.Height != wantHeight {
+		t.Fatalf("dimensions at %s = %dx%d, want %dx%d", path, config.Width, config.Height, wantWidth, wantHeight)
+	}
+}
+
 func TestScanFilmSampleImagesUsesSharedCanonicalPathForHistoricalLongName(t *testing.T) {
 	setupJavdbSampleImageTest(t)
 

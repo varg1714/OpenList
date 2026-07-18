@@ -37,8 +37,9 @@ const (
 )
 
 var (
-	dmmFilmCodePattern       = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)$`)
-	errDMMMonoPosterUnusable = errors.New("DMM mono poster is unusable")
+	dmmFilmCodePattern              = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)$`)
+	errDMMMonoPosterUnusable        = errors.New("DMM mono poster is unusable")
+	promoteLandscapeFanartCandidate = virtual_file.PromoteLandscapeFanart
 )
 
 func dmmPosterCID(name string) (string, error) {
@@ -368,6 +369,11 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 	if film.SampleImageComplete {
 		return false
 	}
+	landscapeReady, err := d.promoteLandscapeFanart(film, film.SampleImageCount)
+	if err != nil {
+		d.updateSampleImageScanAt(film, err)
+		return false
+	}
 	if film.SampleImageCount >= maxSampleImageCount {
 		if err := db.MarkSampleImageComplete(film.ID); err != nil {
 			utils.Log.Warnf("failed to mark sample images complete for film %s: %s", film.Name, err.Error())
@@ -420,6 +426,13 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 			d.updateSampleImageScanAt(film, err)
 			return false
 		}
+		if !landscapeReady {
+			landscapeReady, err = d.promoteLandscapeFanart(film, index)
+			if err != nil {
+				d.updateSampleImageScanAt(film, err)
+				return false
+			}
+		}
 
 		complete := index == maxSampleImageCount
 		if err := db.UpdateSampleImageProgress(film.ID, index, complete); err != nil {
@@ -433,6 +446,27 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 		}
 	}
 	return false
+}
+
+func (d *Javdb) promoteLandscapeFanart(film *model.Film, count int) (bool, error) {
+	if count < 2 {
+		return false, nil
+	}
+	for index := 2; index <= count; index++ {
+		if err := virtual_file.RecoverFanartSwap(DriverName, film.Actor, film.Name, 1, index); err != nil {
+			return false, fmt.Errorf("recover fanart promotion at index %d: %w", index, err)
+		}
+	}
+	for index := 2; index <= count; index++ {
+		landscapeReady, err := promoteLandscapeFanartCandidate(DriverName, film.Actor, film.Name, index)
+		if err != nil {
+			return false, fmt.Errorf("promote landscape fanart at index %d: %w", index, err)
+		}
+		if landscapeReady {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (d *Javdb) updateSampleImageScanAt(film *model.Film, scanErr error) {
