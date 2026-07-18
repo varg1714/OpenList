@@ -15,9 +15,13 @@ type PosterPathSet struct {
 	Background   string
 }
 
-type PosterReplaceResult struct {
+type PosterPublishResult struct {
 	Published bool
 }
+
+// PosterReplaceResult is kept for source compatibility.
+// Deprecated: use PosterPublishResult.
+type PosterReplaceResult = PosterPublishResult
 
 var removePosterBackgroundSymlink = os.Remove
 
@@ -64,30 +68,25 @@ func PosterPaths(source, dir, filmName string) (PosterPathSet, error) {
 	return paths, nil
 }
 
-func ReplacePoster(source, dir, filmName string, content []byte) (PosterReplaceResult, error) {
+func PublishPoster(source, dir, filmName string, content []byte) (PosterPublishResult, error) {
 	paths, err := PosterPaths(source, dir, filmName)
 	if err != nil {
-		return PosterReplaceResult{}, err
+		return PosterPublishResult{}, err
 	}
 	filmDirectory := filepath.Base(filepath.Dir(paths.Poster))
 	if err := ensureFanartDirectories(source, dir, filmDirectory); err != nil {
-		return PosterReplaceResult{}, err
+		return PosterPublishResult{}, err
 	}
-	legacyExists, err := regularPosterExists(paths.LegacyPoster)
-	if err != nil {
-		return PosterReplaceResult{}, err
+	if _, err := regularPosterExists(paths.LegacyPoster); err != nil {
+		return PosterPublishResult{}, err
 	}
-	posterExists, err := regularPosterExists(paths.Poster)
-	if err != nil {
-		return PosterReplaceResult{}, err
-	}
-	if !legacyExists && !posterExists {
-		return PosterReplaceResult{}, fmt.Errorf("neither legacy nor canonical poster exists in %s", filepath.Dir(paths.Poster))
+	if _, err := regularPosterExists(paths.Poster); err != nil {
+		return PosterPublishResult{}, err
 	}
 
 	temporary, err := os.CreateTemp(filepath.Dir(paths.Poster), ".dmm-poster-*")
 	if err != nil {
-		return PosterReplaceResult{}, err
+		return PosterPublishResult{}, err
 	}
 	temporaryPath := temporary.Name()
 	defer func() {
@@ -95,22 +94,22 @@ func ReplacePoster(source, dir, filmName string, content []byte) (PosterReplaceR
 		_ = os.Remove(temporaryPath)
 	}()
 	if _, err := temporary.Write(content); err != nil {
-		return PosterReplaceResult{}, err
+		return PosterPublishResult{}, err
 	}
 	if err := temporary.Sync(); err != nil {
-		return PosterReplaceResult{}, err
+		return PosterPublishResult{}, err
 	}
 	if err := temporary.Chmod(0o644); err != nil {
-		return PosterReplaceResult{}, err
+		return PosterPublishResult{}, err
 	}
 	if err := temporary.Close(); err != nil {
-		return PosterReplaceResult{}, err
+		return PosterPublishResult{}, err
 	}
 	if err := os.Rename(temporaryPath, paths.Poster); err != nil {
-		return PosterReplaceResult{}, err
+		return PosterPublishResult{}, err
 	}
 
-	result := PosterReplaceResult{Published: true}
+	result := PosterPublishResult{Published: true}
 	backgroundInfo, err := os.Lstat(paths.Background)
 	if err == nil && backgroundInfo.Mode()&os.ModeSymlink != 0 {
 		if err := removePosterBackgroundSymlink(paths.Background); err != nil {
@@ -134,6 +133,12 @@ func ReplacePoster(source, dir, filmName string, content []byte) (PosterReplaceR
 		return result, fmt.Errorf("remove legacy poster after publish: %w", err)
 	}
 	return result, nil
+}
+
+// ReplacePoster publishes poster content using the legacy API name.
+// Deprecated: use PublishPoster.
+func ReplacePoster(source, dir, filmName string, content []byte) (PosterReplaceResult, error) {
+	return PublishPoster(source, dir, filmName, content)
 }
 
 func regularPosterExists(path string) (bool, error) {

@@ -37,14 +37,14 @@ func TestPosterPathsUseCanonicalCacheLayout(t *testing.T) {
 	}
 }
 
-func TestReplacePosterAtomicallyOverwritesAndRemovesBackgroundSymlink(t *testing.T) {
+func TestPublishPosterAtomicallyOverwritesAndRemovesBackgroundSymlink(t *testing.T) {
 	paths := setupPosterReplacement(t)
 	legacyPoster := paths.LegacyPoster
 	if err := os.Symlink(filepath.Base(legacyPoster), paths.Background); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := ReplacePoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
+	result, err := PublishPoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,14 +61,14 @@ func TestReplacePosterAtomicallyOverwritesAndRemovesBackgroundSymlink(t *testing
 	assertNoPosterTemps(t, filepath.Dir(paths.Poster))
 }
 
-func TestReplacePosterPreservesRegularBackground(t *testing.T) {
+func TestPublishPosterPreservesRegularBackground(t *testing.T) {
 	paths := setupPosterReplacement(t)
 	legacyPoster := paths.LegacyPoster
 	if err := os.WriteFile(paths.Background, []byte("regular background"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := ReplacePoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
+	result, err := PublishPoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
 	if err != nil || !result.Published {
 		t.Fatalf("result = %+v, error = %v", result, err)
 	}
@@ -78,7 +78,31 @@ func TestReplacePosterPreservesRegularBackground(t *testing.T) {
 	}
 }
 
-func TestReplacePosterRequiresExistingPoster(t *testing.T) {
+func TestPublishPosterCreatesPosterWhenMissing(t *testing.T) {
+	dataDir := t.TempDir()
+	previous := flags.DataDir
+	flags.DataDir = dataDir
+	t.Cleanup(func() { flags.DataDir = previous })
+
+	paths, err := PosterPaths("javdb", "actor", "MIDV-169.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := PublishPoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
+	if err != nil || !result.Published {
+		t.Fatalf("result = %+v, error = %v, want first publication success", result, err)
+	}
+	assertFileContent(t, paths.Poster, "new poster")
+	if _, err := os.Lstat(paths.LegacyPoster); !os.IsNotExist(err) {
+		t.Fatalf("legacy poster unexpectedly exists: %v", err)
+	}
+	if _, err := os.Lstat(paths.Background); !os.IsNotExist(err) {
+		t.Fatalf("background unexpectedly exists: %v", err)
+	}
+	assertNoPosterTemps(t, filepath.Dir(paths.Poster))
+}
+
+func TestPublishPosterOverwritesCanonicalPoster(t *testing.T) {
 	dataDir := t.TempDir()
 	previous := flags.DataDir
 	flags.DataDir = dataDir
@@ -91,18 +115,59 @@ func TestReplacePosterRequiresExistingPoster(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(paths.Poster), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(paths.Poster, []byte("old canonical poster"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	result, err := ReplacePoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
-	if err == nil || result.Published {
-		t.Fatalf("result = %+v, error = %v, want missing-poster failure", result, err)
+	result, err := PublishPoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
+	if err != nil || !result.Published {
+		t.Fatalf("result = %+v, error = %v", result, err)
 	}
-	if _, err := os.Lstat(paths.Poster); !os.IsNotExist(err) {
-		t.Fatalf("poster created instead of replaced: %v", err)
-	}
+	assertFileContent(t, paths.Poster, "new poster")
 	assertNoPosterTemps(t, filepath.Dir(paths.Poster))
 }
 
-func TestReplacePosterReportsPostPublishSymlinkRemovalFailure(t *testing.T) {
+func TestPublishPosterRejectsNonRegularDestinations(t *testing.T) {
+	tests := []struct {
+		name        string
+		destination func(PosterPathSet) string
+	}{
+		{name: "canonical poster", destination: func(paths PosterPathSet) string { return paths.Poster }},
+		{name: "legacy poster", destination: func(paths PosterPathSet) string { return paths.LegacyPoster }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			previous := flags.DataDir
+			flags.DataDir = dataDir
+			t.Cleanup(func() { flags.DataDir = previous })
+
+			paths, err := PosterPaths("javdb", "actor", "MIDV-169.mp4")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(paths.Poster), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			destination := test.destination(paths)
+			if err := os.Mkdir(destination, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := PublishPoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
+			if err == nil || result.Published {
+				t.Fatalf("result = %+v, error = %v, want pre-publish failure", result, err)
+			}
+			info, statErr := os.Lstat(destination)
+			if statErr != nil || !info.IsDir() {
+				t.Fatalf("destination changed after rejection: info=%v error=%v", info, statErr)
+			}
+			assertNoPosterTemps(t, filepath.Dir(paths.Poster))
+		})
+	}
+}
+
+func TestPublishPosterReportsPostPublishSymlinkRemovalFailure(t *testing.T) {
 	paths := setupPosterReplacement(t)
 	legacyPoster := paths.LegacyPoster
 	if err := os.Symlink(filepath.Base(legacyPoster), paths.Background); err != nil {
@@ -112,7 +177,7 @@ func TestReplacePosterReportsPostPublishSymlinkRemovalFailure(t *testing.T) {
 	removePosterBackgroundSymlink = func(string) error { return errors.New("remove denied") }
 	t.Cleanup(func() { removePosterBackgroundSymlink = previousRemove })
 
-	result, err := ReplacePoster("javdb", "actor", "MIDV-169.mp4", []byte("published poster"))
+	result, err := PublishPoster("javdb", "actor", "MIDV-169.mp4", []byte("published poster"))
 	if err == nil {
 		t.Fatal("error = nil, want background removal failure")
 	}
@@ -126,7 +191,7 @@ func TestReplacePosterReportsPostPublishSymlinkRemovalFailure(t *testing.T) {
 	}
 }
 
-func TestReplacePosterRejectsSymlinkedParentWithoutMutation(t *testing.T) {
+func TestPublishPosterRejectsSymlinkedParentWithoutMutation(t *testing.T) {
 	dataDir := t.TempDir()
 	outside := t.TempDir()
 	previous := flags.DataDir
@@ -140,7 +205,7 @@ func TestReplacePosterRejectsSymlinkedParentWithoutMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := ReplacePoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
+	result, err := PublishPoster("javdb", "actor", "MIDV-169.mp4", []byte("new poster"))
 	if err == nil || result.Published {
 		t.Fatalf("result = %+v, error = %v, want pre-publish failure", result, err)
 	}
