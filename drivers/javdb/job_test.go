@@ -193,6 +193,31 @@ func TestDMMPosterCIDAndCandidateOrder(t *testing.T) {
 	}
 }
 
+func TestDMMPosterSearchImageURL(t *testing.T) {
+	html := `
+		<div class="border-b border-dotted border-gray-300">
+			<img src="https://pics.dmm.co.jp/mono/movie/adult/other001/other001ps.jpg">
+		</div>
+		<div class="border-b border-dotted border-gray-300 extra-class">
+			<img src="https://pics.dmm.co.jp/common/icon.png">
+			<img src="https://pics.dmm.co.jp/mono/movie/adult/1abf007/1abf007ps.jpg?cache=1">
+		</div>`
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(html))
+	}))
+	defer server.Close()
+
+	got, err := newSampleImageDriver(server).fetchDmmPosterSearchImageURL("ABF-007")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://pics.dmm.co.jp/mono/movie/adult/1abf007/1abf007pl.jpg?cache=1"
+	if got != want {
+		t.Fatalf("search image URL = %q, want %q", got, want)
+	}
+}
+
 func TestScanDMMPosterHTTPDecisions(t *testing.T) {
 	validImage := tinyPNG(t)
 	truncatedImage := validImage[:33]

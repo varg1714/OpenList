@@ -120,6 +120,39 @@ func (d *Javdb) fetchDmmSearchResult(code string) string {
 	return detailUrl
 }
 
+func (d *Javdb) fetchDmmPosterSearchImageURL(code string) (string, error) {
+	searchURL := fmt.Sprintf("https://www.dmm.co.jp/search/=/searchstr=%s/limit=30/sort=rankprofile/", transformDmmSearchCode(code))
+	collector := newDmmCollector(searchURL)
+	if d.client != nil && d.client.GetClient().Transport != nil {
+		collector.WithTransport(d.client.GetClient().Transport)
+	}
+	var posterURL string
+	collector.OnHTML(".border-b.border-dotted.border-gray-300", func(element *colly.HTMLElement) {
+		if posterURL != "" {
+			return
+		}
+		element.ForEach("img", func(_ int, image *colly.HTMLElement) {
+			if posterURL != "" {
+				return
+			}
+			src := image.Attr("src")
+			if !codeMatchesCode(code, src) {
+				return
+			}
+			parsed, parseErr := url.Parse(src)
+			if parseErr != nil || !strings.HasSuffix(parsed.Path, "ps.jpg") {
+				return
+			}
+			parsed.Path = strings.TrimSuffix(parsed.Path, "ps.jpg") + "pl.jpg"
+			posterURL = parsed.String()
+		})
+	})
+	if err := collector.Visit(searchURL); err != nil {
+		return "", fmt.Errorf("visit DMM poster search page: %w", err)
+	}
+	return posterURL, nil
+}
+
 // parseCidFromPath 从路径格式中提取 cid，如 /detail/=/cid=mvg155/
 func parseCidFromPath(href string) string {
 	idx := strings.Index(href, "cid=")
