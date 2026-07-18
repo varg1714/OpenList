@@ -61,6 +61,32 @@ func TestJavdbHTTPClientIsUnexportedTestSeam(t *testing.T) {
 	}
 }
 
+func TestFilterFilmsDeletesByPrimaryKey(t *testing.T) {
+	film := model.Film{
+		Name:   "FILTER-ID-TEST title.mp4",
+		Source: DriverName,
+		Actor:  "filter-test-actor",
+		Url:    "https://javdb.example/movies/filter-id-test",
+	}
+	if err := db.GetDb().Create(&film).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.GetDb().Unscoped().Delete(&model.Film{}, film.ID)
+	})
+
+	driver := Javdb{Addition: Addition{Filter: "FILTER-ID-TEST"}}
+	driver.filterFilms()
+
+	var count int64
+	if err := db.GetDb().Model(&model.Film{}).Where("id = ?", film.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("filtered film with ID %d still exists", film.ID)
+	}
+}
+
 func TestNewSampleImageClientDoesNotFollowRedirects(t *testing.T) {
 	var redirected atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

@@ -848,7 +848,7 @@ func (d *Javdb) filterFilms() {
 	if len(films) > 0 {
 		utils.Log.Infof("deleting films:[%v]", films)
 		for _, film := range films {
-			err1 := d.deleteFilm(film.Actor, virtual_file.AppendFilmName(virtual_file.CutString(virtual_file.ClearFilmName(film.Name))), film.Url)
+			err1 := d.deleteFilm(film.Actor, virtual_file.AppendFilmName(virtual_file.CutString(virtual_file.ClearFilmName(film.Name))), fmt.Sprintf("%d", film.ID))
 			if err1 != nil {
 				utils.Log.Warn("failed to delete film:", err1.Error())
 			}
