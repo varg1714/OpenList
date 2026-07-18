@@ -2,12 +2,17 @@ package virtual_file
 
 import (
 	"context"
+	"errors"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -169,6 +174,205 @@ func TestCacheFanartRecoversExistingFileWithoutRequest(t *testing.T) {
 	}
 	if string(content) != string(wantContent) {
 		t.Fatalf("content = %q, want %q", content, wantContent)
+	}
+}
+
+func TestSwapFanartContents(t *testing.T) {
+	setFanartTestDataDir(t)
+	first, err := FanartPath("javdb", "actor", "ABC-123", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := FanartPath("javdb", "actor", "ABC-123", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first, []byte("portrait"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("landscape"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SwapFanart("javdb", "actor", "ABC-123", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	assertFanartContent(t, first, "landscape")
+	assertFanartContent(t, second, "portrait")
+}
+
+func TestSwapFanartRecoversInterruptedExchange(t *testing.T) {
+	setFanartTestDataDir(t)
+	first, err := FanartPath("javdb", "actor", "ABC-123", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := FanartPath("javdb", "actor", "ABC-123", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first, []byte("portrait"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("landscape"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldTemp, newTemp := fanartSwapTempPaths(first, second)
+	if err := os.Link(first, oldTemp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(second, newTemp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(newTemp, first); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RecoverFanartSwap("javdb", "actor", "ABC-123", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	assertFanartContent(t, first, "landscape")
+	assertFanartContent(t, second, "portrait")
+	for _, temporary := range []string{oldTemp, newTemp} {
+		if _, err := os.Lstat(temporary); !os.IsNotExist(err) {
+			t.Fatalf("temporary swap file retained: %s: %v", temporary, err)
+		}
+	}
+}
+
+func TestSwapFanartRecoversFinalRenameFailure(t *testing.T) {
+	setFanartTestDataDir(t)
+	first, second := prepareFanartSwapTest(t)
+	originalRename := fanartRename
+	renameCalls := 0
+	fanartRename = func(oldPath, newPath string) error {
+		renameCalls++
+		if renameCalls == 2 {
+			return errors.New("injected final rename failure")
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	t.Cleanup(func() { fanartRename = originalRename })
+
+	if err := SwapFanart("javdb", "actor", "ABC-123", 1, 2); err == nil {
+		t.Fatal("SwapFanart error = nil, want injected failure")
+	}
+	fanartRename = originalRename
+	if err := RecoverFanartSwap("javdb", "actor", "ABC-123", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	assertFanartContent(t, first, "landscape")
+	assertFanartContent(t, second, "portrait")
+}
+
+func TestPromoteLandscapeFanartSerializesConcurrentCalls(t *testing.T) {
+	setFanartTestDataDir(t)
+	first, err := FanartPath("javdb", "actor", "ABC-123", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := FanartPath("javdb", "actor", "ABC-123", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFanartJPEG(t, first, 400, 600, color.RGBA{R: 255, A: 255})
+	writeFanartJPEG(t, second, 600, 400, color.RGBA{B: 255, A: 255})
+
+	var wait sync.WaitGroup
+	errorsByCall := make([]error, 2)
+	wait.Add(2)
+	for index := range errorsByCall {
+		go func() {
+			defer wait.Done()
+			_, errorsByCall[index] = PromoteLandscapeFanart("javdb", "actor", "ABC-123", 2)
+		}()
+	}
+	wait.Wait()
+	for _, err := range errorsByCall {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertFanartDimensions(t, first, 600, 400)
+	assertFanartDimensions(t, second, 400, 600)
+}
+
+func prepareFanartSwapTest(t *testing.T) (string, string) {
+	t.Helper()
+	first, err := FanartPath("javdb", "actor", "ABC-123", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := FanartPath("javdb", "actor", "ABC-123", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first, []byte("portrait"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("landscape"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return first, second
+}
+
+func writeFanartJPEG(t *testing.T, path string, width, height int, fill color.RGBA) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetRGBA(x, y, fill)
+		}
+	}
+	if err := jpeg.Encode(file, img, &jpeg.Options{Quality: 90}); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertFanartDimensions(t *testing.T, path string, wantWidth, wantHeight int) {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	config, _, err := image.DecodeConfig(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Width != wantWidth || config.Height != wantHeight {
+		t.Fatalf("dimensions at %s = %dx%d, want %dx%d", path, config.Width, config.Height, wantWidth, wantHeight)
+	}
+}
+
+func assertFanartContent(t *testing.T, path, want string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != want {
+		t.Fatalf("content at %s = %q, want %q", path, content, want)
 	}
 }
 
