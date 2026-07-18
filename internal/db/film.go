@@ -312,6 +312,29 @@ func QuerySampleImageFilms(source string, scanInterval time.Duration, limit int)
 	return films, errors.WithStack(err)
 }
 
+func QueryDMMPosterFilms(retryInterval time.Duration, limit int) ([]model.Film, error) {
+	var films []model.Film
+	query := db.Where("source = ?", "javdb").
+		Where("(dmm_poster_status IS NULL OR dmm_poster_status = '' OR dmm_poster_status = ? OR (dmm_poster_status = ? AND (dmm_poster_scan_at IS NULL OR dmm_poster_scan_at < ?)))",
+			model.DMMPosterStatusPending,
+			model.DMMPosterStatusTransientError,
+			time.Now().Add(-retryInterval),
+		).
+		Order("date desc, id desc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Find(&films).Error
+	return films, errors.WithStack(err)
+}
+
+func UpdateDMMPosterStatus(filmID uint, status string) error {
+	return db.Model(&model.Film{}).Where("id = ?", filmID).Updates(map[string]interface{}{
+		"dmm_poster_status":  status,
+		"dmm_poster_scan_at": time.Now(),
+	}).Error
+}
+
 type FC2SampleImageGroup struct {
 	Source           string
 	Actor            string

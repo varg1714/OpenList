@@ -54,6 +54,72 @@ func setupFilmSampleImageTestDB(t *testing.T) {
 	})
 }
 
+func TestQueryDMMPosterFilmsEligibilityAndLimit(t *testing.T) {
+	setupFilmSampleImageTestDB(t)
+
+	now := time.Now()
+	films := make([]model.Film, 0, 27)
+	for index := 0; index < 21; index++ {
+		films = append(films, model.Film{
+			Name:   fmt.Sprintf("MIDV-%d.mp4", index+1),
+			Source: "javdb",
+			Date:   now.Add(time.Duration(index) * time.Minute),
+		})
+	}
+	films = append(films,
+		model.Film{Name: "pending.mp4", Source: "javdb", Date: now.Add(2 * time.Hour), DMMPosterStatus: model.DMMPosterStatusPending, DMMPosterScanAt: now},
+		model.Film{Name: "retry.mp4", Source: "javdb", Date: now.Add(3 * time.Hour), DMMPosterStatus: model.DMMPosterStatusTransientError, DMMPosterScanAt: now.Add(-73 * time.Hour)},
+		model.Film{Name: "null-scan-retry.mp4", Source: "javdb", Date: now.Add(4 * time.Hour), DMMPosterStatus: model.DMMPosterStatusTransientError},
+		model.Film{Name: "fresh-transient.mp4", Source: "javdb", DMMPosterStatus: model.DMMPosterStatusTransientError, DMMPosterScanAt: now.Add(-71 * time.Hour)},
+		model.Film{Name: "success.mp4", Source: "javdb", DMMPosterStatus: model.DMMPosterStatusSuccess, DMMPosterScanAt: now.Add(-100 * time.Hour)},
+		model.Film{Name: "not-found.mp4", Source: "javdb", DMMPosterStatus: model.DMMPosterStatusNotFound, DMMPosterScanAt: now.Add(-100 * time.Hour)},
+		model.Film{Name: "wrong-source.mp4", Source: "fc2"},
+	)
+	if err := db.Create(&films).Error; err != nil {
+		t.Fatalf("create films: %v", err)
+	}
+	if err := db.Model(&model.Film{}).Where("name = ?", "null-scan-retry.mp4").Update("dmm_poster_scan_at", nil).Error; err != nil {
+		t.Fatalf("set null DMM poster scan time: %v", err)
+	}
+
+	got, err := QueryDMMPosterFilms(72*time.Hour, 20)
+	if err != nil {
+		t.Fatalf("query DMM poster films: %v", err)
+	}
+	if len(got) != 20 {
+		t.Fatalf("got %d films, want bounded batch of 20", len(got))
+	}
+	if got[0].Name != "null-scan-retry.mp4" || got[1].Name != "retry.mp4" || got[2].Name != "pending.mp4" {
+		t.Fatalf("first films = %q, %q, %q, want null-scan retry, stale retry, and pending", got[0].Name, got[1].Name, got[2].Name)
+	}
+	for _, film := range got {
+		if film.Name == "fresh-transient.mp4" || film.Name == "success.mp4" || film.Name == "not-found.mp4" || film.Name == "wrong-source.mp4" {
+			t.Fatalf("ineligible film returned: %s", film.Name)
+		}
+	}
+}
+
+func TestUpdateDMMPosterStatusSetsStatusAndScanTime(t *testing.T) {
+	setupFilmSampleImageTestDB(t)
+
+	film := model.Film{Name: "MIDV-169.mp4", Source: "javdb"}
+	if err := db.Create(&film).Error; err != nil {
+		t.Fatalf("create film: %v", err)
+	}
+	before := time.Now()
+	if err := UpdateDMMPosterStatus(film.ID, model.DMMPosterStatusSuccess); err != nil {
+		t.Fatalf("update DMM poster status: %v", err)
+	}
+
+	stored := loadFilmForSampleImageTest(t, film.ID)
+	if stored.DMMPosterStatus != model.DMMPosterStatusSuccess {
+		t.Fatalf("status = %q, want %q", stored.DMMPosterStatus, model.DMMPosterStatusSuccess)
+	}
+	if stored.DMMPosterScanAt.Before(before) || stored.DMMPosterScanAt.After(time.Now()) {
+		t.Fatalf("scan time = %s, want current timestamp", stored.DMMPosterScanAt)
+	}
+}
+
 func TestQueryFC2SampleImageGroups(t *testing.T) {
 	setupFilmSampleImageTestDB(t)
 

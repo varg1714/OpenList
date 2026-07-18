@@ -27,9 +27,18 @@ type Film struct {
 	SampleImageCount    int         `json:"sample_image_count"`
 	SampleImageComplete bool        `json:"sample_image_complete"`
 	SampleImageScanAt   time.Time   `json:"sample_image_scan_at"`
+	DMMPosterStatus     string      `json:"dmm_poster_status" gorm:"index"`
+	DMMPosterScanAt     time.Time   `json:"dmm_poster_scan_at"`
 	Tags                StringArray `json:"tags" gorm:"type:json;serializer:json"`
 	SubtitleOnly        bool        `json:"subtitle_only"`
 }
+
+const (
+	DMMPosterStatusPending        = "pending"
+	DMMPosterStatusSuccess        = "success"
+	DMMPosterStatusNotFound       = "not_found"
+	DMMPosterStatusTransientError = "transient_error"
+)
 
 type MagnetCache struct {
 	ID           uint              `gorm:"primarykey"`
