@@ -34,6 +34,11 @@ func DeleteImageAndNfo(source, dir, fileName string) error {
 }
 
 func CacheImage(mediaInfo MediaInfo) int {
+	if paths, err := PosterPaths(mediaInfo.Source, mediaInfo.Dir, mediaInfo.FileName); err == nil {
+		if info, statErr := os.Lstat(paths.Poster); statErr == nil && info.Mode().IsRegular() {
+			return Exist
+		}
+	}
 
 	if mediaInfo.ImgUrl == "" {
 		return CreatedFailed
