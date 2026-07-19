@@ -570,11 +570,8 @@ func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache, storages []
 		work, err := resolveCacheWork(cache, workBySourceCode)
 		provider, cloudProvider := canonicalCloudProvider(cache.DriverType)
 		if err != nil {
-			if cloudProvider {
-				plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
-				continue
-			}
-			return err
+			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
+			continue
 		}
 		partIndex, err := cachePartIndex(cache, work)
 		if err != nil {

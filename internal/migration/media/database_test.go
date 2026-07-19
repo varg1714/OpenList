@@ -212,6 +212,25 @@ func TestMigrateLegacyMediaSkipsCacheWithIncompatiblePartTopology(t *testing.T) 
 	getWork(t, database, 2, "fc2", "FC2-PPV-1628569")
 }
 
+func TestMigrateLegacyMediaSkipsCacheWithoutMatchingWork(t *testing.T) {
+	database := newMigrationTestDB(t)
+	cache := model.MagnetCache{
+		DriverType: "javdb", Magnet: "magnet:?xt=urn:btih:orphan-cache",
+		Name: "MIDV-899.mp4", Code: "MIDV-899",
+	}
+	if err := database.Create(&cache).Error; err != nil {
+		t.Fatalf("seed orphan cache: %v", err)
+	}
+
+	report, err := MigrateLegacyMedia(context.Background(), database)
+	if err != nil {
+		t.Fatalf("migrate orphan cache: %v", err)
+	}
+	if !reflect.DeepEqual(report.SkippedMagnetCaches, []uint{cache.ID}) {
+		t.Fatalf("skipped caches = %v, want [%d]", report.SkippedMagnetCaches, cache.ID)
+	}
+}
+
 type completeFixture struct {
 	javdbURL, fc2URL, pornhubURL string
 	javdbMagnet, fc2Magnet       string
