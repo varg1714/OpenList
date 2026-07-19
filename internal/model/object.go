@@ -106,6 +106,13 @@ type ObjThumbURL struct {
 
 type EmbyFileObj struct {
 	ObjThumb
+	WorkID      uint
+	FilmFileID  uint
+	Code        string
+	PartIndex   int
+	PartCount   int
+	SourceRef   string
+	SourceURL   string
 	Url         string
 	Title       string
 	Synopsis    string
