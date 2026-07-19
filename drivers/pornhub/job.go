@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/gocolly/colly/v2"
 	"time"
@@ -18,7 +19,7 @@ func (d *Pornhub) reMatchTags() {
 	utils.Log.Info("start to match porn tags")
 	defer utils.Log.Info("finish match porn tags")
 
-	films, err := db.QueryNotMatchTagFilms(DriverName, []string{}, DriverName, d.MatchFilmTagLimit)
+	films, err := db.QueryTagMediaWorks(DriverName, d.MatchFilmTagLimit)
 	if err != nil {
 		utils.Log.Warn("failed to query films:", err.Error())
 		return
@@ -48,31 +49,31 @@ func (d *Pornhub) reMatchTags() {
 
 		})
 
-		err1 := collector.Visit(fmt.Sprintf("%s/view_video.php?viewkey=%s", d.ServerUrl, film.Url))
+		err1 := collector.Visit(fmt.Sprintf("%s/view_video.php?viewkey=%s", d.ServerUrl, film.SourceRef))
 
 		if err1 != nil {
-			utils.Log.Infof("failed to get film: %s tag info, error message: %s", film.Name, err1.Error())
-			return
+			utils.Log.Infof("failed to get film: %s tag info, error message: %s", film.Code, err1.Error())
+			next := time.Now().Add(time.Hour)
+			if updateErr := db.UpdateMediaWorkTagRetry(film.ID, next, err1.Error()); updateErr != nil {
+				utils.Log.Warnf("failed to update tag retry for %s: %s", film.Code, updateErr)
+			}
+			continue
 		}
 
 		film.Tags = append(film.Tags, DriverName)
-		err1 = db.UpdateFilm(film)
+		err1 = db.UpdateMediaWorkTags(film.ID, film.Tags, film.TagVersion+1)
 		if err1 != nil {
-			utils.Log.Infof("failed to update film: %s tag info, error: %s", film.Name, err1.Error())
-			return
+			utils.Log.Infof("failed to update film: %s tag info, error: %s", film.Code, err1.Error())
+			continue
 		}
 
-		embyObj := virtual_file.ConvertFilmToEmbyFile(film, film.Actor)
-
-		virtual_file.UpdateNfo(virtual_file.MediaInfo{
-			Source:   DriverName,
-			Dir:      embyObj.Path,
-			FileName: virtual_file.AppendImageName(embyObj.Name),
-			Title:    embyObj.Title,
-			Actors:   embyObj.Actors,
-			Release:  embyObj.ReleaseTime,
-			Tags:     embyObj.Tags,
-		})
+		identity := virtual_file.MediaIdentity{StorageID: film.StorageID, Source: film.Source, PrimaryDir: film.PrimaryDir, Code: film.Code}
+		if err := virtual_file.UpdateMediaNfo(virtual_file.MediaInfo{
+			Identity: &identity, Title: model.BuildMediaTitle(film.Code, film.RawTitle, film.TranslatedTitle),
+			Actors: []string(film.Actors), Release: film.ReleaseDate, Tags: []string(film.Tags),
+		}); err != nil {
+			utils.Log.Warnf("failed to update NFO for %s: %s", film.Code, err)
+		}
 
 		time.Sleep(3 * time.Second)
 	}
