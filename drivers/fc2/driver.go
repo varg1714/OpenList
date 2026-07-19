@@ -16,7 +16,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/emby"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/internal/offline_download/tool"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -53,11 +52,11 @@ func (d *FC2) Init(ctx context.Context) error {
 
 	d.cron = cron.NewCron(duration)
 	d.cron.Do(func() {
-		d.reMatchReleaseTime()
+		d.rematchMediaReleaseTime()
 		if d.RefreshNfo {
-			d.refreshNfo()
+			d.refreshMediaNFOs()
 		}
-		d.scanSampleImages()
+		d.scanMediaSampleImages()
 	})
 
 	return nil
@@ -122,8 +121,11 @@ func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]m
 		}
 		return results, nil
 	} else if dirName == "个人收藏" {
-		films := d.getStars()
-		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
+		films, err := virtual_file.ListMediaFiles(d.ID, "fc2", "个人收藏")
+		if err != nil {
+			return nil, err
+		}
+		return utils.SliceConvert(virtual_file.WrapMediaFiles(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
 	} else if categories[dirName].Url != "" {
@@ -135,14 +137,14 @@ func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]m
 				return d.ScraperApi + fmt.Sprintf(categories[dirName].Url, index)
 			})
 		} else {
-			films, err = d.getFilms(func(index int) string {
+			films, err = d.getFilms(dirName, func(index int) string {
 				return fmt.Sprintf(categories[dirName].Url, index)
 			})
 		}
 		if err != nil {
 			return nil, err
 		}
-		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
+		return utils.SliceConvert(virtual_file.WrapMediaFiles(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
 
@@ -157,7 +159,7 @@ func (d *FC2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]m
 }
 
 func (d *FC2) Get(ctx context.Context, path string) (model.Obj, error) {
-	return virtual_file.ResolveActorTreeObj("fc2", strconv.Itoa(int(d.ID)), path, d.RootID.GetRootId(), d.Storage.Modified)
+	return virtual_file.ResolveMediaActorTreeObj(d.ID, "fc2", path, d.RootID.GetRootId(), d.Storage.Modified)
 }
 
 func (d *FC2) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -174,37 +176,31 @@ func (d *FC2) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*m
 		return mockedLink, nil
 	}
 
-	return tool.CloudPlay(ctx, args, d.CloudPlayDriverType, d.CloudPlayDownloadPath, file, func(obj model.Obj) (string, error) {
-		return d.getMagnet(obj)
-	})
+	mediaFile, err := mediaFileFromObj(file)
+	if err != nil {
+		return nil, err
+	}
+	return d.cloudPlayMedia(ctx, args, mediaFile)
 
 }
 
 func (d *FC2) Remove(ctx context.Context, obj model.Obj) error {
-
-	if obj.IsDir() {
-
-		if dirWrapper, ok := obj.(*model.EmbyFileDirWrapper); !ok {
-			err := db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
-			if err != nil {
-				return err
-			}
-
-			return db.DeleteFilmsByActor("fc2", obj.GetName())
-		} else {
-			for _, file := range dirWrapper.EmbyFiles {
-				err2 := d.deleteFilm(&file)
-				if err2 != nil {
-					return err2
-				}
-			}
-			return nil
-		}
-
-	} else {
-		return d.deleteFilm(obj)
+	if group, ok := obj.(*model.EmbyFileDirWrapper); ok && len(group.EmbyFiles) > 0 {
+		return virtual_file.DeleteMediaWork(group.EmbyFiles[0].WorkID)
 	}
-
+	if mediaFile, ok := obj.(*model.EmbyFileObj); ok && mediaFile.WorkID != 0 {
+		return virtual_file.DeleteMediaFile(mediaFile.FilmFileID)
+	}
+	works, err := db.ListFilmWorks(d.ID, "fc2", obj.GetName())
+	if err != nil {
+		return err
+	}
+	for _, work := range works {
+		if err := virtual_file.DeleteMediaWork(work.ID); err != nil {
+			return err
+		}
+	}
+	return db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
 }
 
 func (d *FC2) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
@@ -235,18 +231,25 @@ func (d *FC2) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) 
 
 func (d *FC2) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) (model.Obj, error) {
 	star, err := d.addStar(stream.GetName(), []string{})
-	if err == nil {
-		op.Cache.DeleteDirectory(d, "个人收藏")
-		if d.EmbyServers != "" {
-			emby.Refresh(d.EmbyServers)
-		}
-
+	if err != nil {
+		return nil, err
+	}
+	op.Cache.DeleteDirectory(d, "个人收藏")
+	if d.EmbyServers != "" {
+		emby.Refresh(d.EmbyServers)
 	}
 
-	dirWrapper := virtual_file.WrapEmbyFilms([]model.EmbyFileObj{star})[0]
-
+	dirWrapper, err := wrapAddedStar(star)
 	return &dirWrapper, err
 
+}
+
+func wrapAddedStar(star model.EmbyFileObj) (model.EmbyFileDirWrapper, error) {
+	wrapped := virtual_file.WrapMediaFiles([]model.EmbyFileObj{star})
+	if len(wrapped) != 1 {
+		return model.EmbyFileDirWrapper{}, fmt.Errorf("expected one media work, got %d", len(wrapped))
+	}
+	return wrapped[0], nil
 }
 
 func (d *FC2) MkdirConfig() []driver.Item {
