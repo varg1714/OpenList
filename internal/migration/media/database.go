@@ -26,7 +26,7 @@ var (
 
 var (
 	multipartPattern = regexp.MustCompile(`(?i)^(.*?)-cd([1-9][0-9]*)$`)
-	fc2CodePattern   = regexp.MustCompile(`(?i)^FC2(?:-PPV)?-?([0-9]+)$`)
+	fc2CodePattern   = regexp.MustCompile(`(?i)^FC2(?:-PPV)?-?([A-Z0-9]+(?:[-_][A-Z0-9]+)*)$`)
 	fc2URLPattern    = regexp.MustCompile(`(?i)(?:FC2(?:-PPV)?-?|/article/)([0-9]+)(?:/|$)`)
 )
 

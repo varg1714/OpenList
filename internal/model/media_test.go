@@ -14,6 +14,7 @@ func TestNormalizeMediaCode(t *testing.T) {
 		{name: "javdb compact alphanumeric", source: "javdb", input: "hamesamurai0258", want: "HAMESAMURAI0258"},
 		{name: "fc2 bare", source: "fc2", input: "1234567", want: "FC2-PPV-1234567"},
 		{name: "fc2 full", source: "fc2", input: "fc2-ppv-1234567", want: "FC2-PPV-1234567"},
+		{name: "fc2 legacy alphanumeric", source: "fc2", input: "050525_01-10MU", want: "FC2-PPV-050525_01-10MU"},
 		{name: "pornhub preserves key", source: "pornhub", input: "ph5fAbC", want: "ph5fAbC"},
 	}
 
@@ -37,7 +38,7 @@ func TestNormalizeMediaCodeRejectsInvalidValues(t *testing.T) {
 	}{
 		{source: "javdb", input: "ABP 123"},
 		{source: "javdb", input: "../ABP-123"},
-		{source: "fc2", input: "FC2-PPV-ABC"},
+		{source: "fc2", input: "FC2-PPV-ABC/DEF"},
 		{source: "pornhub", input: "../view-key"},
 		{source: "unknown", input: "ABP-123"},
 	}

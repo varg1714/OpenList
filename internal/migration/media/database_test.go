@@ -166,6 +166,25 @@ func TestMigrateLegacyMediaRejectsIdentityCollisionAndRollsBack(t *testing.T) {
 	assertCount(t, database, &model.Film{}, 2)
 }
 
+func TestMigrateLegacyMediaAcceptsAlphanumericFC2Code(t *testing.T) {
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 2, Driver: "FC2", MountPath: "/fc2"})
+	film := model.Film{
+		Source: "fc2", Actor: "个人收藏", Name: "050525_01-10MU", Url: "https://adult.contents.fc2.com/article/050525_01-10MU/",
+	}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed alphanumeric FC2 film: %v", err)
+	}
+
+	if _, err := MigrateLegacyMedia(context.Background(), database); err != nil {
+		t.Fatalf("migrate alphanumeric FC2 film: %v", err)
+	}
+	work := getWork(t, database, 2, "fc2", "FC2-PPV-050525_01-10MU")
+	if work.PrimaryDir != "个人收藏" || work.SourceURL != film.Url {
+		t.Fatalf("migrated FC2 work = %+v", work)
+	}
+}
+
 type completeFixture struct {
 	javdbURL, fc2URL, pornhubURL string
 	javdbMagnet, fc2Magnet       string
