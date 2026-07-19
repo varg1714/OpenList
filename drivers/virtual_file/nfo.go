@@ -34,6 +34,26 @@ func DeleteImageAndNfo(source, dir, fileName string) error {
 }
 
 func CacheImage(mediaInfo MediaInfo) int {
+	if mediaInfo.Identity != nil {
+		paths, err := ResolveMediaArtifactPaths(*mediaInfo.Identity)
+		if err != nil {
+			return CreatedFailed
+		}
+		if info, statErr := os.Lstat(paths.Poster); statErr == nil && info.Mode().IsRegular() {
+			return Exist
+		}
+		if mediaInfo.ImgUrl == "" {
+			return CreatedFailed
+		}
+		response, err := base.RestyClient.R().SetHeaders(mediaInfo.ImgUrlHeaders).Get(mediaInfo.ImgUrl)
+		if err != nil || response.IsError() {
+			return CreatedFailed
+		}
+		if err := PublishMediaPoster(*mediaInfo.Identity, response.Body()); err != nil {
+			return CreatedFailed
+		}
+		return CreatedSuccess
+	}
 	if paths, err := PosterPaths(mediaInfo.Source, mediaInfo.Dir, mediaInfo.FileName); err == nil {
 		if info, statErr := os.Lstat(paths.Poster); statErr == nil && info.Mode().IsRegular() {
 			return Exist
@@ -85,6 +105,12 @@ func CacheImage(mediaInfo MediaInfo) int {
 }
 
 func UpdateNfo(mediaInfo MediaInfo) {
+	if mediaInfo.Identity != nil {
+		if err := UpdateMediaNfo(mediaInfo); err != nil {
+			utils.Log.Warnf("failed to update media NFO for %s: %s", mediaInfo.Identity.Code, err)
+		}
+		return
+	}
 
 	cacheResult := cacheActorNfo(mediaInfo, false)
 	if cacheResult != Exist {
@@ -182,7 +208,36 @@ func UpdateNfo(mediaInfo MediaInfo) {
 
 }
 
+func UpdateMediaNfo(mediaInfo MediaInfo) error {
+	if mediaInfo.Identity == nil {
+		return fmt.Errorf("media identity is required")
+	}
+	paths, err := ResolveMediaArtifactPaths(*mediaInfo.Identity)
+	if err != nil {
+		return err
+	}
+	if err := ensureMediaArtifactRoot(*mediaInfo.Identity); err != nil {
+		return err
+	}
+	media := mediaInfoToNFO(mediaInfo)
+	content, err := mediaToXML(&media)
+	if err != nil {
+		return err
+	}
+	return atomicWriteMediaArtifact(paths.NFO, content, 0o644)
+}
+
 func SaveSubtitles(mediaInfo MediaInfo, subtitles []string) {
+	if mediaInfo.Identity != nil {
+		partIndex := mediaInfo.PartIndex
+		if partIndex < 1 {
+			partIndex = 1
+		}
+		if err := SaveMediaSubtitles(*mediaInfo.Identity, partIndex, subtitles); err != nil {
+			utils.Log.Warnf("failed to save media subtitles for %s: %s", mediaInfo.Identity.Code, err)
+		}
+		return
+	}
 
 	for i, subtitle := range subtitles {
 		if subtitle == "" {
@@ -246,6 +301,21 @@ func ClearUnUsedFiles(source, dir string, fileNames []string) {
 }
 
 func cacheActorNfo(mediaInfo MediaInfo, force bool) int {
+	if mediaInfo.Identity != nil {
+		paths, err := ResolveMediaArtifactPaths(*mediaInfo.Identity)
+		if err != nil {
+			return CreatedFailed
+		}
+		if !force {
+			if info, statErr := os.Lstat(paths.NFO); statErr == nil && info.Mode().IsRegular() {
+				return Exist
+			}
+		}
+		if err := UpdateMediaNfo(mediaInfo); err != nil {
+			return CreatedFailed
+		}
+		return CreatedSuccess
+	}
 
 	fileName := mediaInfo.FileName
 	if fileName == "" {
@@ -307,6 +377,40 @@ func cacheActorNfo(mediaInfo MediaInfo, force bool) int {
 
 	return CreatedSuccess
 
+}
+
+func mediaInfoToNFO(mediaInfo MediaInfo) Media {
+	actorInfos := make([]Actor, 0, len(mediaInfo.Actors))
+	for _, actor := range mediaInfo.Actors {
+		actorInfos = append(actorInfos, Actor{Name: actor})
+	}
+	tags := make([]Inner, 0, len(mediaInfo.Tags))
+	for _, tag := range mediaInfo.Tags {
+		tags = append(tags, Inner{Inner: tag})
+	}
+	plot := mediaInfo.Synopsis
+	if plot == "" {
+		plot = mediaInfo.Title
+	}
+	release := ""
+	year := ""
+	month := ""
+	if !mediaInfo.Release.IsZero() {
+		release = mediaInfo.Release.Format(time.DateOnly)
+		year = mediaInfo.Release.Format("2006")
+		month = mediaInfo.Release.Format("01")
+	}
+	return Media{
+		Title:     Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", mediaInfo.Title)},
+		Plot:      Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", plot)},
+		Actor:     actorInfos,
+		Release:   release,
+		Premiered: release,
+		Year:      year,
+		Month:     month,
+		Tag:       tags,
+		Genre:     tags,
+	}
 }
 
 func SynImageAndNfo(source, dir string, films []model.EmbyFileObj) {
