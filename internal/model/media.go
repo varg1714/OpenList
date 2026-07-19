@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	javCodePattern = regexp.MustCompile(`^[A-Z0-9]+(?:[-_.][A-Z0-9]+)+$`)
+	javCodePattern = regexp.MustCompile(`^[A-Z0-9]+(?:[-_.][A-Z0-9]+)*$`)
 	fc2CodePattern = regexp.MustCompile(`^FC2-PPV-[0-9]+$`)
 )
 

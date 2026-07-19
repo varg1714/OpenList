@@ -11,6 +11,7 @@ func TestNormalizeMediaCode(t *testing.T) {
 	}{
 		{name: "javdb uppercase", source: "javdb", input: "abp-123", want: "ABP-123"},
 		{name: "javdb underscore", source: "javdb", input: "t28_123", want: "T28_123"},
+		{name: "javdb compact alphanumeric", source: "javdb", input: "hamesamurai0258", want: "HAMESAMURAI0258"},
 		{name: "fc2 bare", source: "fc2", input: "1234567", want: "FC2-PPV-1234567"},
 		{name: "fc2 full", source: "fc2", input: "fc2-ppv-1234567", want: "FC2-PPV-1234567"},
 		{name: "pornhub preserves key", source: "pornhub", input: "ph5fAbC", want: "ph5fAbC"},
