@@ -88,7 +88,7 @@ func TestFilterFilmsDeletesByPrimaryKey(t *testing.T) {
 }
 
 func TestAddStarReusesFilmWorkWithoutLegacyMagnetCache(t *testing.T) {
-	for _, value := range []interface{}{&model.CloudFileCache{}, &model.SourceMagnet{}, &model.FilmFile{}, &model.FilmWork{}, &model.MagnetCache{}} {
+	for _, value := range []interface{}{&model.SourceMagnet{}, &model.FilmFile{}, &model.FilmWork{}, &model.MagnetCache{}} {
 		if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(value).Error; err != nil {
 			t.Fatalf("reset %T: %v", value, err)
 		}
@@ -111,12 +111,27 @@ func TestAddStarReusesFilmWorkWithoutLegacyMagnetCache(t *testing.T) {
 	if file.WorkID != work.ID || file.FilmFileID == 0 {
 		t.Fatalf("favorite identity = work %d, file %d", file.WorkID, file.FilmFileID)
 	}
+	var stored model.FilmWork
+	if err := db.GetDb().First(&stored, work.ID).Error; err != nil {
+		t.Fatalf("reload existing work: %v", err)
+	}
+	if !reflect.DeepEqual(stored.Tags, model.StringArray{"existing", "favorite"}) {
+		t.Fatalf("addStar tags = %#v, want existing and favorite", stored.Tags)
+	}
 	var legacyCount int64
 	if err := db.GetDb().Model(&model.MagnetCache{}).Count(&legacyCount).Error; err != nil {
 		t.Fatalf("count legacy caches: %v", err)
 	}
 	if legacyCount != 0 {
 		t.Fatalf("addStar wrote %d legacy magnet caches", legacyCount)
+	}
+}
+
+func TestMergeTagsDeduplicatesCallerTags(t *testing.T) {
+	got := mergeTags(model.StringArray{"existing"}, []string{"favorite", "existing", ""})
+	want := model.StringArray{"existing", "favorite"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mergeTags() = %#v, want %#v", got, want)
 	}
 }
 

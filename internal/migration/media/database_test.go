@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -26,7 +28,7 @@ func TestMigrateLegacyMediaMapsSourcesFilesAndCaches(t *testing.T) {
 	if report.LegacyFilms != 5 || report.LegacyMagnetCaches != 7 {
 		t.Fatalf("legacy counts = films %d, caches %d", report.LegacyFilms, report.LegacyMagnetCaches)
 	}
-	if report.WorksCreated != 3 || report.FilesCreated != 5 || report.SourceMagnetsCreated != 2 || report.CloudFileCachesCreated != 4 {
+	if report.WorksCreated != 3 || report.FilesCreated != 5 || report.SourceMagnetsCreated != 2 {
 		t.Fatalf("created counts = %+v", report)
 	}
 
@@ -34,7 +36,7 @@ func TestMigrateLegacyMediaMapsSourcesFilesAndCaches(t *testing.T) {
 	if javdb.PrimaryDir != "Actor A" || javdb.SourceRef != fixture.javdbURL || javdb.SourceURL != fixture.javdbURL {
 		t.Fatalf("JavDB identity = %+v", javdb)
 	}
-	if javdb.RawTitle != "Original title" || javdb.TranslatedTitle != "Translated title" || javdb.Synopsis != "Synopsis" || javdb.ImageURL != "https://img.test/abp.jpg" {
+	if javdb.RawTitle != "Original title" || javdb.TranslatedTitle != "Translated title" || javdb.TranslationStatus != "success" || javdb.TranslationVersion != model.CurrentTranslationVersion || javdb.Synopsis != "Synopsis" || javdb.ImageURL != "https://img.test/abp.jpg" {
 		t.Fatalf("JavDB text metadata = %+v", javdb)
 	}
 	if !reflect.DeepEqual(javdb.Actors, model.StringArray{"Actor A", "Actor B"}) || !reflect.DeepEqual(javdb.Tags, model.StringArray{"tag-a", model.TagSubtitle}) {
@@ -68,32 +70,12 @@ func TestMigrateLegacyMediaMapsSourcesFilesAndCaches(t *testing.T) {
 		t.Fatalf("JavDB magnets = %+v", javdbMagnets)
 	}
 	wantJavFingerprint := fingerprint(fixture.javdbMagnet)
-	if javdbMagnets[0].Fingerprint != wantJavFingerprint || len(javdbMagnets[0].FileManifest) != 1 || javdbMagnets[0].FileManifest[0].Path != "abp-123 Original title.mp4" {
-		t.Fatalf("JavDB magnet manifest = %+v", javdbMagnets[0])
+	if javdbMagnets[0].Fingerprint != wantJavFingerprint {
+		t.Fatalf("JavDB magnet = %+v", javdbMagnets[0])
 	}
 	fc2Magnets := listMagnets(t, database, fc2.ID)
-	if len(fc2Magnets) != 1 || len(fc2Magnets[0].FileManifest) != 3 {
-		t.Fatalf("FC2 magnet manifest = %+v", fc2Magnets)
-	}
-
-	var cloudCaches []model.CloudFileCache
-	if err := database.Order("remote_file_id ASC").Find(&cloudCaches).Error; err != nil {
-		t.Fatalf("list cloud caches: %v", err)
-	}
-	if len(cloudCaches) != 4 {
-		t.Fatalf("cloud caches = %+v", cloudCaches)
-	}
-	if cloudCaches[0].StorageIdentity != "11" || cloudCaches[0].Provider != "115 Cloud" || cloudCaches[0].MagnetFingerprint != fingerprint(fixture.fc2Magnet) {
-		t.Fatalf("115 cache = %+v", cloudCaches[0])
-	}
-	if cloudCaches[0].VerifiedAt == nil || !cloudCaches[0].VerifiedAt.Equal(fixture.scanAt) {
-		t.Fatalf("115 cache VerifiedAt = %v, want %v", cloudCaches[0].VerifiedAt, fixture.scanAt)
-	}
-	if cloudCaches[3].StorageIdentity != "10" || cloudCaches[3].Provider != "PikPak" || cloudCaches[3].RemoteFileID != "remote-javdb" || cloudCaches[3].ProviderOptions["opaque"] != "keep" {
-		t.Fatalf("PikPak cache = %+v", cloudCaches[3])
-	}
-	if cloudCaches[3].VerifiedAt == nil || !cloudCaches[3].VerifiedAt.Equal(fixture.scanAt) {
-		t.Fatalf("PikPak cache VerifiedAt = %v, want %v", cloudCaches[3].VerifiedAt, fixture.scanAt)
+	if len(fc2Magnets) != 1 {
+		t.Fatalf("FC2 magnets = %+v", fc2Magnets)
 	}
 
 	if _, err := ValidateLegacyMediaMigration(context.Background(), database); err != nil {
@@ -101,6 +83,30 @@ func TestMigrateLegacyMediaMapsSourcesFilesAndCaches(t *testing.T) {
 	}
 	assertCount(t, database, &model.Film{}, 5)
 	assertCount(t, database, &model.MagnetCache{}, 7)
+}
+
+func TestMarkVerifiedNFOStateUpdatesMigratedWorkAfterArtifactMove(t *testing.T) {
+	database := newMigrationTestDB(t)
+	work := model.FilmWork{StorageID: 1, Source: "javdb", Code: "ABP-123", PrimaryDir: "Actor A", MetadataVersion: 4}
+	if err := database.Create(&work).Error; err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	dataDir := t.TempDir()
+	nfoPath := filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123", "ABP-123.nfo")
+	if err := os.MkdirAll(filepath.Dir(nfoPath), 0o755); err != nil {
+		t.Fatalf("create NFO directory: %v", err)
+	}
+	if err := os.WriteFile(nfoPath, []byte("<movie/>"), 0o644); err != nil {
+		t.Fatalf("create NFO: %v", err)
+	}
+	plan := &migrationPlan{works: []*plannedWork{{identity: Identity{StorageID: 1, Source: "javdb", Code: "ABP-123"}, work: work}}}
+	if err := database.Transaction(func(tx *gorm.DB) error { return markVerifiedNFOState(tx, plan, dataDir) }); err != nil {
+		t.Fatalf("mark verified NFO state: %v", err)
+	}
+	stored := getWork(t, database, 1, "javdb", "ABP-123")
+	if stored.NfoVersion != stored.MetadataVersion || stored.NfoLastError != "" {
+		t.Fatalf("NFO state = version %d, error %q", stored.NfoVersion, stored.NfoLastError)
+	}
 }
 
 func TestMigrateLegacyMediaRerunIsIdempotent(t *testing.T) {
@@ -111,32 +117,27 @@ func TestMigrateLegacyMediaRerunIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first migration: %v", err)
 	}
-	preservedVerifiedAt := time.Date(2025, time.January, 3, 4, 5, 6, 0, time.UTC)
-	if err := database.Model(&model.CloudFileCache{}).
-		Where("remote_file_id = ?", "remote-javdb").
-		Update("verified_at", preservedVerifiedAt).Error; err != nil {
-		t.Fatalf("advance normalized verification time: %v", err)
+	if err := database.Model(&model.FilmWork{}).
+		Where("source = ? AND code = ?", "javdb", "ABP-123").
+		Update("translated_title", "ABP-123 Translated title").Error; err != nil {
+		t.Fatalf("seed previously migrated prefixed title: %v", err)
 	}
 	second, err := MigrateLegacyMedia(context.Background(), database)
 	if err != nil {
 		t.Fatalf("second migration: %v", err)
 	}
-	if first.WorksCreated == 0 || second.WorksCreated != 0 || second.FilesCreated != 0 || second.SourceMagnetsCreated != 0 || second.CloudFileCachesCreated != 0 {
+	if first.WorksCreated == 0 || second.WorksCreated != 0 || second.FilesCreated != 0 || second.SourceMagnetsCreated != 0 {
 		t.Fatalf("rerun reports = first %+v, second %+v", first, second)
 	}
-	if second.WorksExisting != 3 || second.FilesExisting != 5 || second.SourceMagnetsExisting != 2 || second.CloudFileCachesExisting != 4 {
+	if second.WorksExisting != 3 || second.FilesExisting != 5 || second.SourceMagnetsExisting != 2 {
 		t.Fatalf("rerun existing counts = %+v", second)
 	}
 	assertCount(t, database, &model.FilmWork{}, 3)
 	assertCount(t, database, &model.FilmFile{}, 5)
 	assertCount(t, database, &model.SourceMagnet{}, 2)
-	assertCount(t, database, &model.CloudFileCache{}, 4)
-	var preserved model.CloudFileCache
-	if err := database.Where("remote_file_id = ?", "remote-javdb").First(&preserved).Error; err != nil {
-		t.Fatalf("load rerun cloud cache: %v", err)
-	}
-	if preserved.VerifiedAt == nil || !preserved.VerifiedAt.Equal(preservedVerifiedAt) {
-		t.Fatalf("rerun VerifiedAt = %v, want preserved %v", preserved.VerifiedAt, preservedVerifiedAt)
+	javdb := getWork(t, database, 1, "javdb", "ABP-123")
+	if javdb.TranslatedTitle != "Translated title" {
+		t.Fatalf("rerun translated title = %q, want title without code prefix", javdb.TranslatedTitle)
 	}
 }
 
@@ -162,8 +163,38 @@ func TestMigrateLegacyMediaRejectsIdentityCollisionAndRollsBack(t *testing.T) {
 	assertCount(t, database, &model.FilmWork{}, 0)
 	assertCount(t, database, &model.FilmFile{}, 0)
 	assertCount(t, database, &model.SourceMagnet{}, 0)
-	assertCount(t, database, &model.CloudFileCache{}, 0)
 	assertCount(t, database, &model.Film{}, 2)
+}
+
+func TestMigrateLegacyMediaRejectsCrossStorageArtifactRootBeforeWrites(t *testing.T) {
+	database := newMigrationTestDB(t)
+	dataDir := t.TempDir()
+	journalPath := filepath.Join(dataDir, "journal.json")
+	createStorages(t, database,
+		model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb-one"},
+		model.Storage{ID: 2, Driver: "Javdb", MountPath: "/javdb-two"},
+	)
+	legacy := model.Film{Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123"}
+	if err := database.Create(&legacy).Error; err != nil {
+		t.Fatalf("seed legacy film: %v", err)
+	}
+	existing := model.FilmWork{StorageID: 2, Source: "javdb", Code: "ABP-123", PrimaryDir: "Actor A", SourceRef: legacy.Url}
+	if err := database.Create(&existing).Error; err != nil {
+		t.Fatalf("seed existing work: %v", err)
+	}
+
+	_, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{
+		Mode: MigrationApply, DataDir: dataDir, JournalPath: journalPath,
+		StorageMapping: map[string]uint{"javdb:Actor A": 1},
+	})
+	if !errors.Is(err, ErrArtifactRootCollision) {
+		t.Fatalf("cross-storage root error = %v, want ErrArtifactRootCollision", err)
+	}
+	assertCount(t, database, &model.FilmWork{}, 1)
+	assertCount(t, database, &model.FilmFile{}, 0)
+	if _, statErr := os.Stat(journalPath); !os.IsNotExist(statErr) {
+		t.Fatalf("preflight wrote journal: %v", statErr)
+	}
 }
 
 func TestMigrateLegacyMediaAcceptsAlphanumericFC2Code(t *testing.T) {
@@ -209,6 +240,7 @@ func TestMigrateLegacyMediaSkipsCacheWithIncompatiblePartTopology(t *testing.T) 
 	if !reflect.DeepEqual(report.SkippedMagnetCaches, []uint{cache.ID}) {
 		t.Fatalf("skipped caches = %v, want [%d]", report.SkippedMagnetCaches, cache.ID)
 	}
+	assertCount(t, database, &model.MagnetCache{}, 1)
 	getWork(t, database, 2, "fc2", "FC2-PPV-1628569")
 }
 
@@ -229,6 +261,7 @@ func TestMigrateLegacyMediaSkipsCacheWithoutMatchingWork(t *testing.T) {
 	if !reflect.DeepEqual(report.SkippedMagnetCaches, []uint{cache.ID}) {
 		t.Fatalf("skipped caches = %v, want [%d]", report.SkippedMagnetCaches, cache.ID)
 	}
+	assertCount(t, database, &model.MagnetCache{}, 1)
 }
 
 type completeFixture struct {
@@ -259,15 +292,15 @@ func seedCompleteLegacyFixture(t *testing.T, database *gorm.DB) completeFixture 
 	films := []model.Film{
 		{
 			Source: "JavDB", Actor: "Actor A", Name: "abp-123 Original title.mp4", Url: fixture.javdbURL,
-			Image: "https://img.test/abp.jpg", Title: "Translated title", Synopsis: "Synopsis",
+			Image: "https://img.test/abp.jpg", Title: "abp-123 Translated title", Synopsis: "Synopsis",
 			Actors: model.StringArray{"Actor A", "Actor B"}, Tags: model.StringArray{"tag-a", model.TagSubtitle}, Date: fixture.releaseDate,
 			SynopsisScanAt: scanAt, SynopsisExcluded: true, SampleImageCount: 4, SampleImageComplete: true,
 			SampleImageScanAt: scanAt, DMMPosterStatus: model.DMMPosterStatusSuccess, DMMPosterScanAt: scanAt,
 		},
-		{Source: "FC2", Actor: "Seller A", Name: "FC2-100-cd1.mp4", Url: fixture.fc2URL, Title: "FC2 translated"},
-		{Source: "fc2", Actor: "Seller A", Name: "FC2-100-cd2.mp4", Url: fixture.fc2URL, Title: "FC2 translated"},
+		{Source: "FC2", Actor: "Seller A", Name: "FC2-100-cd1.mp4", Url: fixture.fc2URL},
+		{Source: "fc2", Actor: "Seller A", Name: "FC2-100-cd2.mp4", Url: fixture.fc2URL, Title: "FC2-100 FC2 translated"},
 		{Source: "Fc2", Actor: "Seller A", Name: "FC2-100-cd3.mp4", Url: fixture.fc2URL, Title: "FC2 translated"},
-		{Source: "PornHub", Actor: "Channel A", Name: "view-key-9", Url: fixture.pornhubURL, Title: "Porn title"},
+		{Source: "PornHub", Actor: "Channel A", Name: "view-key-9", Url: fixture.pornhubURL, Title: "view-key-9 Porn title"},
 	}
 	if err := database.Create(&films).Error; err != nil {
 		t.Fatalf("seed films: %v", err)
@@ -294,7 +327,7 @@ func newMigrationTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open migration database: %v", err)
 	}
-	if err := database.AutoMigrate(&model.Storage{}, &model.Film{}, &model.MagnetCache{}, &model.FilmWork{}, &model.FilmFile{}, &model.SourceMagnet{}, &model.CloudFileCache{}); err != nil {
+	if err := database.AutoMigrate(&model.Storage{}, &model.Film{}, &model.MagnetCache{}, &model.FilmWork{}, &model.FilmFile{}, &model.SourceMagnet{}); err != nil {
 		t.Fatalf("migrate test schema: %v", err)
 	}
 	return database

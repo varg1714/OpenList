@@ -19,7 +19,7 @@ func TestMediaNFOWritesProjectedTitleToCodeOnlyFileName(t *testing.T) {
 		t.Fatalf("update media NFO: %v", err)
 	}
 
-	path := filepath.Join(flags.DataDir, "emby", "javdb", "12", "Actor A", "ABP-123", "ABP-123.nfo")
+	path := filepath.Join(flags.DataDir, "emby", "javdb", "Actor A", "ABP-123", "ABP-123.nfo")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read NFO: %v", err)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -24,36 +25,42 @@ type migrationReportOutput struct {
 	SkippedLegacyFilms  int `json:"SkippedLegacyFilms"`
 	SkippedMagnetCaches int `json:"SkippedMagnetCaches"`
 
-	WorksCreated            int `json:"WorksCreated"`
-	WorksExisting           int `json:"WorksExisting"`
-	FilesCreated            int `json:"FilesCreated"`
-	FilesExisting           int `json:"FilesExisting"`
-	SourceMagnetsCreated    int `json:"SourceMagnetsCreated"`
-	SourceMagnetsExisting   int `json:"SourceMagnetsExisting"`
-	CloudFileCachesCreated  int `json:"CloudFileCachesCreated"`
-	CloudFileCachesExisting int `json:"CloudFileCachesExisting"`
-	ArtifactsPlanned        int `json:"ArtifactsPlanned"`
-	ArtifactsCopied         int `json:"ArtifactsCopied"`
-	ArtifactsExisting       int `json:"ArtifactsExisting"`
+	WorksCreated               int `json:"WorksCreated"`
+	WorksExisting              int `json:"WorksExisting"`
+	FilesCreated               int `json:"FilesCreated"`
+	FilesExisting              int `json:"FilesExisting"`
+	SourceMagnetsCreated       int `json:"SourceMagnetsCreated"`
+	SourceMagnetsExisting      int `json:"SourceMagnetsExisting"`
+	ArtifactsPlanned           int `json:"ArtifactsPlanned"`
+	ArtifactMovesPlanned       int `json:"ArtifactMovesPlanned"`
+	ArtifactDeletesPlanned     int `json:"ArtifactDeletesPlanned"`
+	ArtifactDirectoriesPlanned int `json:"ArtifactDirectoriesPlanned"`
+	ArtifactsMoved             int `json:"ArtifactsMoved"`
+	ArtifactsDeleted           int `json:"ArtifactsDeleted"`
+	ArtifactDirectoriesRemoved int `json:"ArtifactDirectoriesRemoved"`
+	ArtifactsExisting          int `json:"ArtifactsExisting"`
 }
 
 func compactMigrationReport(report migrationmedia.MigrationReport) migrationReportOutput {
 	return migrationReportOutput{
-		LegacyFilms:             report.LegacyFilms,
-		LegacyMagnetCaches:      report.LegacyMagnetCaches,
-		SkippedLegacyFilms:      len(report.SkippedLegacyFilms),
-		SkippedMagnetCaches:     len(report.SkippedMagnetCaches),
-		WorksCreated:            report.WorksCreated,
-		WorksExisting:           report.WorksExisting,
-		FilesCreated:            report.FilesCreated,
-		FilesExisting:           report.FilesExisting,
-		SourceMagnetsCreated:    report.SourceMagnetsCreated,
-		SourceMagnetsExisting:   report.SourceMagnetsExisting,
-		CloudFileCachesCreated:  report.CloudFileCachesCreated,
-		CloudFileCachesExisting: report.CloudFileCachesExisting,
-		ArtifactsPlanned:        report.ArtifactsPlanned,
-		ArtifactsCopied:         report.ArtifactsCopied,
-		ArtifactsExisting:       report.ArtifactsExisting,
+		LegacyFilms:                report.LegacyFilms,
+		LegacyMagnetCaches:         report.LegacyMagnetCaches,
+		SkippedLegacyFilms:         len(report.SkippedLegacyFilms),
+		SkippedMagnetCaches:        len(report.SkippedMagnetCaches),
+		WorksCreated:               report.WorksCreated,
+		WorksExisting:              report.WorksExisting,
+		FilesCreated:               report.FilesCreated,
+		FilesExisting:              report.FilesExisting,
+		SourceMagnetsCreated:       report.SourceMagnetsCreated,
+		SourceMagnetsExisting:      report.SourceMagnetsExisting,
+		ArtifactsPlanned:           report.ArtifactsPlanned,
+		ArtifactMovesPlanned:       report.ArtifactMovesPlanned,
+		ArtifactDeletesPlanned:     report.ArtifactDeletesPlanned,
+		ArtifactDirectoriesPlanned: report.ArtifactDirectoriesPlanned,
+		ArtifactsMoved:             report.ArtifactsMoved,
+		ArtifactsDeleted:           report.ArtifactsDeleted,
+		ArtifactDirectoriesRemoved: report.ArtifactDirectoriesRemoved,
+		ArtifactsExisting:          report.ArtifactsExisting,
 	}
 }
 
@@ -86,6 +93,13 @@ func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 			if dryRun == apply {
 				return fmt.Errorf("specify exactly one of --dry-run or --apply")
 			}
+			info, err := os.Stat(dbPath)
+			if err != nil {
+				return fmt.Errorf("inspect SQLite database: %w", err)
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("--db must name a regular file: %s", dbPath)
+			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -93,31 +107,51 @@ func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-				NamingStrategy: schema.NamingStrategy{TablePrefix: tablePrefix},
-				Logger:         logger.Default.LogMode(logger.Silent),
-			})
+			readOnlyURL := url.URL{Scheme: "file", Path: dbPath, RawQuery: "mode=ro"}
+			preflightDB, err := openMigrationDatabase(readOnlyURL.String(), tablePrefix)
 			if err != nil {
-				return fmt.Errorf("open SQLite database: %w", err)
+				return fmt.Errorf("open read-only SQLite database: %w", err)
 			}
-			sqlDB, err := database.DB()
+			preflightSQL, err := preflightDB.DB()
 			if err != nil {
-				return fmt.Errorf("get SQLite database handle: %w", err)
+				return fmt.Errorf("get read-only SQLite database handle: %w", err)
 			}
-			defer sqlDB.Close()
 			conf.Conf = conf.DefaultConfig(dataDir)
 			conf.Conf.Database.DBFile = dbPath
 			conf.Conf.Database.TablePrefix = tablePrefix
-			if err := appdb.Init(database); err != nil {
-				return fmt.Errorf("initialize migration database schema: %w", err)
-			}
 			mode := migrationmedia.MigrationApply
 			if dryRun {
 				mode = migrationmedia.MigrationDryRun
 			}
-			report, migrationErr := migrationmedia.MigrateLegacyMediaWithOptions(cmd.Context(), database, migrationmedia.MigrationOptions{
+			options := migrationmedia.MigrationOptions{
 				Mode: mode, DataDir: dataDir, JournalPath: journalPath, StorageMapping: mapping,
-			})
+			}
+			preflightOptions := options
+			preflightOptions.Mode = migrationmedia.MigrationDryRun
+			preflightReport, preflightErr := migrationmedia.MigrateLegacyMediaWithOptions(cmd.Context(), preflightDB, preflightOptions)
+			if err := preflightSQL.Close(); err != nil && preflightErr == nil {
+				return fmt.Errorf("close read-only SQLite database: %w", err)
+			}
+			if mode == migrationmedia.MigrationDryRun || preflightErr != nil {
+				if err := json.NewEncoder(cmd.OutOrStdout()).Encode(compactMigrationReport(preflightReport)); err != nil {
+					return fmt.Errorf("write migration report: %w", err)
+				}
+				return preflightErr
+			}
+
+			database, err := openMigrationDatabase(dbPath, tablePrefix)
+			if err != nil {
+				return fmt.Errorf("open read-write SQLite database: %w", err)
+			}
+			sqlDB, err := database.DB()
+			if err != nil {
+				return fmt.Errorf("get read-write SQLite database handle: %w", err)
+			}
+			defer sqlDB.Close()
+			if err := appdb.Init(database); err != nil {
+				return fmt.Errorf("initialize migration database schema: %w", err)
+			}
+			report, migrationErr := migrationmedia.MigrateLegacyMediaWithOptions(cmd.Context(), database, options)
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(compactMigrationReport(report)); err != nil {
 				return fmt.Errorf("write migration report: %w", err)
 			}
@@ -134,6 +168,13 @@ func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 	command.Flags().BoolVar(&apply, "apply", false, "apply normalized database and artifact migration")
 	command.Flags().StringArrayVar(&mappingValues, "storage-map", nil, "legacy storage mapping source:primaryDir=storageID; repeatable")
 	return command
+}
+
+func openMigrationDatabase(dsn, tablePrefix string) (*gorm.DB, error) {
+	return gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{TablePrefix: tablePrefix},
+		Logger:         logger.Default.LogMode(logger.Silent),
+	})
 }
 
 func parseStorageMappings(values []string) (map[string]uint, error) {

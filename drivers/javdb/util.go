@@ -242,19 +242,9 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 		return model.EmbyFileObj{}, err
 	}
 	if existing, findErr := db.GetFilmWorkByIdentity(d.ID, DriverName, canonical); findErr == nil {
-		mergedTags := append(model.StringArray(nil), existing.Tags...)
-		seen := make(map[string]bool, len(mergedTags))
-		for _, tag := range mergedTags {
-			seen[tag] = true
-		}
-		for _, tag := range tags {
-			if !seen[tag] {
-				mergedTags = append(mergedTags, tag)
-				seen[tag] = true
-			}
-		}
+		mergedTags := mergeTags(existing.Tags, tags)
 		if len(mergedTags) != len(existing.Tags) {
-			if err := db.UpdateMediaWorkTags(existing.ID, mergedTags, existing.TagVersion+1); err != nil {
+			if err := db.MergePendingMediaWorkTags(existing.ID, mergedTags); err != nil {
 				return model.EmbyFileObj{}, err
 			}
 			existing.Tags = mergedTags
@@ -279,64 +269,37 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	}
 
 	cachingFilm := javFilms[0]
-	_, airavFilm, err := d.getAiravNamingAddr(cachingFilm)
-	if err != nil {
-		utils.Log.Info("addStar: airav详情页爬取失败", err)
-	}
-
-	tempCode, name := splitName(cachingFilm.Name)
-	item := open_ai.TranslateItem{
-		Origin: virtual_file.ClearFilmName(name),
-	}
-	if airavFilm.Name != "" {
-		_, candidateName := splitName(airavFilm.Title)
-		item.Candidate = virtual_file.ClearFilmName(candidateName)
-		cachingFilm.Synopsis = airavFilm.Synopsis
-	}
-
-	translations := open_ai.BatchTranslate([]open_ai.TranslateItem{item})
-	if len(translations) > 0 && translations[0] != "" {
-		translatedTitle := fmt.Sprintf("%s %s", tempCode, translations[0])
-		cachingFilm.Name = translatedTitle
-		cachingFilm.Title = translatedTitle
-	}
-
-	d.fetchFilmMeta(cachingFilm.Url, &cachingFilm)
-	cachingFilm.Actors = append(cachingFilm.Actors, "个人收藏")
-	for _, tag := range tags {
-		cachingFilm.Tags = append(cachingFilm.Tags, tag)
-	}
 
 	work, err := buildDiscoveredWork(d.ID, "个人收藏", cachingFilm)
 	if err != nil {
 		return model.EmbyFileObj{}, err
 	}
 	work.Code = canonical
+	work.Tags = mergeTags(nil, tags)
 	if err := db.UpsertDiscoveredWork(&work); err != nil {
 		return model.EmbyFileObj{}, err
 	}
-	translated := ""
-	_, translated = splitName(cachingFilm.Title)
-	if err := db.UpdateMediaWorkDetails(work.ID, translated, cachingFilm.Synopsis, model.StringArray(cachingFilm.Actors), model.StringArray(cachingFilm.Tags)); err != nil {
-		return model.EmbyFileObj{}, err
-	}
-	work.TranslatedTitle = translated
-	work.Synopsis = cachingFilm.Synopsis
-	work.Actors = model.StringArray(cachingFilm.Actors)
-	work.Tags = model.StringArray(cachingFilm.Tags)
 	file, err := db.EnsureSingleFilmFile(work.ID)
 	if err != nil {
 		return model.EmbyFileObj{}, err
 	}
-	identity := mediaIdentity(work)
-	if result := virtual_file.CacheImageAndNfo(virtual_file.MediaInfo{
-		Identity: &identity, Title: model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
-		Synopsis: work.Synopsis, ImgUrl: work.ImageURL, Actors: []string(work.Actors), Release: work.ReleaseDate, Tags: []string(work.Tags),
-	}); result == virtual_file.CreatedFailed {
-		utils.Log.Warnf("failed to publish JavDB favorite artifacts for %s", work.Code)
-	}
 	return virtual_file.ConvertMediaFileToEmbyFile(model.FilmFileWithWork{FilmFile: file, Work: work})
 
+}
+
+func mergeTags(existing model.StringArray, incoming []string) model.StringArray {
+	merged := append(model.StringArray(nil), existing...)
+	seen := make(map[string]bool, len(merged)+len(incoming))
+	for _, tag := range merged {
+		seen[tag] = true
+	}
+	for _, tag := range incoming {
+		if tag != "" && !seen[tag] {
+			merged = append(merged, tag)
+			seen[tag] = true
+		}
+	}
+	return merged
 }
 
 func createStarFilm(cachingFilm *model.EmbyFileObj) error {

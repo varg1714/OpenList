@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const CurrentTranslationVersion uint = 1
+
 var (
 	javCodePattern = regexp.MustCompile(`^[A-Z0-9]+(?:[-_.][A-Z0-9]+)*$`)
 	fc2CodePattern = regexp.MustCompile(`^FC2-PPV-[A-Z0-9]+(?:[-_][A-Z0-9]+)*$`)
@@ -126,20 +128,11 @@ type FilmFile struct {
 	PartIndex int  `gorm:"not null;uniqueIndex:idx_media_file_part;check:part_index >= 1"`
 	PartCount int  `gorm:"not null;check:part_count >= 1"`
 
-	SourcePath            string
-	SourceSize            int64
-	SourceFileFingerprint string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	SourcePath string
+	SourceSize int64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
-
-type MagnetFileEntry struct {
-	Path        string `json:"path"`
-	Size        int64  `json:"size"`
-	Fingerprint string `json:"fingerprint"`
-}
-
-type MagnetFileManifest []MagnetFileEntry
 
 type SourceMagnet struct {
 	ID          uint   `gorm:"primaryKey"`
@@ -147,28 +140,14 @@ type SourceMagnet struct {
 	MagnetURI   string `gorm:"not null"`
 	Fingerprint string `gorm:"not null;uniqueIndex:idx_source_magnet_fingerprint"`
 
-	Provider     string
-	Priority     int
-	Selected     bool `gorm:"index"`
-	Subtitle     bool
-	FileManifest MagnetFileManifest `gorm:"type:json;serializer:json"`
-	ScanAt       *time.Time
-	LastError    string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-}
-
-type CloudFileCache struct {
-	ID                uint              `gorm:"primaryKey"`
-	FilmFileID        uint              `gorm:"not null;uniqueIndex:idx_cloud_file_identity"`
-	StorageIdentity   string            `gorm:"not null;uniqueIndex:idx_cloud_file_identity;uniqueIndex:idx_cloud_remote_identity"`
-	Provider          string            `gorm:"not null"`
-	RemoteFileID      string            `gorm:"not null;uniqueIndex:idx_cloud_remote_identity"`
-	ProviderOptions   map[string]string `gorm:"type:json;serializer:json"`
-	MagnetFingerprint string            `gorm:"not null;index"`
-	VerifiedAt        *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	Provider  string
+	Priority  int
+	Selected  bool `gorm:"index"`
+	Subtitle  bool
+	ScanAt    *time.Time
+	LastError string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type FilmFileWithWork struct {

@@ -17,7 +17,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
-const currentTranslationVersion uint = 1
+const currentTranslationVersion = model.CurrentTranslationVersion
 
 var batchTranslateMediaWorks = open_ai.BatchTranslate
 
@@ -199,13 +199,9 @@ func sourceMagnetsFromMeta(meta av.Meta) []model.SourceMagnet {
 			continue
 		}
 		sum := sha256.Sum256([]byte(uri))
-		manifest := make(model.MagnetFileManifest, 0, len(magnet.GetFiles()))
-		for _, file := range magnet.GetFiles() {
-			manifest = append(manifest, model.MagnetFileEntry{Path: file.Name, Size: int64(file.Size)})
-		}
 		result = append(result, model.SourceMagnet{
 			MagnetURI: uri, Fingerprint: hex.EncodeToString(sum[:]), Provider: DriverName,
-			Priority: index, Selected: index == 0, Subtitle: magnet.IsSubTitle(), FileManifest: manifest, ScanAt: &now,
+			Priority: index, Selected: index == 0, Subtitle: magnet.IsSubTitle(), ScanAt: &now,
 		})
 	}
 	return result
@@ -236,14 +232,19 @@ func (d *Javdb) scanMediaSubtitles() {
 			}
 			continue
 		}
+		failed := false
 		for _, file := range files {
 			if err := virtual_file.SaveMediaSubtitles(identity, file.PartIndex, subtitles); err != nil {
 				next := time.Now().Add(24 * time.Hour)
 				if updateErr := db.UpdateMediaWorkSubtitleScan(work.ID, &next, err.Error()); updateErr != nil {
 					utils.Log.Warnf("failed to persist subtitle error for %s: %s", work.Code, updateErr)
 				}
-				continue
+				failed = true
+				break
 			}
+		}
+		if failed {
+			continue
 		}
 		if err := db.UpdateMediaWorkSubtitleScan(work.ID, nil, ""); err != nil {
 			utils.Log.Warnf("failed to complete subtitle scan for %s: %s", work.Code, err)

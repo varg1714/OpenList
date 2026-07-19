@@ -1,7 +1,6 @@
 package model
 
 import (
-	"reflect"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -18,7 +17,7 @@ func openMediaModelTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open SQLite database: %v", err)
 	}
-	if err := db.AutoMigrate(&FilmWork{}, &FilmFile{}, &SourceMagnet{}, &CloudFileCache{}); err != nil {
+	if err := db.AutoMigrate(&FilmWork{}, &FilmFile{}, &SourceMagnet{}); err != nil {
 		t.Fatalf("migrate media models: %v", err)
 	}
 	return db
@@ -55,30 +54,14 @@ func TestMediaModelConstraints(t *testing.T) {
 		t.Fatal("duplicate (WorkID, PartIndex) accepted")
 	}
 
-	manifest := MagnetFileManifest{
-		{Path: "ABP-123.mp4", Size: 1024, Fingerprint: "file-fingerprint"},
-	}
 	magnet := SourceMagnet{
-		WorkID:       work.ID,
-		MagnetURI:    "magnet:?xt=urn:btih:example",
-		Fingerprint:  "magnet-fingerprint",
-		Provider:     "provider-a",
-		FileManifest: manifest,
+		WorkID:      work.ID,
+		MagnetURI:   "magnet:?xt=urn:btih:example",
+		Fingerprint: "magnet-fingerprint",
+		Provider:    "provider-a",
 	}
 	if err := db.Create(&magnet).Error; err != nil {
 		t.Fatalf("create valid source magnet: %v", err)
-	}
-
-	cache := CloudFileCache{
-		FilmFileID:        file.ID,
-		StorageIdentity:   "storage-a",
-		Provider:          "provider-a",
-		RemoteFileID:      "remote-file-a",
-		ProviderOptions:   map[string]string{"quality": "original"},
-		MagnetFingerprint: magnet.Fingerprint,
-	}
-	if err := db.Create(&cache).Error; err != nil {
-		t.Fatalf("create valid cloud file cache: %v", err)
 	}
 
 	var fileWithWork FilmFileWithWork
@@ -87,30 +70,5 @@ func TestMediaModelConstraints(t *testing.T) {
 	}
 	if fileWithWork.Work.ID != work.ID {
 		t.Fatalf("preloaded work ID = %d, want %d", fileWithWork.Work.ID, work.ID)
-	}
-}
-
-func TestMagnetFileManifestJSONRoundTrip(t *testing.T) {
-	db := openMediaModelTestDB(t)
-	want := MagnetFileManifest{
-		{Path: "disc-1.mp4", Size: 2048, Fingerprint: "disc-1"},
-		{Path: "disc-2.mp4", Size: 4096, Fingerprint: "disc-2"},
-	}
-	magnet := SourceMagnet{
-		WorkID:       1,
-		MagnetURI:    "magnet:?xt=urn:btih:roundtrip",
-		Fingerprint:  "roundtrip",
-		FileManifest: want,
-	}
-	if err := db.Create(&magnet).Error; err != nil {
-		t.Fatalf("create source magnet: %v", err)
-	}
-
-	var got SourceMagnet
-	if err := db.First(&got, magnet.ID).Error; err != nil {
-		t.Fatalf("load source magnet: %v", err)
-	}
-	if !reflect.DeepEqual(got.FileManifest, want) {
-		t.Fatalf("manifest round trip = %#v, want %#v", got.FileManifest, want)
 	}
 }

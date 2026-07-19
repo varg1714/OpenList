@@ -129,7 +129,7 @@ func TestGetWhatLinkInfoReturnsDecodedScreenshots(t *testing.T) {
 
 func TestSyncMissAvFilmsUsesFilmWorkIdentityWithoutLegacyMagnetCache(t *testing.T) {
 	setupFC2SampleImageTest(t)
-	for _, value := range []interface{}{&model.CloudFileCache{}, &model.SourceMagnet{}, &model.FilmFile{}, &model.FilmWork{}} {
+	for _, value := range []interface{}{&model.SourceMagnet{}, &model.FilmFile{}, &model.FilmWork{}} {
 		if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(value).Error; err != nil {
 			t.Fatalf("reset %T: %v", value, err)
 		}

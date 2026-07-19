@@ -49,7 +49,7 @@ func (d *FC2) rematchMediaReleaseTime() {
 		if work.TranslatedTitle == "" && info.Title != "" {
 			translated := open_ai.Translate(info.Title)
 			if translated != "" {
-				if err := db.UpdateMediaWorkTranslation(work.ID, translated, 1); err != nil {
+				if err := db.UpdateMediaWorkTranslation(work.ID, translated, model.CurrentTranslationVersion); err != nil {
 					utils.Log.Warnf("failed to update FC2 title for %s: %s", work.Code, err)
 				}
 			}
@@ -164,8 +164,12 @@ func (d *FC2) refreshMediaNFOs() {
 		lastError := ""
 		if err != nil {
 			lastError = err.Error()
+			if updateErr := db.UpdateMediaWorkNFOResult(work.ID, work.NfoVersion, lastError); updateErr != nil {
+				utils.Log.Warnf("failed to update FC2 NFO error for %s: %s", work.Code, updateErr)
+			}
+			continue
 		}
-		if updateErr := db.UpdateMediaWorkNFOResult(work.ID, work.MetadataVersion, lastError); updateErr != nil {
+		if updateErr := db.UpdateMediaWorkNFOResult(work.ID, work.MetadataVersion, ""); updateErr != nil {
 			utils.Log.Warnf("failed to update FC2 NFO stage for %s: %s", work.Code, updateErr)
 		}
 	}

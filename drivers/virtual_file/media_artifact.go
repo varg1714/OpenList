@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
@@ -30,13 +29,11 @@ type MediaArtifactPaths struct {
 }
 
 func ResolveMediaArtifactPaths(identity MediaIdentity) (MediaArtifactPaths, error) {
-	storageID := strconv.FormatUint(uint64(identity.StorageID), 10)
 	components := []struct {
 		label string
 		value string
 	}{
 		{"source", identity.Source},
-		{"storage ID", storageID},
 		{"primary directory", identity.PrimaryDir},
 		{"code", identity.Code},
 	}
@@ -46,7 +43,7 @@ func ResolveMediaArtifactPaths(identity MediaIdentity) (MediaArtifactPaths, erro
 		}
 	}
 
-	root, err := filepath.Abs(filepath.Join(flags.DataDir, "emby", identity.Source, storageID, identity.PrimaryDir, identity.Code))
+	root, err := filepath.Abs(filepath.Join(flags.DataDir, "emby", identity.Source, identity.PrimaryDir, identity.Code))
 	if err != nil {
 		return MediaArtifactPaths{}, err
 	}
@@ -186,7 +183,7 @@ func ensureMediaArtifactRoot(identity MediaIdentity) error {
 	if err != nil {
 		return err
 	}
-	components := []string{"emby", identity.Source, strconv.FormatUint(uint64(identity.StorageID), 10), identity.PrimaryDir, identity.Code}
+	components := []string{"emby", identity.Source, identity.PrimaryDir, identity.Code}
 	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
 		return err
 	}

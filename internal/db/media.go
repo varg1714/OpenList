@@ -173,10 +173,9 @@ func ReplaceFilmFiles(workID uint, files []model.FilmFile) error {
 				files[i].ID = current.ID
 				keptIDs[current.ID] = struct{}{}
 				if err := tx.Model(&model.FilmFile{}).Where("id = ?", current.ID).Updates(map[string]interface{}{
-					"part_count":              files[i].PartCount,
-					"source_path":             files[i].SourcePath,
-					"source_size":             files[i].SourceSize,
-					"source_file_fingerprint": files[i].SourceFileFingerprint,
+					"part_count":  files[i].PartCount,
+					"source_path": files[i].SourcePath,
+					"source_size": files[i].SourceSize,
 				}).Error; err != nil {
 					return err
 				}
@@ -189,9 +188,6 @@ func ReplaceFilmFiles(workID uint, files []model.FilmFile) error {
 			}
 		}
 		if len(removedIDs) > 0 {
-			if err := tx.Where("film_file_id IN ?", removedIDs).Delete(&model.CloudFileCache{}).Error; err != nil {
-				return err
-			}
 			if err := tx.Where("id IN ?", removedIDs).Delete(&model.FilmFile{}).Error; err != nil {
 				return err
 			}
@@ -291,7 +287,7 @@ func QueryTagMediaWorks(source string, limit int) ([]model.FilmWork, error) {
 	var works []model.FilmWork
 	now := time.Now()
 	query := db.Where("source = ?", source).
-		Where("tags IS NULL OR tags = ?", "[]").
+		Where("(tags IS NULL OR tags = ? OR tag_scan_at IS NULL)", "[]").
 		Where("tag_next_retry_at IS NULL OR tag_next_retry_at <= ?", now).
 		Order("id ASC")
 	if limit > 0 {
@@ -301,6 +297,11 @@ func QueryTagMediaWorks(source string, limit int) ([]model.FilmWork, error) {
 }
 
 func UpdateMediaWorkTags(workID uint, tags model.StringArray, tagVersion uint) error {
+	var existing model.FilmWork
+	if err := db.Select("tags").First(&existing, workID).Error; err != nil {
+		return err
+	}
+	tags = mergeMediaTags(existing.Tags, tags)
 	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(map[string]interface{}{
 		"tags":              tags,
 		"tag_scan_at":       time.Now(),
@@ -308,6 +309,28 @@ func UpdateMediaWorkTags(workID uint, tags model.StringArray, tagVersion uint) e
 		"tag_last_error":    "",
 		"tag_version":       tagVersion,
 		"metadata_version":  gorm.Expr("metadata_version + 1"),
+	}).Error
+}
+
+func mergeMediaTags(existing, incoming model.StringArray) model.StringArray {
+	merged := append(model.StringArray(nil), existing...)
+	seen := make(map[string]bool, len(merged)+len(incoming))
+	for _, tag := range merged {
+		seen[tag] = true
+	}
+	for _, tag := range incoming {
+		if tag != "" && !seen[tag] {
+			merged = append(merged, tag)
+			seen[tag] = true
+		}
+	}
+	return merged
+}
+
+func MergePendingMediaWorkTags(workID uint, tags model.StringArray) error {
+	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(map[string]interface{}{
+		"tags":             tags,
+		"metadata_version": gorm.Expr("metadata_version + 1"),
 	}).Error
 }
 
@@ -427,15 +450,12 @@ func UpdateMediaWorkDMMPosterStatus(workID uint, status string) error {
 }
 
 func QuerySubtitleMediaWorks(source string, limit int) ([]model.FilmWork, error) {
-	var works []model.FilmWork
 	now := time.Now()
-	query := db.Where("source = ?", source).
-		Where("subtitle_next_retry_at IS NULL OR subtitle_next_retry_at <= ?", now).
-		Where("subtitle_scan_at IS NULL").
-		Order("id ASC")
+	query := db.Where("source = ? AND ((subtitle_scan_at IS NULL AND subtitle_next_retry_at IS NULL) OR (subtitle_next_retry_at IS NOT NULL AND subtitle_next_retry_at <= ?))", source, now).Order("id ASC")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
+	var works []model.FilmWork
 	return works, query.Find(&works).Error
 }
 
@@ -466,15 +486,6 @@ func UpdateMediaWorkNFOResult(workID, nfoVersion uint, lastError string) error {
 
 func DeleteFilmWork(workID uint) error {
 	return db.Transaction(func(tx *gorm.DB) error {
-		var fileIDs []uint
-		if err := tx.Model(&model.FilmFile{}).Where("work_id = ?", workID).Pluck("id", &fileIDs).Error; err != nil {
-			return err
-		}
-		if len(fileIDs) > 0 {
-			if err := tx.Where("film_file_id IN ?", fileIDs).Delete(&model.CloudFileCache{}).Error; err != nil {
-				return err
-			}
-		}
 		if err := tx.Where("work_id = ?", workID).Delete(&model.SourceMagnet{}).Error; err != nil {
 			return err
 		}
@@ -496,9 +507,6 @@ func DeleteMediaFile(fileID uint) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		var file model.FilmFile
 		if err := tx.First(&file, fileID).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("film_file_id = ?", fileID).Delete(&model.CloudFileCache{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&file).Error

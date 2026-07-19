@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -19,9 +20,10 @@ import (
 )
 
 var (
-	ErrIdentityCollision   = errors.New("legacy media identity collision")
-	ErrUnresolvedIdentity  = errors.New("legacy media identity is unresolved")
-	ErrIncompleteMigration = errors.New("legacy media migration is incomplete")
+	ErrIdentityCollision     = errors.New("legacy media identity collision")
+	ErrUnresolvedIdentity    = errors.New("legacy media identity is unresolved")
+	ErrIncompleteMigration   = errors.New("legacy media migration is incomplete")
+	ErrArtifactRootCollision = errors.New("media artifact root has multiple storage owners")
 )
 
 var (
@@ -73,6 +75,19 @@ type ValidationError struct {
 	Reason   string
 }
 
+type ArtifactRootCollisionError struct {
+	Source     string
+	PrimaryDir string
+	Code       string
+	StorageIDs []uint
+}
+
+func (e *ArtifactRootCollisionError) Error() string {
+	return fmt.Sprintf("%s for %s/%s/%s (storage IDs %v)", ErrArtifactRootCollision, e.Source, e.PrimaryDir, e.Code, e.StorageIDs)
+}
+
+func (e *ArtifactRootCollisionError) Unwrap() error { return ErrArtifactRootCollision }
+
 func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s for %s: %s", ErrIncompleteMigration, e.Identity, e.Reason)
 }
@@ -87,24 +102,27 @@ type MigrationReport struct {
 	SkippedLegacyFilms  []uint
 	SkippedMagnetCaches []uint
 
-	WorksCreated            int
-	WorksExisting           int
-	FilesCreated            int
-	FilesExisting           int
-	SourceMagnetsCreated    int
-	SourceMagnetsExisting   int
-	CloudFileCachesCreated  int
-	CloudFileCachesExisting int
-	ArtifactsPlanned        int
-	ArtifactsCopied         int
-	ArtifactsExisting       int
+	WorksCreated               int
+	WorksExisting              int
+	FilesCreated               int
+	FilesExisting              int
+	SourceMagnetsCreated       int
+	SourceMagnetsExisting      int
+	ArtifactsPlanned           int
+	ArtifactMovesPlanned       int
+	ArtifactDeletesPlanned     int
+	ArtifactDirectoriesPlanned int
+	ArtifactsMoved             int
+	ArtifactsCopied            int
+	ArtifactsDeleted           int
+	ArtifactDirectoriesRemoved int
+	ArtifactsExisting          int
 }
 
 type migrationPlan struct {
-	works       []*plannedWork
-	magnets     []*plannedMagnet
-	cloudCaches []*plannedCloudCache
-	report      MigrationReport
+	works   []*plannedWork
+	magnets []*plannedMagnet
+	report  MigrationReport
 }
 
 type plannedWork struct {
@@ -136,21 +154,8 @@ type plannedMagnet struct {
 	priority    int
 	selected    bool
 	subtitle    bool
-	manifest    model.MagnetFileManifest
 	scanAt      *time.Time
 	cacheIDs    []uint
-}
-
-type plannedCloudCache struct {
-	work              *plannedWork
-	partIndex         int
-	storageIdentity   string
-	provider          string
-	remoteFileID      string
-	providerOptions   map[string]string
-	magnetFingerprint string
-	verifiedAt        *time.Time
-	legacyCacheID     uint
 }
 
 type parsedLegacyFilm struct {
@@ -172,37 +177,37 @@ func MigrateLegacyMediaWithOptions(ctx context.Context, database *gorm.DB, optio
 	if err != nil {
 		return MigrationReport{}, err
 	}
-	var report MigrationReport
-	var plan *migrationPlan
+	plan, err := buildMigrationPlan(database.WithContext(ctx), options)
+	if err != nil {
+		return MigrationReport{}, err
+	}
+	report := plan.report
+	artifactPlan, err := inspectArtifacts(plan, options, &report)
+	if err != nil || options.Mode == MigrationDryRun {
+		return report, err
+	}
 	err = database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var err error
-		plan, err = buildMigrationPlan(tx, options)
-		if err != nil {
-			return err
-		}
-		report = plan.report
-		if options.Mode == MigrationDryRun {
-			return inspectArtifacts(plan, options, &report)
-		}
-		if err := inspectArtifacts(plan, options, &MigrationReport{}); err != nil {
-			return err
-		}
 		if err := populatePlan(tx, plan, &report); err != nil {
 			return err
 		}
 		return validatePlan(tx, plan)
 	})
-	if err != nil || options.Mode == MigrationDryRun {
+	if err != nil {
 		return report, err
 	}
-	if err := migrateArtifacts(plan, options, &report); err != nil {
+	if err := migrateArtifacts(artifactPlan, options, &report); err != nil {
+		return report, err
+	}
+	if err := database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return markVerifiedNFOState(tx, plan, options.DataDir)
+	}); err != nil {
 		return report, err
 	}
 	return report, nil
 }
 
 // ValidateLegacyMediaMigration rebuilds the expected identity graph from legacy rows and
-// verifies that every resolvable work, file, magnet, and cloud cache exists in normalized tables.
+// verifies that every resolvable work, file, and magnet exists in normalized tables.
 func ValidateLegacyMediaMigration(ctx context.Context, database *gorm.DB) (MigrationReport, error) {
 	var report MigrationReport
 	err := database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -271,13 +276,14 @@ func buildMigrationPlan(tx *gorm.DB, options MigrationOptions) (*migrationPlan, 
 				work: model.FilmWork{
 					StorageID: storageID, Source: source, Code: parsed.code,
 					SourceRef: sourceRef(source, parsed.code, film.Url), SourceURL: strings.TrimSpace(film.Url), PrimaryDir: primaryDir,
-					RawTitle: parsed.rawTitle, TranslatedTitle: film.Title, Synopsis: film.Synopsis, ImageURL: film.Image,
+					RawTitle: parsed.rawTitle, TranslatedTitle: normalizeLegacyTranslatedTitle(source, parsed.code, film.Title), Synopsis: film.Synopsis, ImageURL: film.Image,
 					ReleaseDate: film.Date, Actors: cloneArray(film.Actors), Tags: cloneArray(film.Tags),
 					SynopsisExcluded: film.SynopsisExcluded, SampleImageCount: film.SampleImageCount,
 					SampleImageComplete: film.SampleImageComplete, DMMPosterStatus: film.DMMPosterStatus,
 					MetadataVersion: 1, CreatedAt: film.CreatedAt,
 				},
 			}
+			applyDerivedTranslationState(&planned.work)
 			copyLegacyTimes(&planned.work, film)
 			workByKey[key] = planned
 			plan.works = append(plan.works, planned)
@@ -298,10 +304,58 @@ func buildMigrationPlan(tx *gorm.DB, options MigrationOptions) (*migrationPlan, 
 	slices.SortFunc(plan.works, func(a, b *plannedWork) int {
 		return strings.Compare(a.identity.String(), b.identity.String())
 	})
-	if err := buildCachePlan(plan, caches, storages); err != nil {
+	if err := buildCachePlan(plan, caches); err != nil {
+		return nil, err
+	}
+	if err := validateArtifactRootOwnership(tx, plan); err != nil {
 		return nil, err
 	}
 	return plan, nil
+}
+
+func validateArtifactRootOwnership(tx *gorm.DB, plan *migrationPlan) error {
+	type rootOwner struct {
+		storageID  uint
+		source     string
+		primaryDir string
+		code       string
+	}
+	owners := make([]rootOwner, 0, len(plan.works))
+	var existing []model.FilmWork
+	if tx.Migrator().HasTable(&model.FilmWork{}) {
+		if err := tx.Order("id ASC").Find(&existing).Error; err != nil {
+			return fmt.Errorf("load normalized works for artifact root preflight: %w", err)
+		}
+	}
+	for _, work := range existing {
+		owners = append(owners, rootOwner{storageID: work.StorageID, source: work.Source, primaryDir: work.PrimaryDir, code: work.Code})
+	}
+	for _, work := range plan.works {
+		owners = append(owners, rootOwner{storageID: work.identity.StorageID, source: work.identity.Source, primaryDir: work.work.PrimaryDir, code: work.identity.Code})
+	}
+	storageByRoot := make(map[string]map[uint]struct{})
+	ownerByRoot := make(map[string]rootOwner)
+	for _, owner := range owners {
+		key := owner.source + "\x00" + owner.primaryDir + "\x00" + owner.code
+		if storageByRoot[key] == nil {
+			storageByRoot[key] = make(map[uint]struct{})
+			ownerByRoot[key] = owner
+		}
+		storageByRoot[key][owner.storageID] = struct{}{}
+	}
+	for key, storageSet := range storageByRoot {
+		if len(storageSet) < 2 {
+			continue
+		}
+		storageIDs := make([]uint, 0, len(storageSet))
+		for storageID := range storageSet {
+			storageIDs = append(storageIDs, storageID)
+		}
+		slices.Sort(storageIDs)
+		owner := ownerByRoot[key]
+		return &ArtifactRootCollisionError{Source: owner.source, PrimaryDir: owner.primaryDir, Code: owner.code, StorageIDs: storageIDs}
+	}
+	return nil
 }
 
 func indexMediaStorages(storages []model.Storage) map[string][]model.Storage {
@@ -347,18 +401,6 @@ func canonicalMediaSource(value string) (string, bool) {
 		return "fc2", true
 	case "pornhub":
 		return "pornhub", true
-	default:
-		return "", false
-	}
-}
-
-func canonicalCloudProvider(value string) (string, bool) {
-	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), " ", ""))
-	switch normalized {
-	case "pikpak":
-		return "PikPak", true
-	case "115", "115cloud":
-		return "115 Cloud", true
 	default:
 		return "", false
 	}
@@ -461,6 +503,28 @@ func sourceRef(source, code, sourceURL string) string {
 	return code
 }
 
+func normalizeLegacyTranslatedTitle(source, code, value string) string {
+	title := strings.TrimSpace(value)
+	fields := strings.Fields(title)
+	if len(fields) == 0 {
+		return ""
+	}
+	prefix := fields[0]
+	var (
+		normalized string
+		err        error
+	)
+	if source == "fc2" {
+		normalized, err = normalizeFC2Code(prefix)
+	} else {
+		normalized, err = model.NormalizeMediaCode(source, prefix)
+	}
+	if err != nil || normalized != code {
+		return title
+	}
+	return strings.TrimSpace(strings.TrimPrefix(title, prefix))
+}
+
 func mergeLegacyFilm(work *plannedWork, film model.Film, parsed parsedLegacyFilm, primaryDir string) error {
 	if work.work.PrimaryDir != primaryDir {
 		ids := append(append([]uint(nil), work.filmIDs...), film.ID)
@@ -474,7 +538,7 @@ func mergeLegacyFilm(work *plannedWork, film model.Film, parsed parsedLegacyFilm
 	fillString(&work.work.SourceURL, legacyURL)
 	fillString(&work.work.SourceRef, sourceRef(work.identity.Source, work.identity.Code, legacyURL))
 	fillString(&work.work.RawTitle, parsed.rawTitle)
-	fillString(&work.work.TranslatedTitle, film.Title)
+	fillString(&work.work.TranslatedTitle, normalizeLegacyTranslatedTitle(work.identity.Source, work.identity.Code, film.Title))
 	fillString(&work.work.Synopsis, film.Synopsis)
 	fillString(&work.work.ImageURL, film.Image)
 	if work.work.ReleaseDate.IsZero() && !film.Date.IsZero() {
@@ -492,6 +556,7 @@ func mergeLegacyFilm(work *plannedWork, film model.Film, parsed parsedLegacyFilm
 	if work.work.CreatedAt.IsZero() || (!film.CreatedAt.IsZero() && film.CreatedAt.Before(work.work.CreatedAt)) {
 		work.work.CreatedAt = film.CreatedAt
 	}
+	applyDerivedTranslationState(&work.work)
 	return nil
 }
 
@@ -499,6 +564,48 @@ func copyLegacyTimes(work *model.FilmWork, film model.Film) {
 	work.SynopsisScanAt = latestTime(work.SynopsisScanAt, film.SynopsisScanAt)
 	work.SampleImageScanAt = latestTime(work.SampleImageScanAt, film.SampleImageScanAt)
 	work.DMMPosterScanAt = latestTime(work.DMMPosterScanAt, film.DMMPosterScanAt)
+}
+
+func applyDerivedTranslationState(work *model.FilmWork) {
+	if strings.TrimSpace(work.TranslatedTitle) == "" {
+		return
+	}
+	work.TranslationStatus = "success"
+	work.TranslationAttempts = 0
+	work.TranslationNextRetryAt = nil
+	work.TranslationLastError = ""
+	work.TranslationVersion = model.CurrentTranslationVersion
+}
+
+func markVerifiedNFOState(tx *gorm.DB, plan *migrationPlan, dataDir string) error {
+	for _, planned := range plan.works {
+		targetRoot, err := safeArtifactPath(dataDir, "emby", planned.identity.Source, planned.work.PrimaryDir, planned.identity.Code)
+		if err != nil {
+			return err
+		}
+		nfoPath := filepath.Join(targetRoot, planned.identity.Code+".nfo")
+		info, err := os.Lstat(nfoPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return &ArtifactMigrationError{Path: nfoPath, Reason: err.Error()}
+		}
+		if !info.Mode().IsRegular() {
+			return &ArtifactMigrationError{Path: nfoPath, Reason: "verified NFO target is not a regular file"}
+		}
+		var existing model.FilmWork
+		if err := tx.Where("storage_id = ? AND source = ? AND code = ?", planned.identity.StorageID, planned.identity.Source, planned.identity.Code).First(&existing).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&existing).Updates(map[string]interface{}{
+			"nfo_version":    existing.MetadataVersion,
+			"nfo_last_error": "",
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func latestTime(current *time.Time, candidate time.Time) *time.Time {
@@ -546,21 +653,14 @@ func buildFileTopology(work *plannedWork, films []model.Film, parsed map[uint]pa
 	return nil
 }
 
-func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache, storages []model.Storage) error {
+func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache) error {
 	workBySourceCode := make(map[string][]*plannedWork)
 	for _, work := range plan.works {
 		key := work.identity.Source + "\x00" + work.identity.Code
 		workBySourceCode[key] = append(workBySourceCode[key], work)
 	}
-	providerStorages := make(map[string][]model.Storage)
-	for _, storage := range storages {
-		if provider, ok := canonicalCloudProvider(storage.Driver); ok {
-			providerStorages[provider] = append(providerStorages[provider], storage)
-		}
-	}
 
 	magnetByKey := make(map[string]*plannedMagnet)
-	cloudIdentity := make(map[string]*plannedCloudCache)
 	for index := range caches {
 		cache := caches[index]
 		if strings.TrimSpace(cache.Magnet) == "" {
@@ -568,13 +668,11 @@ func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache, storages []
 			continue
 		}
 		work, err := resolveCacheWork(cache, workBySourceCode)
-		provider, cloudProvider := canonicalCloudProvider(cache.DriverType)
 		if err != nil {
 			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
 			continue
 		}
-		partIndex, err := cachePartIndex(cache, work)
-		if err != nil {
+		if _, err := cachePartIndex(cache, work); err != nil {
 			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
 			continue
 		}
@@ -592,32 +690,6 @@ func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache, storages []
 		magnet.subtitle = magnet.subtitle || cache.Subtitle
 		magnet.scanAt = latestTime(magnet.scanAt, cache.ScanAt)
 		magnet.cacheIDs = append(magnet.cacheIDs, cache.ID)
-		appendManifestPath(&magnet.manifest, cache.Name)
-
-		if !cloudProvider || strings.TrimSpace(cache.FileId) == "" {
-			continue
-		}
-		providerCandidates := providerStorages[provider]
-		if len(providerCandidates) != 1 {
-			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
-			continue
-		}
-		storageIdentity := strconv.FormatUint(uint64(providerCandidates[0].ID), 10)
-		identityKey := fmt.Sprintf("%s\x00%d", storageIdentity, partIndex) + "\x00" + work.identity.String()
-		planned := &plannedCloudCache{
-			work: work, partIndex: partIndex, storageIdentity: storageIdentity, provider: provider,
-			remoteFileID: cache.FileId, providerOptions: cloneMap(cache.Option), magnetFingerprint: fingerprint,
-			verifiedAt: latestTime(nil, cache.ScanAt), legacyCacheID: cache.ID,
-		}
-		if existing := cloudIdentity[identityKey]; existing != nil {
-			if existing.remoteFileID != planned.remoteFileID || existing.magnetFingerprint != planned.magnetFingerprint {
-				return &UnresolvedIdentityError{Entity: "magnet cache", LegacyIDs: []uint{existing.legacyCacheID, cache.ID}, Reason: "cloud cache identity has conflicting remote evidence"}
-			}
-			existing.verifiedAt = latestTime(existing.verifiedAt, cache.ScanAt)
-			continue
-		}
-		cloudIdentity[identityKey] = planned
-		plan.cloudCaches = append(plan.cloudCaches, planned)
 	}
 
 	for _, work := range plan.works {
@@ -631,7 +703,6 @@ func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache, storages []
 			magnet.selected = !selected
 			selected = true
 			priority++
-			slices.SortFunc(magnet.manifest, func(a, b model.MagnetFileEntry) int { return strings.Compare(a.Path, b.Path) })
 		}
 	}
 	return nil
@@ -698,19 +769,6 @@ func cachePartIndex(cache model.MagnetCache, work *plannedWork) (int, error) {
 	return parsed.partIndex, nil
 }
 
-func appendManifestPath(manifest *model.MagnetFileManifest, value string) {
-	path := strings.TrimSpace(value)
-	if path == "" {
-		return
-	}
-	for _, entry := range *manifest {
-		if entry.Path == path {
-			return
-		}
-	}
-	*manifest = append(*manifest, model.MagnetFileEntry{Path: path})
-}
-
 func populatePlan(tx *gorm.DB, plan *migrationPlan, report *MigrationReport) error {
 	for _, planned := range plan.works {
 		var existing model.FilmWork
@@ -743,7 +801,7 @@ func populatePlan(tx *gorm.DB, plan *migrationPlan, report *MigrationReport) err
 			row := model.SourceMagnet{
 				WorkID: magnet.work.workID, MagnetURI: magnet.magnetURI, Fingerprint: magnet.fingerprint,
 				Provider: magnet.provider, Priority: magnet.priority, Selected: magnet.selected,
-				Subtitle: magnet.subtitle, FileManifest: magnet.manifest, ScanAt: magnet.scanAt,
+				Subtitle: magnet.subtitle, ScanAt: magnet.scanAt,
 			}
 			if err := tx.Create(&row).Error; err != nil {
 				return fmt.Errorf("create source magnet for %s: %w", magnet.work.identity, err)
@@ -757,41 +815,14 @@ func populatePlan(tx *gorm.DB, plan *migrationPlan, report *MigrationReport) err
 			}
 			updates := model.SourceMagnet{
 				Provider: magnet.provider, Priority: magnet.priority, Selected: magnet.selected,
-				Subtitle: magnet.subtitle, FileManifest: magnet.manifest, ScanAt: magnet.scanAt,
+				Subtitle: magnet.subtitle, ScanAt: magnet.scanAt,
 			}
 			if err := tx.Model(&existing).
-				Select("Provider", "Priority", "Selected", "Subtitle", "FileManifest", "ScanAt").
+				Select("Provider", "Priority", "Selected", "Subtitle", "ScanAt").
 				Updates(updates).Error; err != nil {
 				return err
 			}
 			report.SourceMagnetsExisting++
-		}
-	}
-	for _, cache := range plan.cloudCaches {
-		fileID, err := plannedFileID(cache.work, cache.partIndex)
-		if err != nil {
-			return err
-		}
-		var existing model.CloudFileCache
-		err = tx.Where("film_file_id = ? AND storage_identity = ?", fileID, cache.storageIdentity).First(&existing).Error
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			row := model.CloudFileCache{
-				FilmFileID: fileID, StorageIdentity: cache.storageIdentity, Provider: cache.provider,
-				RemoteFileID: cache.remoteFileID, ProviderOptions: cache.providerOptions,
-				MagnetFingerprint: cache.magnetFingerprint, VerifiedAt: cache.verifiedAt,
-			}
-			if err := tx.Create(&row).Error; err != nil {
-				return fmt.Errorf("create cloud cache %d: %w", cache.legacyCacheID, err)
-			}
-			report.CloudFileCachesCreated++
-		case err != nil:
-			return err
-		default:
-			if existing.RemoteFileID != cache.remoteFileID || existing.Provider != cache.provider || existing.MagnetFingerprint != cache.magnetFingerprint {
-				return &UnresolvedIdentityError{Entity: "cloud cache", LegacyIDs: []uint{cache.legacyCacheID}, Reason: "normalized cache contains different remote evidence"}
-			}
-			report.CloudFileCachesExisting++
 		}
 	}
 	return nil
@@ -808,10 +839,26 @@ func ensureExistingWorkCompatible(tx *gorm.DB, existing *model.FilmWork, planned
 	fillEmptyUpdate(updates, "source_ref", existing.SourceRef, planned.work.SourceRef)
 	fillEmptyUpdate(updates, "source_url", existing.SourceURL, planned.work.SourceURL)
 	fillEmptyUpdate(updates, "raw_title", existing.RawTitle, planned.work.RawTitle)
-	fillEmptyUpdate(updates, "translated_title", existing.TranslatedTitle, planned.work.TranslatedTitle)
+	normalizedExistingTitle := normalizeLegacyTranslatedTitle(existing.Source, existing.Code, existing.TranslatedTitle)
+	if normalizedExistingTitle != strings.TrimSpace(existing.TranslatedTitle) {
+		updates["translated_title"] = normalizedExistingTitle
+	} else {
+		fillEmptyUpdate(updates, "translated_title", existing.TranslatedTitle, planned.work.TranslatedTitle)
+	}
 	fillEmptyUpdate(updates, "synopsis", existing.Synopsis, planned.work.Synopsis)
 	fillEmptyUpdate(updates, "image_url", existing.ImageURL, planned.work.ImageURL)
 	fillEmptyUpdate(updates, "dmm_poster_status", existing.DMMPosterStatus, planned.work.DMMPosterStatus)
+	if existing.TranslationStatus == "" && strings.TrimSpace(planned.work.TranslatedTitle) != "" {
+		updates["translation_status"] = "success"
+		updates["translation_attempts"] = 0
+		updates["translation_next_retry_at"] = nil
+		updates["translation_last_error"] = ""
+		updates["translation_version"] = model.CurrentTranslationVersion
+	}
+	if planned.work.NfoVersion > existing.NfoVersion {
+		updates["nfo_version"] = planned.work.NfoVersion
+		updates["nfo_last_error"] = ""
+	}
 	if existing.ReleaseDate.IsZero() && !planned.work.ReleaseDate.IsZero() {
 		updates["release_date"] = planned.work.ReleaseDate
 	}
@@ -914,30 +961,7 @@ func validatePlan(tx *gorm.DB, plan *migrationPlan) error {
 			return &ValidationError{Identity: magnet.work.identity, Reason: fmt.Sprintf("source magnet count is %d: %v", count, err)}
 		}
 	}
-	for _, cache := range plan.cloudCaches {
-		fileID, err := plannedFileID(cache.work, cache.partIndex)
-		if err != nil {
-			return &ValidationError{Identity: cache.work.identity, Reason: err.Error()}
-		}
-		var stored model.CloudFileCache
-		if err := tx.Where("film_file_id = ? AND storage_identity = ?", fileID, cache.storageIdentity).First(&stored).Error; err != nil {
-			return &ValidationError{Identity: cache.work.identity, Reason: fmt.Sprintf("cloud cache is missing: %v", err)}
-		}
-		if stored.RemoteFileID != cache.remoteFileID || stored.MagnetFingerprint != cache.magnetFingerprint {
-			return &ValidationError{Identity: cache.work.identity, Reason: "cloud cache evidence differs from legacy"}
-		}
-		if cache.verifiedAt != nil && (stored.VerifiedAt == nil || stored.VerifiedAt.Before(*cache.verifiedAt)) {
-			return &ValidationError{Identity: cache.work.identity, Reason: "cloud cache verification time is older than legacy evidence"}
-		}
-	}
 	return nil
-}
-
-func plannedFileID(work *plannedWork, partIndex int) (uint, error) {
-	if partIndex < 1 || partIndex > len(work.files) || work.files[partIndex-1].fileID == 0 {
-		return 0, fmt.Errorf("work %s part %d has no normalized file identity", work.identity, partIndex)
-	}
-	return work.files[partIndex-1].fileID, nil
 }
 
 func fillString(target *string, value string) {
@@ -968,17 +992,6 @@ func unionArrays(current, additional model.StringArray) model.StringArray {
 
 func cloneArray(value model.StringArray) model.StringArray {
 	return append(model.StringArray(nil), value...)
-}
-
-func cloneMap(value map[string]string) map[string]string {
-	if value == nil {
-		return nil
-	}
-	result := make(map[string]string, len(value))
-	for key, item := range value {
-		result[key] = item
-	}
-	return result
 }
 
 func magnetFingerprint(uri string) string {

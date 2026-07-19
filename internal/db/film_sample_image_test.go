@@ -25,7 +25,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	db = testDB
-	if err := AutoMigrate(new(model.Film), new(model.MagnetCache), new(model.FilmWork), new(model.FilmFile), new(model.SourceMagnet), new(model.CloudFileCache)); err != nil {
+	if err := AutoMigrate(new(model.Film), new(model.MagnetCache), new(model.FilmWork), new(model.FilmFile), new(model.SourceMagnet)); err != nil {
 		panic(err)
 	}
 

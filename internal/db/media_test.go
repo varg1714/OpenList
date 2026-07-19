@@ -1,7 +1,7 @@
 package db
 
 import (
-	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -136,6 +136,26 @@ func TestUpdateMediaWorkTranslationPreservesOtherStageState(t *testing.T) {
 	}
 }
 
+func TestUpdateMediaWorkTagsPreservesCallerTags(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+	work := createMediaTestWork(t, 1, "javdb", "ABP-123", "actor")
+	work.Tags = model.StringArray{"JavDB-TOP250-2026"}
+	if err := db.Model(&work).Update("tags", work.Tags).Error; err != nil {
+		t.Fatalf("seed caller tags: %v", err)
+	}
+	if err := UpdateMediaWorkTags(work.ID, model.StringArray{"high-definition", "JavDB-TOP250-2026"}, 1); err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+	stored, err := GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatalf("get tagged work: %v", err)
+	}
+	want := model.StringArray{"JavDB-TOP250-2026", "high-definition"}
+	if !reflect.DeepEqual(stored.Tags, want) {
+		t.Fatalf("merged tags = %#v, want %#v", stored.Tags, want)
+	}
+}
+
 func TestUpdateMediaWorkSynopsisRetryRecordsStageStateOnly(t *testing.T) {
 	setupMediaRepositoryTestDB(t)
 
@@ -166,6 +186,34 @@ func TestUpdateMediaWorkSynopsisRetryRecordsStageStateOnly(t *testing.T) {
 	}
 	if stored.TranslatedTitle != work.TranslatedTitle || stored.MetadataVersion != work.MetadataVersion {
 		t.Fatalf("retry update changed unowned fields: %+v", stored)
+	}
+}
+
+func TestQuerySubtitleMediaWorksIncludesDueRetriesOnly(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+
+	now := time.Now()
+	completedAt := now.Add(-2 * time.Hour)
+	futureRetry := now.Add(time.Hour)
+	dueRetry := now.Add(-time.Hour)
+	works := []model.FilmWork{
+		{StorageID: 1, Source: "javdb", Code: "NEW", PrimaryDir: "actor"},
+		{StorageID: 1, Source: "javdb", Code: "DONE", PrimaryDir: "actor", SubtitleScanAt: &completedAt},
+		{StorageID: 1, Source: "javdb", Code: "DUE", PrimaryDir: "actor", SubtitleScanAt: &completedAt, SubtitleNextRetryAt: &dueRetry},
+		{StorageID: 1, Source: "javdb", Code: "WAIT", PrimaryDir: "actor", SubtitleScanAt: &completedAt, SubtitleNextRetryAt: &futureRetry},
+	}
+	for index := range works {
+		if err := db.Create(&works[index]).Error; err != nil {
+			t.Fatalf("create subtitle fixture %s: %v", works[index].Code, err)
+		}
+	}
+
+	selected, err := QuerySubtitleMediaWorks("javdb", 0)
+	if err != nil {
+		t.Fatalf("query subtitle works: %v", err)
+	}
+	if len(selected) != 2 || selected[0].Code != "NEW" || selected[1].Code != "DUE" {
+		t.Fatalf("selected subtitle works = %#v, want NEW and DUE", selected)
 	}
 }
 
@@ -326,7 +374,7 @@ func TestGetFilmFileWithWorkUsesConfiguredTablePrefix(t *testing.T) {
 	}
 }
 
-func TestReplaceFilmFilesPreservesIDsAndRemovesDeletedCaches(t *testing.T) {
+func TestReplaceFilmFilesPreservesIDs(t *testing.T) {
 	setupMediaRepositoryTestDB(t)
 	work := createMediaTestWork(t, 1, "fc2", "FC2-PPV-STABLE", "actor")
 	if err := ReplaceFilmFiles(work.ID, []model.FilmFile{
@@ -339,16 +387,6 @@ func TestReplaceFilmFilesPreservesIDsAndRemovesDeletedCaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list initial parts: %v", err)
 	}
-	for _, file := range initial {
-		cache := model.CloudFileCache{
-			FilmFileID: file.ID, StorageIdentity: "storage", Provider: "provider",
-			RemoteFileID: "remote-" + file.SourcePath, MagnetFingerprint: "fingerprint",
-		}
-		if err := db.Create(&cache).Error; err != nil {
-			t.Fatalf("create cache for part %d: %v", file.PartIndex, err)
-		}
-	}
-
 	if err := ReplaceFilmFiles(work.ID, []model.FilmFile{
 		{PartIndex: 1, PartCount: 2, SourcePath: "part-1-updated"},
 		{PartIndex: 2, PartCount: 2, SourcePath: "part-2"},
@@ -362,12 +400,6 @@ func TestReplaceFilmFilesPreservesIDsAndRemovesDeletedCaches(t *testing.T) {
 	if unchanged[0].ID != initial[0].ID || unchanged[1].ID != initial[1].ID {
 		t.Fatalf("film file IDs changed: initial=%+v replacement=%+v", initial, unchanged)
 	}
-	for _, file := range unchanged {
-		if _, err := GetCloudFileCache("storage", file.ID, "fingerprint"); err != nil {
-			t.Fatalf("cache for preserved part %d was not preserved: %v", file.PartIndex, err)
-		}
-	}
-
 	if err := ReplaceFilmFiles(work.ID, []model.FilmFile{{PartIndex: 1, PartCount: 1, SourcePath: "part-1-final"}}); err != nil {
 		t.Fatalf("remove second part: %v", err)
 	}
@@ -377,9 +409,6 @@ func TestReplaceFilmFilesPreservesIDsAndRemovesDeletedCaches(t *testing.T) {
 	}
 	if len(final) != 1 || final[0].ID != initial[0].ID {
 		t.Fatalf("final film files = %+v, want preserved part 1 ID %d", final, initial[0].ID)
-	}
-	if _, err := GetCloudFileCache("storage", initial[1].ID, "fingerprint"); !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("removed part cache error = %v, want record not found", err)
 	}
 }
 
@@ -403,7 +432,7 @@ func TestListFilmFilesWithWorksOrdersAndProjectsTypedRows(t *testing.T) {
 	}
 }
 
-func TestDeleteMediaFileDeletesOnlyOneFileAndItsCache(t *testing.T) {
+func TestDeleteMediaFileDeletesOnlyOneFile(t *testing.T) {
 	setupMediaRepositoryTestDB(t)
 	work := createMediaTestWork(t, 1, "javdb", "ABP-DELETE", "actor")
 	if err := ReplaceFilmFiles(work.ID, []model.FilmFile{{PartIndex: 1, PartCount: 2}, {PartIndex: 2, PartCount: 2}}); err != nil {
@@ -411,10 +440,6 @@ func TestDeleteMediaFileDeletesOnlyOneFileAndItsCache(t *testing.T) {
 	}
 	files, err := ListFilmFiles(work.ID)
 	if err != nil {
-		t.Fatal(err)
-	}
-	cache := model.CloudFileCache{FilmFileID: files[0].ID, StorageIdentity: "storage", Provider: "provider", RemoteFileID: "remote", MagnetFingerprint: "fingerprint"}
-	if err := db.Create(&cache).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := DeleteMediaFile(files[0].ID); err != nil {
@@ -426,9 +451,6 @@ func TestDeleteMediaFileDeletesOnlyOneFileAndItsCache(t *testing.T) {
 	}
 	if len(remaining) != 1 || remaining[0].ID != files[1].ID {
 		t.Fatalf("remaining files = %+v", remaining)
-	}
-	if _, err := GetCloudFileCache("storage", files[0].ID, "fingerprint"); !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("deleted file cache error = %v, want record not found", err)
 	}
 }
 
@@ -465,7 +487,7 @@ func TestReplaceFilmFilesRejectsNonContiguousParts(t *testing.T) {
 }
 
 func TestLegacyAndNewTablesCoexist(t *testing.T) {
-	tables := []string{"films", "magnet_caches", "film_works", "film_files", "source_magnets", "cloud_file_caches"}
+	tables := []string{"films", "magnet_caches", "film_works", "film_files", "source_magnets"}
 	for _, name := range tables {
 		if !db.Migrator().HasTable(name) {
 			t.Fatalf("table %q does not exist after migration", name)

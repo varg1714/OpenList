@@ -15,8 +15,27 @@ import (
 )
 
 func (d *FC2) cloudPlayMedia(ctx context.Context, args model.LinkArgs, file model.FilmFileWithWork) (*model.Link, error) {
-	return tool.CloudPlayMedia(ctx, args, tool.CloudPlayRequest{
-		Provider: d.CloudPlayDriverType, DriverPath: d.CloudPlayDownloadPath, File: file, MagnetGetter: d.mediaMagnets,
+	fileName, err := model.BuildMediaFileName(file.Work.Code, file.PartIndex, file.PartCount)
+	if err != nil {
+		return nil, err
+	}
+	return tool.CloudPlay(ctx, args, d.CloudPlayDriverType, d.CloudPlayDownloadPath, &model.EmbyFileObj{
+		ObjThumb: model.ObjThumb{Object: model.Object{
+			Name:     fileName,
+			Path:     file.Work.PrimaryDir,
+			IsFolder: false,
+		}},
+		WorkID:     file.WorkID,
+		FilmFileID: file.ID,
+	}, func(_ model.Obj) (string, error) {
+		magnets, err := d.mediaMagnets(ctx, file.Work)
+		if err != nil {
+			return "", err
+		}
+		if len(magnets) == 0 {
+			return "", fmt.Errorf("no source magnet found for %s", file.Work.Code)
+		}
+		return magnets[0].MagnetURI, nil
 	})
 }
 
@@ -36,13 +55,9 @@ func (d *FC2) mediaMagnets(_ context.Context, work model.FilmWork) ([]model.Sour
 			continue
 		}
 		sum := sha256.Sum256([]byte(uri))
-		manifest := make(model.MagnetFileManifest, 0, len(magnet.GetFiles()))
-		for _, sourceFile := range magnet.GetFiles() {
-			manifest = append(manifest, model.MagnetFileEntry{Path: sourceFile.Name, Size: int64(sourceFile.Size)})
-		}
 		result = append(result, model.SourceMagnet{
 			MagnetURI: uri, Fingerprint: hex.EncodeToString(sum[:]), Provider: "fc2", Priority: index,
-			Selected: index == 0, Subtitle: magnet.IsSubTitle(), FileManifest: manifest, ScanAt: &now,
+			Selected: index == 0, Subtitle: magnet.IsSubTitle(), ScanAt: &now,
 		})
 	}
 	return result, nil

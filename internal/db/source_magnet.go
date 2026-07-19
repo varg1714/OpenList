@@ -26,14 +26,13 @@ func UpsertSourceMagnets(workID uint, magnets []model.SourceMagnet) error {
 			}
 
 			if err := tx.Model(&existing).Updates(map[string]interface{}{
-				"magnet_uri":    magnet.MagnetURI,
-				"provider":      magnet.Provider,
-				"priority":      magnet.Priority,
-				"selected":      magnet.Selected,
-				"subtitle":      magnet.Subtitle,
-				"file_manifest": magnet.FileManifest,
-				"scan_at":       magnet.ScanAt,
-				"last_error":    magnet.LastError,
+				"magnet_uri": magnet.MagnetURI,
+				"provider":   magnet.Provider,
+				"priority":   magnet.Priority,
+				"selected":   magnet.Selected,
+				"subtitle":   magnet.Subtitle,
+				"scan_at":    magnet.ScanAt,
+				"last_error": magnet.LastError,
 			}).Error; err != nil {
 				return err
 			}

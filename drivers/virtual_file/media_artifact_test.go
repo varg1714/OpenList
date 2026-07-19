@@ -17,7 +17,7 @@ func TestMediaPosterAndFanartPathsUseWorkPrimaryDirAndCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve artifact paths: %v", err)
 	}
-	wantRoot := filepath.Join(flags.DataDir, "emby", "javdb", "12", "Actor A", "ABP-123")
+	wantRoot := filepath.Join(flags.DataDir, "emby", "javdb", "Actor A", "ABP-123")
 	if paths.Root != wantRoot || paths.Poster != filepath.Join(wantRoot, "poster.jpg") || paths.Background != filepath.Join(wantRoot, "ABP-123-background.jpg") {
 		t.Fatalf("artifact paths = %+v, want root %q", paths, wantRoot)
 	}
@@ -27,5 +27,13 @@ func TestMediaPosterAndFanartPathsUseWorkPrimaryDirAndCode(t *testing.T) {
 	}
 	if fanart != filepath.Join(wantRoot, "fanart2.jpg") {
 		t.Fatalf("fanart = %q", fanart)
+	}
+
+	otherStorage, err := ResolveMediaArtifactPaths(MediaIdentity{StorageID: 99, Source: "javdb", PrimaryDir: "Actor A", Code: "ABP-123"})
+	if err != nil {
+		t.Fatalf("resolve artifact paths for other storage: %v", err)
+	}
+	if otherStorage.Root != paths.Root {
+		t.Fatalf("storage-independent roots = %q and %q", paths.Root, otherStorage.Root)
 	}
 }

@@ -12,8 +12,20 @@ import (
 )
 
 func (d *Javdb) cloudPlayMedia(ctx context.Context, args model.LinkArgs, provider string, file model.FilmFileWithWork) (*model.Link, error) {
-	return tool.CloudPlayMedia(ctx, args, tool.CloudPlayRequest{
-		Provider: provider, DriverPath: d.CloudPlayDownloadPath, File: file, MagnetGetter: d.mediaMagnets,
+	fileName, err := model.BuildMediaFileName(file.Work.Code, file.PartIndex, file.PartCount)
+	if err != nil {
+		return nil, err
+	}
+	return tool.CloudPlay(ctx, args, provider, d.CloudPlayDownloadPath, &model.EmbyFileObj{
+		ObjThumb: model.ObjThumb{Object: model.Object{
+			Name:     fileName,
+			Path:     file.Work.PrimaryDir,
+			IsFolder: false,
+		}},
+		WorkID:     file.WorkID,
+		FilmFileID: file.ID,
+	}, func(obj model.Obj) (string, error) {
+		return d.getMagnet(obj, false)
 	})
 }
 
