@@ -185,6 +185,33 @@ func TestMigrateLegacyMediaAcceptsAlphanumericFC2Code(t *testing.T) {
 	}
 }
 
+func TestMigrateLegacyMediaSkipsCacheWithIncompatiblePartTopology(t *testing.T) {
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 2, Driver: "FC2", MountPath: "/fc2"})
+	film := model.Film{
+		Source: "fc2", Actor: "个人收藏", Name: "FC2-PPV-1628569.mp4", Url: "https://adult.contents.fc2.com/article/1628569/",
+	}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed single-file FC2 film: %v", err)
+	}
+	cache := model.MagnetCache{
+		DriverType: "fc2", Magnet: "magnet:?xt=urn:btih:incompatible-part",
+		Name: "FC2-PPV-1628569-cd2.mp4", Code: "FC2-PPV-1628569",
+	}
+	if err := database.Create(&cache).Error; err != nil {
+		t.Fatalf("seed incompatible cache: %v", err)
+	}
+
+	report, err := MigrateLegacyMedia(context.Background(), database)
+	if err != nil {
+		t.Fatalf("migrate incompatible cache: %v", err)
+	}
+	if !reflect.DeepEqual(report.SkippedMagnetCaches, []uint{cache.ID}) {
+		t.Fatalf("skipped caches = %v, want [%d]", report.SkippedMagnetCaches, cache.ID)
+	}
+	getWork(t, database, 2, "fc2", "FC2-PPV-1628569")
+}
+
 type completeFixture struct {
 	javdbURL, fc2URL, pornhubURL string
 	javdbMagnet, fc2Magnet       string

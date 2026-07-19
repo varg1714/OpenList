@@ -578,11 +578,8 @@ func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache, storages []
 		}
 		partIndex, err := cachePartIndex(cache, work)
 		if err != nil {
-			if cloudProvider {
-				plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
-				continue
-			}
-			return &UnresolvedIdentityError{Entity: "magnet cache", LegacyIDs: []uint{cache.ID}, Reason: err.Error()}
+			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
+			continue
 		}
 		fingerprint := magnetFingerprint(cache.Magnet)
 		magnetKey := work.identity.String() + "\x00" + fingerprint
