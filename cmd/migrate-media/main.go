@@ -17,6 +17,45 @@ import (
 	"gorm.io/gorm/schema"
 )
 
+type migrationReportOutput struct {
+	LegacyFilms         int `json:"LegacyFilms"`
+	LegacyMagnetCaches  int `json:"LegacyMagnetCaches"`
+	SkippedLegacyFilms  int `json:"SkippedLegacyFilms"`
+	SkippedMagnetCaches int `json:"SkippedMagnetCaches"`
+
+	WorksCreated            int `json:"WorksCreated"`
+	WorksExisting           int `json:"WorksExisting"`
+	FilesCreated            int `json:"FilesCreated"`
+	FilesExisting           int `json:"FilesExisting"`
+	SourceMagnetsCreated    int `json:"SourceMagnetsCreated"`
+	SourceMagnetsExisting   int `json:"SourceMagnetsExisting"`
+	CloudFileCachesCreated  int `json:"CloudFileCachesCreated"`
+	CloudFileCachesExisting int `json:"CloudFileCachesExisting"`
+	ArtifactsPlanned        int `json:"ArtifactsPlanned"`
+	ArtifactsCopied         int `json:"ArtifactsCopied"`
+	ArtifactsExisting       int `json:"ArtifactsExisting"`
+}
+
+func compactMigrationReport(report migrationmedia.MigrationReport) migrationReportOutput {
+	return migrationReportOutput{
+		LegacyFilms:             report.LegacyFilms,
+		LegacyMagnetCaches:      report.LegacyMagnetCaches,
+		SkippedLegacyFilms:      len(report.SkippedLegacyFilms),
+		SkippedMagnetCaches:     len(report.SkippedMagnetCaches),
+		WorksCreated:            report.WorksCreated,
+		WorksExisting:           report.WorksExisting,
+		FilesCreated:            report.FilesCreated,
+		FilesExisting:           report.FilesExisting,
+		SourceMagnetsCreated:    report.SourceMagnetsCreated,
+		SourceMagnetsExisting:   report.SourceMagnetsExisting,
+		CloudFileCachesCreated:  report.CloudFileCachesCreated,
+		CloudFileCachesExisting: report.CloudFileCachesExisting,
+		ArtifactsPlanned:        report.ArtifactsPlanned,
+		ArtifactsCopied:         report.ArtifactsCopied,
+		ArtifactsExisting:       report.ArtifactsExisting,
+	}
+}
+
 func main() {
 	command := NewCommand(os.Stdout, os.Stderr)
 	if err := command.Execute(); err != nil {
@@ -75,7 +114,7 @@ func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 			report, migrationErr := migrationmedia.MigrateLegacyMediaWithOptions(cmd.Context(), database, migrationmedia.MigrationOptions{
 				Mode: mode, DataDir: dataDir, JournalPath: journalPath, StorageMapping: mapping,
 			})
-			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(report); err != nil {
+			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(compactMigrationReport(report)); err != nil {
 				return fmt.Errorf("write migration report: %w", err)
 			}
 			return migrationErr

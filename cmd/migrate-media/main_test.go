@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	migrationmedia "github.com/OpenListTeam/OpenList/v4/internal/migration/media"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -40,7 +39,7 @@ func TestMigrateMediaCommandDryRunDoesNotWriteNormalizedDataOrJournal(t *testing
 	if err := command.Execute(); err != nil {
 		t.Fatalf("dry-run command: %v, stderr=%s", err, stderr.String())
 	}
-	var report migrationmedia.MigrationReport
+	var report migrationReportOutput
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("decode dry-run report: %v; output=%s", err, stdout.String())
 	}
@@ -61,7 +60,7 @@ func TestMigrateMediaCommandApplyPrintsStructuredReport(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("apply command: %v, stderr=%s", err, stderr.String())
 	}
-	var report migrationmedia.MigrationReport
+	var report migrationReportOutput
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("decode apply report: %v; output=%s", err, stdout.String())
 	}
@@ -79,7 +78,7 @@ func TestMigrateMediaCommandApplySupportsPrefixedSQLiteSchema(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("prefixed apply command: %v, stderr=%s", err, stderr.String())
 	}
-	var report migrationmedia.MigrationReport
+	var report migrationReportOutput
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("decode prefixed report: %v; output=%s", err, stdout.String())
 	}
