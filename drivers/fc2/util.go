@@ -1,6 +1,7 @@
 package fc2
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -36,9 +37,8 @@ func (d *FC2) findMagnet(url string) (string, error) {
 	return res.String(), err
 }
 
-func (d *FC2) getFilms(urlFunc func(index int) string) ([]model.EmbyFileObj, error) {
+func (d *FC2) getFilms(primaryDir string, urlFunc func(index int) string) ([]model.EmbyFileObj, error) {
 
-	var result []model.EmbyFileObj
 	var filmIds []string
 	page := 1
 	preSize := len(filmIds)
@@ -48,7 +48,7 @@ func (d *FC2) getFilms(urlFunc func(index int) string) ([]model.EmbyFileObj, err
 		ids, err2 := d.getFc2DailyPageFilms(urlFunc(page))
 		if err2 != nil && !strings.Contains(err2.Error(), "Not Found") {
 			utils.Log.Warnf("影片爬取失败: %s", err2.Error())
-			return result, nil
+			return nil, err2
 		} else {
 			page++
 			preSize = len(filmIds)
@@ -57,36 +57,32 @@ func (d *FC2) getFilms(urlFunc func(index int) string) ([]model.EmbyFileObj, err
 
 	}
 
-	unCachedFilms := db.QueryNoMagnetFilms(filmIds)
-	if len(unCachedFilms) == 0 {
-		return result, nil
-	}
-
-	unMissedFilms := db.QueryUnMissedFilms(unCachedFilms)
-	if len(unMissedFilms) == 0 {
-		return result, nil
-	}
-
-	utils.Log.Infof("以下影片首次扫描到需添加入库：%v", unCachedFilms)
-	var notExitedFilms []string
-	for _, id := range unCachedFilms {
-		_, err := d.addStar(id, []string{})
+	for _, id := range filmIds {
+		work, err := buildDiscoveredWork(d.ID, primaryDir, id, id, "", "")
 		if err != nil {
-			notExitedFilms = append(notExitedFilms, id)
+			return nil, err
 		}
-		time.Sleep(time.Duration(d.ScanTimeLimit) * time.Second)
-	}
-
-	if len(notExitedFilms) > 0 {
-		utils.Log.Infof("以下影片未获取到下载信息：%v", notExitedFilms)
-		err := db.CreateMissedFilms(notExitedFilms)
-		if err != nil {
-			utils.Log.Warnf("影片信息保存失败: %s", err.Error())
+		if err := db.UpsertDiscoveredWork(&work); err != nil {
+			return nil, err
+		}
+		if _, err := db.EnsureSingleFilmFile(work.ID); err != nil {
+			return nil, err
 		}
 	}
+	return virtual_file.ListMediaFiles(d.ID, "fc2", primaryDir)
 
-	return result, nil
+}
 
+func buildDiscoveredWork(storageID uint, primaryDir, code, sourceURL, rawTitle, imageURL string) (model.FilmWork, error) {
+	canonical, err := model.NormalizeMediaCode("fc2", code)
+	if err != nil {
+		return model.FilmWork{}, err
+	}
+	return model.FilmWork{
+		StorageID: storageID, Source: "fc2", Code: canonical,
+		SourceRef: canonical, SourceURL: sourceURL, PrimaryDir: primaryDir,
+		RawTitle: rawTitle, ImageURL: imageURL,
+	}, nil
 }
 
 func (d *FC2) getPageInfo(urlFunc func(index int) string, index int, data []model.EmbyFileObj) ([]model.EmbyFileObj, bool, error) {
@@ -161,7 +157,12 @@ func (d *FC2) getPageInfo(urlFunc func(index int) string, index int, data []mode
 }
 
 func (d *FC2) getStars() []model.EmbyFileObj {
-	return virtual_file.GetStorageFilms("fc2", "个人收藏", false)
+	films, err := virtual_file.ListMediaFiles(d.ID, "fc2", "个人收藏")
+	if err != nil {
+		utils.Log.Warnf("failed to list FC2 favorite works: %s", err)
+		return nil
+	}
+	return films
 }
 
 func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
@@ -170,15 +171,20 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 		return model.EmbyFileObj{}, nil
 	}
 
-	fc2Id := code
-	if !strings.HasPrefix(fc2Id, "FC2-PPV") {
-		fc2Id = fmt.Sprintf("FC2-PPV-%s", code)
+	fc2Id, err := model.NormalizeMediaCode("fc2", code)
+	if err != nil {
+		return model.EmbyFileObj{}, err
 	}
 
-	// 1. get cache from db
-	magnetCache := db.QueryMagnetCacheByCode(fc2Id)
-	if magnetCache.Magnet != "" {
-		return model.EmbyFileObj{}, errors.New("已存在该文件")
+	if existing, findErr := db.GetFilmWorkByIdentity(d.ID, "fc2", fc2Id); findErr == nil {
+		files, err := db.ListFilmFiles(existing.ID)
+		if err != nil {
+			return model.EmbyFileObj{}, err
+		}
+		if len(files) == 0 {
+			return model.EmbyFileObj{}, errors.New("existing FC2 work has no files")
+		}
+		return virtual_file.ConvertMediaFileToEmbyFile(model.FilmFileWithWork{FilmFile: files[0], Work: existing})
 	}
 
 	// 2. get magnet from suke
@@ -190,7 +196,10 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 
 		sukeMeta, err = av.GetMetaFromSuke(code)
 		if err == nil && len(sukeMeta.Magnets) > 0 {
-			fc2Id = code
+			fc2Id, err = model.NormalizeMediaCode("fc2", code)
+			if err != nil {
+				return model.EmbyFileObj{}, err
+			}
 		} else {
 			return model.EmbyFileObj{}, errors.New("查询结果为空")
 		}
@@ -199,8 +208,6 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 
 	// 3. translate film name
 	title := open_ai.Translate(virtual_file.ClearFilmName(sukeMeta.Magnets[0].GetName()))
-	magnet := sukeMeta.Magnets[0].GetMagnet()
-
 	// 4. save film info
 
 	// 4.1 get film thumbnail
@@ -219,76 +226,51 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	if len(cachingFiles) > 0 {
 		cachingFiles[0].Thumbnail.Thumbnail = ppvFilmInfo.Thumb()
 	}
-
-	// 4.3 save the magnets info
-	var magnetCaches []model.MagnetCache
-	for _, file := range cachingFiles {
-		magnetCaches = append(magnetCaches, model.MagnetCache{
-			DriverType: "fc2",
-			Magnet:     magnet,
-			Name:       file.Name,
-			Code:       av.GetFilmCode(file.Name),
-			ScanAt:     time.Now(),
-		})
+	if len(cachingFiles) == 0 {
+		return model.EmbyFileObj{}, errors.New("磁力清单为空")
 	}
-	err = db.BatchCreateMagnetCache(magnetCaches)
+	work, err := buildDiscoveredWork(d.ID, "个人收藏", fc2Id, fc2Id, title, ppvFilmInfo.Thumb())
 	if err != nil {
-		utils.Log.Warn("failed to cache film magnet:", err.Error())
 		return model.EmbyFileObj{}, err
 	}
-
-	// 4.4 save the film info
-	err = db.CreateFilms("fc2", "个人收藏", "个人收藏", cachingFiles)
-	if err != nil {
-		utils.Log.Warn("failed to cache film info:", err.Error())
+	if err := db.UpsertDiscoveredWork(&work); err != nil {
 		return model.EmbyFileObj{}, err
 	}
-
-	// 4.5 save the film meta, including nfo and images
-	_ = virtual_file.CacheImageAndNfo(virtual_file.MediaInfo{
-		Source:   "fc2",
-		Dir:      "个人收藏",
-		FileName: virtual_file.AppendImageName(cachingFiles[0].Name),
-		Title:    title,
-		ImgUrl:   ppvFilmInfo.Thumb(),
-		Actors:   ppvFilmInfo.Actors,
-		Release:  ppvFilmInfo.ReleaseTime,
-		Tags:     tags,
-	})
-
-	var noImageFiles []model.EmbyFileObj
-	for _, file := range cachingFiles {
-		if file.Thumb() == "" {
-			noImageFiles = append(noImageFiles, file)
-		}
+	files := make([]model.FilmFile, len(cachingFiles))
+	for index := range files {
+		files[index].PartIndex = index + 1
+		files[index].PartCount = len(files)
 	}
-	if len(noImageFiles) > 0 {
-
-		whatLinkInfo, whatLinkErr := d.getWhatLinkInfo(magnet)
-		imgs := whatLinkInfo.Screenshots
-		if whatLinkErr != nil {
-			utils.Log.Infof("磁力图片获取失败: %s", whatLinkErr.Error())
-		} else if len(imgs) > 0 {
-			for index, file := range noImageFiles {
-				_ = virtual_file.CacheImage(virtual_file.MediaInfo{
-					Source:   "fc2",
-					Dir:      "个人收藏",
-					FileName: virtual_file.AppendImageName(file.Name),
-					Title:    title,
-					ImgUrl:   imgs[index%len(imgs)].Screenshot,
-					ImgUrlHeaders: map[string]string{
-						"Referer": "https://mypikpak.com/",
-					},
-					Actors:  ppvFilmInfo.Actors,
-					Release: ppvFilmInfo.ReleaseTime,
-					Tags:    tags,
-				})
-			}
-		}
-
+	if err := db.ReplaceFilmFiles(work.ID, files); err != nil {
+		return model.EmbyFileObj{}, err
+	}
+	if err := db.UpdateMediaWorkDetails(work.ID, title, "", model.StringArray(ppvFilmInfo.Actors), model.StringArray(tags)); err != nil {
+		return model.EmbyFileObj{}, err
+	}
+	work.TranslatedTitle = title
+	work.Actors = model.StringArray(ppvFilmInfo.Actors)
+	work.Tags = model.StringArray(tags)
+	work.ReleaseDate = ppvFilmInfo.ReleaseTime
+	magnets, err := d.mediaMagnets(context.Background(), work)
+	if err != nil {
+		return model.EmbyFileObj{}, err
+	}
+	if err := db.UpsertSourceMagnets(work.ID, magnets); err != nil {
+		return model.EmbyFileObj{}, err
+	}
+	identity := fc2MediaIdentity(work)
+	if result := virtual_file.CacheImageAndNfo(virtual_file.MediaInfo{
+		Identity: &identity, Title: model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
+		ImgUrl: work.ImageURL, Actors: []string(work.Actors), Release: work.ReleaseDate, Tags: []string(work.Tags),
+	}); result == virtual_file.CreatedFailed {
+		utils.Log.Warnf("failed to publish FC2 favorite artifacts for %s", work.Code)
 	}
 
-	return cachingFiles[0], err
+	storedFiles, err := db.ListFilmFiles(work.ID)
+	if err != nil || len(storedFiles) == 0 {
+		return model.EmbyFileObj{}, err
+	}
+	return virtual_file.ConvertMediaFileToEmbyFile(model.FilmFileWithWork{FilmFile: storedFiles[0], Work: work})
 
 }
 

@@ -1,6 +1,7 @@
 package fc2
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/gocolly/colly/v2"
+	"gorm.io/gorm"
 )
 
 func (d *FC2) getMissAvPageFilms(url string) []model.EmbyFileObj {
@@ -71,61 +73,46 @@ func (d *FC2) getMissAvFilms(dirName string, urlFunc func(index int) string) ([]
 
 	}
 
-	filmMap := make(map[string]model.EmbyFileObj)
-	var fc2Ids []string
-
 	// 2. add tag
 	for i := range queriedFilms {
 		queriedFilms[i].Tags = append(queriedFilms[i].Tags, fmt.Sprintf("%s-Top%d", dirName, ((i/30)+1)*30), dirName)
-		filmMap[queriedFilms[i].Name] = queriedFilms[i]
-		fc2Ids = append(fc2Ids, queriedFilms[i].Name)
 	}
+	return []model.EmbyFileObj{}, d.syncMissAvFilms(queriedFilms)
 
-	// 3. save film
-	unCachedFilms := db.QueryNoMagnetFilms(fc2Ids)
-	unCachedFilmMap := make(map[string]bool)
-	for _, filmId := range unCachedFilms {
-		unCachedFilmMap[filmId] = true
-	}
+}
 
-	if len(unCachedFilms) > 0 {
-		utils.Log.Infof("import new films：%v", unCachedFilms)
-	}
-
-	var notExitedFilms []string
-	cachedFilmMap := make(map[string][]string)
-
-	for _, film := range queriedFilms {
-		if unCachedFilmMap[film.Name] {
-			// add film
-			_, err := d.addStar(film.Name, film.Tags)
-			if err != nil {
-				notExitedFilms = append(notExitedFilms, film.Name)
-			}
-		} else {
-			// update film
-			cachedFilmMap[film.Tags[0]] = append(cachedFilmMap[film.Tags[0]], film.Name)
+func (d *FC2) syncMissAvFilms(films []model.EmbyFileObj) error {
+	for _, film := range films {
+		code, err := model.NormalizeMediaCode("fc2", film.Name)
+		if err != nil {
+			return err
 		}
-	}
-
-	// 4. update tag
-	if len(cachedFilmMap) > 0 {
-		for tag, ids := range cachedFilmMap {
-			notMatchTagFilms, err := db.QueryNotMatchTagFilms("fc2", ids, tag, 0)
-			if err != nil {
-				utils.Log.Warnf("failed to query notMatchTagFilms: %s", err.Error())
-			} else {
-				for _, film := range notMatchTagFilms {
-					film.Tags = append(film.Tags, tag)
-					err2 := db.UpdateFilm(film)
-					if err2 != nil {
-						utils.Log.Warnf("failed to update film: %s, error message: %s", film.Name, err2.Error())
-					}
-				}
+		work, err := db.GetFilmWorkByIdentity(d.ID, "fc2", code)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if _, err := d.addStar(code, film.Tags); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		merged := append(model.StringArray(nil), work.Tags...)
+		seen := make(map[string]bool, len(merged))
+		for _, tag := range merged {
+			seen[tag] = true
+		}
+		for _, tag := range film.Tags {
+			if !seen[tag] {
+				merged = append(merged, tag)
+				seen[tag] = true
+			}
+		}
+		if len(merged) != len(work.Tags) {
+			if err := db.UpdateMediaWorkTags(work.ID, merged, work.TagVersion+1); err != nil {
+				return err
 			}
 		}
 	}
-
-	return []model.EmbyFileObj{}, nil
-
+	return nil
 }
