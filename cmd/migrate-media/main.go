@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 )
 
@@ -92,7 +93,10 @@ func NewCommand(stdout, stderr io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: tablePrefix}})
+			database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+				NamingStrategy: schema.NamingStrategy{TablePrefix: tablePrefix},
+				Logger:         logger.Default.LogMode(logger.Silent),
+			})
 			if err != nil {
 				return fmt.Errorf("open SQLite database: %w", err)
 			}
