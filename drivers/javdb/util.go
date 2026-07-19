@@ -7,13 +7,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/internal/offline_download/tool"
 	"github.com/OpenListTeam/OpenList/v4/internal/open_ai"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
@@ -23,17 +21,7 @@ func (d *Javdb) getFilms(dirName string, urlFunc func(index int) string) ([]mode
 	// 1. fetch films
 	d.fetchFilms(dirName, urlFunc)
 
-	// 2. mapping film name
-	films, err := d.mappingNames(dirName, virtual_file.ConvertFilms(DriverName, dirName, db.QueryByActor(DriverName, dirName), []model.EmbyFileObj{}, false))
-	if err != nil {
-		return films, err
-	}
-
-	if d.SyncNfo {
-		virtual_file.SynImageAndNfo(DriverName, dirName, films)
-	}
-
-	return films, err
+	return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
 
 }
 
@@ -41,7 +29,7 @@ func (d *Javdb) fetchFilms(dirName string, urlFunc func(index int) string) {
 
 	existFilmFlag := false
 	nextPage := true
-	var newFilms []model.EmbyFileObj
+	var discovered []model.EmbyFileObj
 
 	for index := 1; index <= 20 && nextPage && !existFilmFlag; index++ {
 
@@ -53,43 +41,72 @@ func (d *Javdb) fetchFilms(dirName string, urlFunc func(index int) string) {
 
 		nextPage = tempNextPage
 
-		var urls []string
-		for _, item := range films {
-			urls = append(urls, item.Url)
+		existingWorks, err := db.ListFilmWorks(d.ID, DriverName, dirName)
+		if err != nil {
+			utils.Log.Warnf("failed to query existing JavDB works: %s", err)
+			break
+		}
+		existingCodes := make(map[string]bool, len(existingWorks))
+		for _, work := range existingWorks {
+			existingCodes[work.Code] = true
 		}
 
-		existFilms := db.QueryByUrls(dirName, urls)
-		existFilmFlag = len(existFilms) > 0
-
-		existFilmMap := utils.Slice2Map(existFilms, func(t string) string {
-			return t
-		}, func(t string) bool {
-			return true
-		})
-
 		for _, film := range films {
-			if !existFilmMap[film.Url] {
-				film.Actors = append(film.Actors, dirName)
-				newFilms = append(newFilms, film)
+			if isExistingDiscoveredWork(film, existingCodes) {
+				existFilmFlag = true
+			} else {
+				discovered = append(discovered, film)
 			}
 		}
 
 	}
 
-	virtual_file.BatchSaveFilms(DriverName, dirName, newFilms, func(newFilm model.EmbyFileObj, existFilm *model.Film, mediaInfo *virtual_file.MediaInfo) bool {
-		if !utils.SliceContains(existFilm.Actors, dirName) {
-			existFilm.Actors = append(existFilm.Actors, dirName)
-			mediaInfo.Actors = existFilm.Actors
-			mediaInfo.Dir = existFilm.Actor
-			mediaInfo.FileName = virtual_file.AppendImageName(existFilm.Name)
-			return true
-		} else {
-			return false
+	for _, film := range discovered {
+		work, err := buildDiscoveredWork(d.ID, dirName, film)
+		if err != nil {
+			utils.Log.Warnf("failed to normalize JavDB discovery %q: %s", film.GetName(), err)
+			continue
 		}
-	}, func(newFilm model.EmbyFileObj, mediaInfo *virtual_file.MediaInfo) {
+		if err := db.UpsertDiscoveredWork(&work); err != nil {
+			utils.Log.Warnf("failed to upsert JavDB work %s: %s", work.Code, err)
+			continue
+		}
+		if _, err := db.EnsureSingleFilmFile(work.ID); err != nil {
+			utils.Log.Warnf("failed to ensure JavDB file %s: %s", work.Code, err)
+		}
+	}
 
-	})
+}
 
+func isExistingDiscoveredWork(film model.EmbyFileObj, existingCodes map[string]bool) bool {
+	codePart, _ := splitName(film.Name)
+	code, err := model.NormalizeMediaCode(DriverName, codePart)
+	return err == nil && existingCodes[code]
+}
+
+func buildDiscoveredWork(storageID uint, primaryDir string, film model.EmbyFileObj) (model.FilmWork, error) {
+	code, rawTitle := splitName(film.GetName())
+	code, err := model.NormalizeMediaCode(DriverName, code)
+	if err != nil {
+		return model.FilmWork{}, err
+	}
+	return model.FilmWork{
+		StorageID: storageID, Source: DriverName, Code: code,
+		SourceRef: film.Url, SourceURL: film.Url, PrimaryDir: primaryDir,
+		RawTitle: rawTitle, ImageURL: film.Thumb(), ReleaseDate: film.ReleaseTime,
+	}, nil
+}
+
+func discoveredFilmFiles(count int) ([]model.FilmFile, error) {
+	if count < 1 {
+		return nil, fmt.Errorf("film file count must be positive")
+	}
+	files := make([]model.FilmFile, count)
+	for index := range files {
+		files[index].PartIndex = index + 1
+		files[index].PartCount = count
+	}
+	return files, nil
 }
 
 func (d *Javdb) mappingNames(dirName string, javFilms []model.EmbyFileObj) ([]model.EmbyFileObj, error) {
@@ -211,37 +228,42 @@ func (d *Javdb) mappingNames(dirName string, javFilms []model.EmbyFileObj) ([]mo
 }
 
 func (d *Javdb) getStars() []model.EmbyFileObj {
-	films := virtual_file.GetStorageFilms(DriverName, "个人收藏", true)
-
-	if d.RefreshNfo {
-		var filmNames []string
-		for _, film := range films {
-			filmNames = append(filmNames, film.Name)
-		}
-		virtual_file.ClearUnUsedFiles(DriverName, "个人收藏", filmNames)
+	films, err := virtual_file.ListMediaFiles(d.ID, DriverName, "个人收藏")
+	if err != nil {
+		utils.Log.Warnf("failed to list JavDB favorite works: %s", err)
+		return nil
 	}
-
-	if d.SyncNfo {
-		virtual_file.SynImageAndNfo(DriverName, "个人收藏", films)
-	}
-
 	return films
 }
 
 func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
-
-	existFilms, err := db.QueryFilmsByNamePrefix(DriverName, []string{code})
+	canonical, err := model.NormalizeMediaCode(DriverName, code)
 	if err != nil {
-		utils.Log.Warnf("failed to query films: [%s], error message: %s", tags, err.Error())
 		return model.EmbyFileObj{}, err
-	} else if len(existFilms) > 0 {
-		existFilm := existFilms[0]
-		if existFilm.Actor == "个人收藏" && len(tags) > 0 {
-			d.updateExistFilm(&existFilm, []string{}, tags)
-		} else if existFilm.Actor != "个人收藏" {
-			d.updateExistFilm(&existFilm, []string{"个人收藏"}, tags)
+	}
+	if existing, findErr := db.GetFilmWorkByIdentity(d.ID, DriverName, canonical); findErr == nil {
+		mergedTags := append(model.StringArray(nil), existing.Tags...)
+		seen := make(map[string]bool, len(mergedTags))
+		for _, tag := range mergedTags {
+			seen[tag] = true
 		}
-		return virtual_file.ConvertFilmToEmbyFile(existFilm, ""), nil
+		for _, tag := range tags {
+			if !seen[tag] {
+				mergedTags = append(mergedTags, tag)
+				seen[tag] = true
+			}
+		}
+		if len(mergedTags) != len(existing.Tags) {
+			if err := db.UpdateMediaWorkTags(existing.ID, mergedTags, existing.TagVersion+1); err != nil {
+				return model.EmbyFileObj{}, err
+			}
+			existing.Tags = mergedTags
+		}
+		file, err := db.EnsureSingleFilmFile(existing.ID)
+		if err != nil {
+			return model.EmbyFileObj{}, err
+		}
+		return virtual_file.ConvertMediaFileToEmbyFile(model.FilmFileWithWork{FilmFile: file, Work: existing})
 	}
 
 	javFilms, _, err := d.getJavPageInfo(func(index int) string {
@@ -252,7 +274,7 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 		return model.EmbyFileObj{}, err
 	}
 
-	if len(javFilms) == 0 || strings.ToLower(code) != strings.ToLower(splitCode(javFilms[0].Name)) {
+	if len(javFilms) == 0 || strings.ToLower(canonical) != strings.ToLower(splitCode(javFilms[0].Name)) {
 		return model.EmbyFileObj{}, errors.New(fmt.Sprintf("影片:%s未查询到", code))
 	}
 
@@ -285,22 +307,35 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 		cachingFilm.Tags = append(cachingFilm.Tags, tag)
 	}
 
-	err = createStarFilm(&cachingFilm)
-	cachingFilm.Path = "个人收藏"
-
-	_ = virtual_file.CacheImageAndNfo(virtual_file.MediaInfo{
-		Source:   DriverName,
-		Dir:      "个人收藏",
-		FileName: virtual_file.AppendImageName(cachingFilm.Name),
-		Title:    cachingFilm.Title,
-		Synopsis: cachingFilm.Synopsis,
-		ImgUrl:   cachingFilm.Thumb(),
-		Actors:   cachingFilm.Actors,
-		Release:  cachingFilm.ReleaseTime,
-		Tags:     cachingFilm.Tags,
-	})
-
-	return cachingFilm, err
+	work, err := buildDiscoveredWork(d.ID, "个人收藏", cachingFilm)
+	if err != nil {
+		return model.EmbyFileObj{}, err
+	}
+	work.Code = canonical
+	if err := db.UpsertDiscoveredWork(&work); err != nil {
+		return model.EmbyFileObj{}, err
+	}
+	translated := ""
+	_, translated = splitName(cachingFilm.Title)
+	if err := db.UpdateMediaWorkDetails(work.ID, translated, cachingFilm.Synopsis, model.StringArray(cachingFilm.Actors), model.StringArray(cachingFilm.Tags)); err != nil {
+		return model.EmbyFileObj{}, err
+	}
+	work.TranslatedTitle = translated
+	work.Synopsis = cachingFilm.Synopsis
+	work.Actors = model.StringArray(cachingFilm.Actors)
+	work.Tags = model.StringArray(cachingFilm.Tags)
+	file, err := db.EnsureSingleFilmFile(work.ID)
+	if err != nil {
+		return model.EmbyFileObj{}, err
+	}
+	identity := mediaIdentity(work)
+	if result := virtual_file.CacheImageAndNfo(virtual_file.MediaInfo{
+		Identity: &identity, Title: model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
+		Synopsis: work.Synopsis, ImgUrl: work.ImageURL, Actors: []string(work.Actors), Release: work.ReleaseDate, Tags: []string(work.Tags),
+	}); result == virtual_file.CreatedFailed {
+		utils.Log.Warnf("failed to publish JavDB favorite artifacts for %s", work.Code)
+	}
+	return virtual_file.ConvertMediaFileToEmbyFile(model.FilmFileWithWork{FilmFile: file, Work: work})
 
 }
 
@@ -364,113 +399,46 @@ func (d *Javdb) updateExistFilm(existFilm *model.Film, actors, tags []string) {
 }
 
 func (d *Javdb) getMagnet(file model.Obj, reMatchFilmMeta bool) (string, error) {
-
-	embyObj, ok := file.(*model.EmbyFileObj)
-	if !ok {
-		return "", errors.New("this film doesn't contains film info")
+	mediaFile, err := mediaFileFromObj(file)
+	if err != nil {
+		return "", err
 	}
-
-	magnetCache := db.QueryMagnetCacheByName(DriverName, embyObj.GetName())
-	if magnetCache.Magnet != "" && !reMatchFilmMeta {
-		utils.Log.Infof("return the magnet link from the cache:%s", magnetCache.Magnet)
-		return magnetCache.Magnet, nil
+	if !reMatchFilmMeta {
+		selected, err := db.GetSelectedSourceMagnet(mediaFile.WorkID)
+		if err == nil {
+			return selected.MagnetURI, nil
+		}
 	}
-
-	javdbMeta, err := av.GetMetaFromJavdb(embyObj.Url)
-	if err != nil || len(javdbMeta.Magnets) == 0 {
-
-		if reMatchFilmMeta {
-			errMsg := ""
-			if err != nil {
-				errMsg = err.Error()
-			}
-			utils.Log.Infof("the magnets in the film:%s are empty: %v, error message: %s", file.GetName(), javdbMeta, errMsg)
-			return "", err
-		}
-
-		utils.Log.Warnf("failed to get javdb magnet info: %v,error message: %v, using the suke magnet instead.", javdbMeta, err)
-		sukeMeta, err2 := av.GetMetaFromSuke(embyObj.GetName())
-		if err2 != nil {
-			utils.Log.Warn("failed to get suke magnet info:", err2.Error())
-			return "", err2
-		}
-		if len(sukeMeta.Magnets) == 0 {
-			return "", err
-		}
-
-		magnet := sukeMeta.Magnets[0].GetMagnet()
-		subtitle := sukeMeta.Magnets[0].IsSubTitle()
-
-		if magnetCache.Magnet == "" {
-			err3 := db.CreateMagnetCache(model.MagnetCache{
-				DriverType: DriverName,
-				Magnet:     magnet,
-				Name:       embyObj.GetName(),
-				Subtitle:   subtitle,
-				Code:       av.GetFilmCode(embyObj.GetName()),
-				ScanAt:     time.Now(),
-			})
-			if err3 != nil {
-				utils.Log.Warn("failed to create magnet cache from suke:", err3.Error())
-			}
-		}
-
-		if subtitle {
-			d.addSubtitleTag(embyObj.GetName())
-		}
-
-		return magnet, nil
+	magnets, err := d.mediaMagnets(context.Background(), mediaFile.Work)
+	if err != nil {
+		return "", err
 	}
-
-	d.updateFilmMeta(javdbMeta, embyObj)
-
-	if magnetCache.Magnet == "" {
-		return d.cacheMagnet(javdbMeta, embyObj)
-	} else {
-		return magnetCache.Magnet, nil
+	if err := db.UpsertSourceMagnets(mediaFile.WorkID, magnets); err != nil {
+		return "", err
 	}
-
+	selected, err := db.GetSelectedSourceMagnet(mediaFile.WorkID)
+	if err != nil {
+		return "", err
+	}
+	return selected.MagnetURI, nil
 }
 
 func (d *Javdb) cacheMagnet(javdbMeta av.Meta, embyObj *model.EmbyFileObj) (string, error) {
-
-	magnet := ""
-	subtitle := false
-	if javdbMeta.Magnets[0].IsSubTitle() {
-		magnet = javdbMeta.Magnets[0].GetMagnet()
-		subtitle = true
-	} else {
-		sukeMeta, err2 := av.GetMetaFromSuke(embyObj.GetName())
-		if err2 != nil {
-			utils.Log.Warn("failed to get suke magnet info:", err2.Error())
-		} else {
-			if len(sukeMeta.Magnets) > 0 {
-				magnet = sukeMeta.Magnets[0].GetMagnet()
-				subtitle = sukeMeta.Magnets[0].IsSubTitle()
-			}
-		}
-
+	if embyObj.WorkID == 0 {
+		return "", errors.New("media work identity is missing")
 	}
-
-	if magnet == "" {
-		magnet = javdbMeta.Magnets[0].GetMagnet()
-		subtitle = javdbMeta.Magnets[0].IsSubTitle()
+	magnets := sourceMagnetsFromMeta(javdbMeta)
+	if len(magnets) == 0 {
+		return "", errors.New("JavDB returned no source magnets")
 	}
-
-	err := db.CreateMagnetCache(model.MagnetCache{
-		DriverType: DriverName,
-		Magnet:     magnet,
-		Name:       embyObj.GetName(),
-		Subtitle:   subtitle,
-		Code:       av.GetFilmCode(embyObj.GetName()),
-		ScanAt:     time.Now(),
-	})
-
-	if subtitle {
-		d.addSubtitleTag(embyObj.GetName())
+	if err := db.UpsertSourceMagnets(embyObj.WorkID, magnets); err != nil {
+		return "", err
 	}
-
-	return magnet, err
+	selected, err := db.GetSelectedSourceMagnet(embyObj.WorkID)
+	if err != nil {
+		return "", err
+	}
+	return selected.MagnetURI, nil
 }
 
 func (d *Javdb) updateFilmMeta(javdbMeta av.Meta, embyObj *model.EmbyFileObj) {
@@ -559,12 +527,7 @@ func (d *Javdb) addSubtitleTag(name string) {
 }
 
 func (d *Javdb) deleteFilm(dir, fileName, id string) error {
-	err := db.DeleteAllMagnetCacheByCode(av.GetFilmCode(fileName))
-	if err != nil {
-		utils.Log.Warnf("failed to delete film cache:[%s], error message:[%s]", fileName, err.Error())
-	}
-
-	err = db.DeleteFilmById(id)
+	err := db.DeleteFilmById(id)
 	if err != nil {
 		utils.Log.Infof("failed to delete film:[%s], error message:[%s]", fileName, err.Error())
 		return err
@@ -579,14 +542,16 @@ func (d *Javdb) deleteFilm(dir, fileName, id string) error {
 }
 
 func (d *Javdb) tryAcquireLink(ctx context.Context, file model.Obj, args model.LinkArgs, magnetGetter func(obj model.Obj) (string, error)) (*model.Link, error) {
-
-	link, err := tool.CloudPlay(ctx, args, d.CloudPlayDriverType, d.CloudPlayDownloadPath, file, magnetGetter)
-
+	mediaFile, err := mediaFileFromObj(file)
+	if err != nil {
+		return nil, err
+	}
+	link, err := d.cloudPlayMedia(ctx, args, d.CloudPlayDriverType, mediaFile)
 	if err != nil {
 		utils.Log.Infof("The first cloud drive download failed:[%s]", err.Error())
 		if d.BackPlayDriverType != "" {
 			utils.Log.Infof("using the second cloud drive instead.")
-			return tool.CloudPlay(ctx, args, d.BackPlayDriverType, d.CloudPlayDownloadPath, file, magnetGetter)
+			return d.cloudPlayMedia(ctx, args, d.BackPlayDriverType, mediaFile)
 		}
 	}
 

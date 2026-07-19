@@ -10,7 +10,6 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -53,15 +52,15 @@ func (d *Javdb) Init(ctx context.Context) error {
 
 	d.cron = cron.NewCron(duration)
 	d.cron.Do(func() {
-		d.reMatchSubtitles()
-		d.scanSynopsis()
+		d.scanTranslations()
+		d.scanMediaSynopsis()
+		d.scanMediaMetadataAndMagnets()
+		d.scanMediaSubtitles()
 		if d.RefreshNfo {
-			d.refreshNfo()
+			d.refreshMediaNFOs()
 		}
-		d.filterFilms()
-		d.reMatchTags()
-		d.scanSampleImages()
-		d.scanDMMPosters()
+		d.scanMediaSampleImages()
+		d.scanMediaDMMPosters()
 	})
 
 	matchTopFilmsTimer := time.Hour * time.Duration(d.MatchTopFilmsTimer)
@@ -141,7 +140,11 @@ func (d *Javdb) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 		return results, nil
 	} else if dirName == "个人收藏" {
 		// 2. 个人收藏
-		return utils.SliceConvert(virtual_file.WrapEmbyFilms(d.getStars()), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
+		films, err := virtual_file.ListMediaFiles(d.ID, DriverName, "个人收藏")
+		if err != nil {
+			return nil, err
+		}
+		return utils.SliceConvert(virtual_file.WrapMediaFiles(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
 	} else if actor, exist := categories.Get(dirName); exist {
@@ -159,7 +162,7 @@ func (d *Javdb) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 			return nil, err
 		}
 
-		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
+		return utils.SliceConvert(virtual_file.WrapMediaFiles(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
 
@@ -174,7 +177,7 @@ func (d *Javdb) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 }
 
 func (d *Javdb) Get(ctx context.Context, path string) (model.Obj, error) {
-	return virtual_file.ResolveActorTreeObj(DriverName, strconv.Itoa(int(d.ID)), path, d.RootID.GetRootId(), d.Storage.Modified)
+	return virtual_file.ResolveMediaActorTreeObj(d.ID, DriverName, path, d.RootID.GetRootId(), d.Storage.Modified)
 }
 
 func (d *Javdb) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -190,65 +193,37 @@ func (d *Javdb) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 		return mockedLink, nil
 	}
 
-	firstMagnet := ""
-	firstLink, err2 := d.tryAcquireLink(ctx, file, args, func(obj model.Obj) (string, error) {
-		magnet, err := d.getMagnet(obj, false)
-		firstMagnet = magnet
-		return magnet, err
-	})
-
-	if err2 != nil {
-		utils.Log.Infof("The first magnet download failed:[%s], using the second magnet instead.", err2.Error())
-		sukeMeta, _ := av.GetMetaFromSuke(file.GetName())
-		magnets := sukeMeta.Magnets
-		if len(magnets) > 0 && firstMagnet != magnets[0].GetMagnet() {
-			secondLink, err3 := d.tryAcquireLink(ctx, file, args, func(obj model.Obj) (string, error) {
-				return magnets[0].GetMagnet(), nil
-			})
-			if err3 != nil {
-				utils.Log.Infof("The second magnet download failed:[%s].", err3.Error())
-				if d.FallbackPlay {
-					return mockedLink, nil
-				}
-			}
-			return secondLink, err3
-
-		}
+	mediaFile, err := mediaFileFromObj(file)
+	if err != nil {
+		return nil, err
 	}
-
-	return firstLink, err2
+	link, err := d.cloudPlayMedia(ctx, args, d.CloudPlayDriverType, mediaFile)
+	if err != nil && d.BackPlayDriverType != "" {
+		link, err = d.cloudPlayMedia(ctx, args, d.BackPlayDriverType, mediaFile)
+	}
+	if err != nil && d.FallbackPlay && d.MockedLink != "" {
+		return mockedLink, nil
+	}
+	return link, err
 }
 
 func (d *Javdb) Remove(ctx context.Context, obj model.Obj) error {
-
-	if obj.IsDir() {
-		if dirWrapper, ok := obj.(*model.EmbyFileDirWrapper); !ok {
-			err := db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
-			if err != nil {
-				return err
-			}
-
-			return db.DeleteFilmsByActor(DriverName, obj.GetName())
-		} else {
-			for _, file := range dirWrapper.EmbyFiles {
-				err2 := d.deleteFilm(file.GetPath(), file.GetName(), file.GetID())
-				if err2 != nil {
-					return err2
-				}
-			}
-		}
-
-	} else {
-
-		err2 := d.deleteFilm(obj.GetPath(), obj.GetName(), obj.GetID())
-		if err2 != nil {
-			return err2
-		}
-
+	if group, ok := obj.(*model.EmbyFileDirWrapper); ok && len(group.EmbyFiles) > 0 {
+		return virtual_file.DeleteMediaWork(group.EmbyFiles[0].WorkID)
 	}
-
-	return nil
-
+	if mediaFile, ok := obj.(*model.EmbyFileObj); ok && mediaFile.WorkID != 0 {
+		return virtual_file.DeleteMediaFile(mediaFile.FilmFileID)
+	}
+	works, err := db.ListFilmWorks(d.ID, DriverName, obj.GetName())
+	if err != nil {
+		return err
+	}
+	for _, work := range works {
+		if err := virtual_file.DeleteMediaWork(work.ID); err != nil {
+			return err
+		}
+	}
+	return db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
 }
 
 func (d *Javdb) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
@@ -265,13 +240,24 @@ func (d *Javdb) MakeDir(ctx context.Context, parentDir model.Obj, dirName string
 
 func (d *Javdb) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) (model.Obj, error) {
 	star, err := d.addStar(stream.GetName(), []string{})
-	if err == nil && d.EmbyServers != "" {
+	if err != nil {
+		return nil, err
+	}
+	if d.EmbyServers != "" {
 		emby.Refresh(d.EmbyServers)
 	}
 
-	dirWrapper := virtual_file.WrapEmbyFilms([]model.EmbyFileObj{star})[0]
+	dirWrapper, err := wrapAddedStar(star)
 	return &dirWrapper, err
 
+}
+
+func wrapAddedStar(star model.EmbyFileObj) (model.EmbyFileDirWrapper, error) {
+	wrapped := virtual_file.WrapMediaFiles([]model.EmbyFileObj{star})
+	if len(wrapped) != 1 {
+		return model.EmbyFileDirWrapper{}, fmt.Errorf("expected one media work, got %d", len(wrapped))
+	}
+	return wrapped[0], nil
 }
 
 func (d *Javdb) MkdirConfig() []driver.Item {
