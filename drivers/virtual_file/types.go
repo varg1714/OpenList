@@ -6,6 +6,9 @@ import (
 )
 
 type MediaInfo struct {
+	Identity      *MediaIdentity
+	PartIndex     int
+	PartCount     int
 	Source        string
 	Dir           string
 	FileName      string
