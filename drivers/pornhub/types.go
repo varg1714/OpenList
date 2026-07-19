@@ -14,10 +14,11 @@ type videoInfo struct {
 }
 
 type PornFilm struct {
-	Image    string
-	Title    string
-	ViewKey  string
-	Username string
+	Image     string
+	Title     string
+	ViewKey   string
+	SourceURL string
+	Username  string
 }
 
 type MakeDirParam struct {

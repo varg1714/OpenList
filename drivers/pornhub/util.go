@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -19,17 +20,17 @@ import (
 )
 
 var viewKeyCompile = regexp.MustCompile(`/view_video.php\?viewkey=([^&\s]+)`)
+var cacheDiscoveredImageAndNFO = virtual_file.CacheImageAndNfo
+var updateDiscoveredMediaNFO = virtual_file.UpdateMediaNfo
 
 func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error) {
-
-	var filmIds []string
-	var films []model.EmbyFileObj
+	var films []PornFilm
 
 	if strings.Contains(pageKey, "/playlist/") {
 		key := strings.ReplaceAll(pageKey, "/playlist/", "")
 		playListFilms, err := d.getPlayListFilms(key, dirName)
 		if err != nil {
-			return virtual_file.GetStorageFilms(DriverName, dirName, false), nil
+			return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
 		}
 		films = playListFilms
 	} else {
@@ -40,84 +41,123 @@ func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error)
 
 		actorFilms, err := d.getActorFilms(dirName, pageKey)
 		if err != nil {
-			return virtual_file.GetStorageFilms(DriverName, dirName, false), nil
+			return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
 		}
 		films = actorFilms
 	}
 
 	if len(films) == 0 {
-		return virtual_file.GetStorageFilms(DriverName, dirName, false), nil
+		return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
 	}
 
 	for _, film := range films {
-		filmIds = append(filmIds, film.Url)
-	}
-
-	unSaveFilmIds := db.QueryUnSaveFilms(filmIds, dirName)
-	if len(unSaveFilmIds) == 0 {
-		return virtual_file.GetStorageFilms(DriverName, dirName, false), nil
-	}
-
-	unSaveFilmMap := make(map[string]bool)
-	for _, filmId := range unSaveFilmIds {
-		unSaveFilmMap[filmId] = true
-	}
-
-	utils.Log.Infof("saving porn films：%v", unSaveFilmIds)
-
-	var savingFilms []model.EmbyFileObj
-
-	for _, film := range films {
-		if _, unSaveFilm := unSaveFilmMap[film.Url]; unSaveFilm {
-			savingFilms = append(savingFilms, film)
+		canonicalURL, err := canonicalVideoURL(d.ServerUrl, film.SourceURL)
+		if err != nil {
+			utils.Log.Warnf("failed to normalize Pornhub URL %q: %s", film.SourceURL, err)
+			continue
+		}
+		film.SourceURL = canonicalURL
+		work, err := buildDiscoveredWork(d.ID, dirName, film)
+		if err != nil {
+			utils.Log.Warnf("failed to normalize Pornhub discovery %q: %s", film.ViewKey, err)
+			continue
+		}
+		if err := db.UpsertDiscoveredWork(&work); err != nil {
+			utils.Log.Warnf("failed to upsert Pornhub work %s: %s", work.Code, err)
+			continue
+		}
+		if _, err := db.EnsureSingleFilmFile(work.ID); err != nil {
+			utils.Log.Warnf("failed to ensure Pornhub file %s: %s", work.Code, err)
+			continue
+		}
+		if cacheDiscoveredWorkArtifacts(work) == virtual_file.CreatedFailed {
+			utils.Log.Warnf("failed to cache Pornhub artifacts for %s", work.Code)
 		}
 	}
 
-	virtual_file.BatchSaveFilms(DriverName, dirName, savingFilms, func(newFilm model.EmbyFileObj, existFilm *model.Film, mediaInfo *virtual_file.MediaInfo) bool {
-		if len(newFilm.Tags) != len(existFilm.Tags) || len(newFilm.Actors) != len(existFilm.Actors) {
+	return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
 
-			actorFlag := false
-			actorMap := make(map[string]bool)
-			for _, actor := range existFilm.Actors {
-				actorMap[actor] = true
-			}
-			if !actorMap[newFilm.Actors[0]] {
-				existFilm.Actors = append(existFilm.Actors, newFilm.Actors[0])
-				actorFlag = true
-			}
+}
 
-			tagFlag := false
-			tagMap := make(map[string]bool)
-			for _, tag := range existFilm.Tags {
-				tagMap[tag] = true
-			}
-			for _, tag := range newFilm.Tags {
-				if !tagMap[tag] {
-					existFilm.Tags = append(existFilm.Tags, tag)
-					tagFlag = true
-				}
-			}
-
-			if !actorFlag && !tagFlag {
-				return false
-			}
-
-			mediaInfo.Actors = existFilm.Actors
-			mediaInfo.Tags = existFilm.Tags
-			mediaInfo.Dir = existFilm.Actor
-			return true
-		} else {
-			return false
-		}
-	}, func(newFilm model.EmbyFileObj, mediaInfo *virtual_file.MediaInfo) {
-		mediaInfo.ImgUrlHeaders = map[string]string{
-			"Referer": d.ServerUrl,
-		}
-		virtual_file.CacheImageAndNfo(*mediaInfo)
+func cacheDiscoveredWorkArtifacts(work model.FilmWork) int {
+	identity := virtual_file.MediaIdentity{
+		StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code,
+	}
+	return cacheDiscoveredImageAndNFO(virtual_file.MediaInfo{
+		Identity: &identity,
+		Title:    model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
+		Synopsis: work.Synopsis,
+		ImgUrl:   work.ImageURL,
+		Release:  work.ReleaseDate,
+		Actors:   []string(work.Actors),
+		Tags:     []string(work.Tags),
 	})
+}
 
-	return virtual_file.GetStorageFilms(DriverName, dirName, false), nil
+func (d *Pornhub) syncDiscoveredNFO(files []model.EmbyFileObj) error {
+	if !d.SyncNfo {
+		return nil
+	}
+	var firstErr error
+	for _, file := range files {
+		identity := virtual_file.MediaIdentity{
+			StorageID: d.ID, Source: DriverName, PrimaryDir: file.Path, Code: file.Code,
+		}
+		err := updateDiscoveredMediaNFO(virtual_file.MediaInfo{
+			Identity: &identity,
+			Title:    model.BuildMediaTitle(file.Code, file.Title, ""),
+			Synopsis: file.Synopsis,
+			Release:  file.ReleaseTime,
+			Actors:   file.Actors,
+			Tags:     file.Tags,
+		})
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
 
+func buildDiscoveredWork(storageID uint, primaryDir string, film PornFilm) (model.FilmWork, error) {
+	code, err := model.NormalizeMediaCode(DriverName, film.ViewKey)
+	if err != nil {
+		return model.FilmWork{}, err
+	}
+	canonical, err := canonicalVideoURL("", film.SourceURL)
+	if err != nil {
+		return model.FilmWork{}, err
+	}
+	return model.FilmWork{
+		StorageID: storageID, Source: DriverName, Code: code,
+		SourceRef: code, SourceURL: canonical, PrimaryDir: primaryDir,
+		RawTitle: film.Title, ImageURL: film.Image, Actors: model.StringArray{film.Username},
+		ReleaseDate: time.Now(),
+	}, nil
+}
+
+func canonicalVideoURL(base, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("missing Pornhub source URL")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid Pornhub source URL: %w", err)
+	}
+	if !parsed.IsAbs() {
+		if base == "" {
+			return "", fmt.Errorf("invalid Pornhub source URL: %q", raw)
+		}
+		root, err := url.Parse(strings.TrimRight(base, "/"))
+		if err != nil || !root.IsAbs() || root.Host == "" {
+			return "", fmt.Errorf("invalid Pornhub server URL: %q", base)
+		}
+		parsed = root.ResolveReference(parsed)
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Path == "" {
+		return "", fmt.Errorf("invalid Pornhub source URL: %q", raw)
+	}
+	return parsed.String(), nil
 }
 
 func (d *Pornhub) getVideoLink(viewKey string) (string, error) {
@@ -204,7 +244,7 @@ func (d *Pornhub) getVideoLink(viewKey string) (string, error) {
 
 }
 
-func (d *Pornhub) getPlayListFilms(playlistId, dirName string) ([]model.EmbyFileObj, error) {
+func (d *Pornhub) getPlayListFilms(playlistId, dirName string) ([]PornFilm, error) {
 
 	var films []PornFilm
 
@@ -243,18 +283,11 @@ func (d *Pornhub) getPlayListFilms(playlistId, dirName string) ([]model.EmbyFile
 		return nil, err
 	}
 
-	embyFileObjs, err := convertFilms(dirName, films)
-	if len(embyFileObjs) > 0 {
-		for i := range embyFileObjs {
-			embyFileObjs[i].Tags = append(embyFileObjs[i].Tags, dirName)
-		}
-	}
-
-	return embyFileObjs, err
+	return films, nil
 
 }
 
-func (d *Pornhub) getActorFilms(dirName, pageKey string) ([]model.EmbyFileObj, error) {
+func (d *Pornhub) getActorFilms(dirName, pageKey string) ([]PornFilm, error) {
 
 	var films []PornFilm
 	page := 1
@@ -289,7 +322,7 @@ func (d *Pornhub) getActorFilms(dirName, pageKey string) ([]model.EmbyFileObj, e
 			return nextPage
 		}
 
-		for nextPageFunc() && len(db.QueryUnSaveFilms(newFilmIds, dirName)) > 0 {
+		for nextPageFunc() {
 
 			pageUrl = fmt.Sprintf("%s%s?page=%d", d.ServerUrl, pageKey, page)
 
@@ -319,7 +352,7 @@ func (d *Pornhub) getActorFilms(dirName, pageKey string) ([]model.EmbyFileObj, e
 		return nil, err
 	}
 
-	return convertFilms(dirName, films)
+	return films, nil
 
 }
 
@@ -393,7 +426,8 @@ func resolveFilms(wd selenium.WebDriver, actorType int) []PornFilm {
 				findString := viewKeyCompile.FindString(href)
 				return viewKeyCompile.ReplaceAllString(findString, "$1")
 			}(),
-			Username: username,
+			SourceURL: href,
+			Username:  username,
 		})
 
 	}
@@ -413,7 +447,10 @@ func convertFilms(actor string, films []PornFilm) ([]model.EmbyFileObj, error) {
 				Thumbnail: model.Thumbnail{Thumbnail: src.Image},
 			},
 			ReleaseTime: time.Now(),
-			Url:         src.ViewKey,
+			Code:        src.ViewKey,
+			SourceRef:   src.ViewKey,
+			SourceURL:   src.SourceURL,
+			Url:         src.SourceURL,
 			Actors: func() []string {
 				if src.Username != "" {
 					return []string{src.Username}

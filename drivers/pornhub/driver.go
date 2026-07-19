@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -90,12 +89,11 @@ func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 		if err != nil {
 			return nil, err
 		}
-
-		if d.SyncNfo {
-			virtual_file.SynImageAndNfo(DriverName, dirName, films)
+		if err := d.syncDiscoveredNFO(films); err != nil {
+			utils.Log.Warnf("failed to sync Pornhub NFO: %s", err)
 		}
 
-		return utils.SliceConvert(virtual_file.WrapEmbyFilms(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
+		return utils.SliceConvert(virtual_file.WrapMediaFiles(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
 
@@ -148,7 +146,24 @@ func (d *Pornhub) Get(ctx context.Context, path string) (model.Obj, error) {
 	}
 
 	groupName, fileName := virtual_file.SplitFilmPath(parts[1])
-	return virtual_file.ResolveFilmObj(DriverName, parts[0], groupName, fileName)
+	files, err := virtual_file.ListMediaFiles(d.ID, DriverName, parts[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range files {
+		if file.Code != groupName {
+			continue
+		}
+		if fileName != "" {
+			if file.Name == fileName {
+				return &file, nil
+			}
+			continue
+		}
+		wrapped := virtual_file.WrapMediaFiles([]model.EmbyFileObj{file})
+		return &wrapped[0], nil
+	}
+	return nil, errs.ObjectNotFound
 }
 
 func (d *Pornhub) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -168,16 +183,19 @@ func (d *Pornhub) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	}
 
 	if embyFile, ok := file.(*model.EmbyFileObj); ok {
-		link, err := d.getVideoLink(embyFile.Url)
-		if err != nil {
-			utils.Log.Warnf("failed to get video link: %v", err.Error())
+		if embyFile.SourceRef == "" {
+			canonical, err := canonicalVideoURL("", embyFile.SourceURL)
+			if err != nil {
+				return nil, err
+			}
+			videoLink.URL = canonical
 			return videoLink, nil
 		}
-
-		videoLink.URL = link
-		videoLink.Header = http.Header{
-			"Referer": []string{d.ServerUrl},
+		url, err := d.getVideoLink(embyFile.SourceRef)
+		if err != nil {
+			return nil, err
 		}
+		videoLink.URL = url
 		return videoLink, nil
 	}
 
@@ -186,18 +204,22 @@ func (d *Pornhub) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 }
 
 func (d *Pornhub) Remove(ctx context.Context, obj model.Obj) error {
-
-	if !obj.IsDir() {
-		return nil
+	if group, ok := obj.(*model.EmbyFileDirWrapper); ok && len(group.EmbyFiles) > 0 {
+		return virtual_file.DeleteMediaWork(group.EmbyFiles[0].WorkID)
 	}
-
-	err := db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
+	if mediaFile, ok := obj.(*model.EmbyFileObj); ok && mediaFile.WorkID != 0 {
+		return virtual_file.DeleteMediaFile(mediaFile.FilmFileID)
+	}
+	works, err := db.ListFilmWorks(d.ID, DriverName, obj.GetName())
 	if err != nil {
 		return err
 	}
-
-	return db.DeleteFilmsByActor(DriverName, obj.GetName())
-
+	for _, work := range works {
+		if err := virtual_file.DeleteMediaWork(work.ID); err != nil {
+			return err
+		}
+	}
+	return db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
 }
 
 func (d *Pornhub) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
