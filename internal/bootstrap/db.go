@@ -85,5 +85,7 @@ func InitDB() {
 	if err != nil {
 		log.Fatalf("failed to connect database:%s", err.Error())
 	}
-	db.Init(dB)
+	if err := db.Init(dB); err != nil {
+		log.Fatalf("failed to initialize database: %s", err.Error())
+	}
 }

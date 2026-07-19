@@ -1,21 +1,21 @@
 package db
 
 import (
-	log "github.com/sirupsen/logrus"
-
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
 
 var db *gorm.DB
 
-func Init(d *gorm.DB) {
+func Init(d *gorm.DB) error {
 	db = d
-	err := AutoMigrate(new(model.Storage), new(model.User), new(model.Meta), new(model.SettingItem), new(model.SearchNode), new(model.Film), new(model.MissedFilm), new(model.MagnetCache), new(model.Actor), new(model.VirtualFile), new(model.Replacement), new(model.TaskItem), new(model.SSHPublicKey), new(model.MovedItem), new(model.SharingDB))
+	err := AutoMigrate(new(model.Storage), new(model.User), new(model.Meta), new(model.SettingItem), new(model.SearchNode), new(model.Film), new(model.MissedFilm), new(model.MagnetCache), new(model.Actor), new(model.VirtualFile), new(model.Replacement), new(model.TaskItem), new(model.SSHPublicKey), new(model.MovedItem), new(model.SharingDB), new(model.FilmWork), new(model.FilmFile), new(model.SourceMagnet), new(model.CloudFileCache))
 	if err != nil {
-		log.Fatalf("failed migrate database: %s", err.Error())
+		return err
 	}
+	return nil
 }
 
 func AutoMigrate(dst ...interface{}) error {
