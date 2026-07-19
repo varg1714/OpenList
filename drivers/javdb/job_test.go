@@ -87,6 +87,39 @@ func TestFilterFilmsDeletesByPrimaryKey(t *testing.T) {
 	}
 }
 
+func TestAddStarReusesFilmWorkWithoutLegacyMagnetCache(t *testing.T) {
+	for _, value := range []interface{}{&model.CloudFileCache{}, &model.SourceMagnet{}, &model.FilmFile{}, &model.FilmWork{}, &model.MagnetCache{}} {
+		if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(value).Error; err != nil {
+			t.Fatalf("reset %T: %v", value, err)
+		}
+	}
+	work := model.FilmWork{
+		StorageID: 81, Source: DriverName, Code: "ABP-123", SourceRef: "https://javdb.test/v/abp-123",
+		SourceURL: "https://javdb.test/v/abp-123", PrimaryDir: "个人收藏", Tags: model.StringArray{"existing"},
+	}
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatalf("create existing work: %v", err)
+	}
+	if err := db.GetDb().Create(&model.FilmFile{WorkID: work.ID, PartIndex: 1, PartCount: 1}).Error; err != nil {
+		t.Fatalf("create existing file: %v", err)
+	}
+	driver := Javdb{Storage: model.Storage{ID: 81}}
+	file, err := driver.addStar("abp-123", []string{"favorite"})
+	if err != nil {
+		t.Fatalf("reuse favorite work: %v", err)
+	}
+	if file.WorkID != work.ID || file.FilmFileID == 0 {
+		t.Fatalf("favorite identity = work %d, file %d", file.WorkID, file.FilmFileID)
+	}
+	var legacyCount int64
+	if err := db.GetDb().Model(&model.MagnetCache{}).Count(&legacyCount).Error; err != nil {
+		t.Fatalf("count legacy caches: %v", err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("addStar wrote %d legacy magnet caches", legacyCount)
+	}
+}
+
 func TestNewSampleImageClientDoesNotFollowRedirects(t *testing.T) {
 	var redirected atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
