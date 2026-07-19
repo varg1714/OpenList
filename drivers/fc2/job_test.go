@@ -127,19 +127,44 @@ func TestGetWhatLinkInfoReturnsDecodedScreenshots(t *testing.T) {
 	}
 }
 
-func TestCacheFC2MagnetSetsDriverType(t *testing.T) {
+func TestSyncMissAvFilmsUsesFilmWorkIdentityWithoutLegacyMagnetCache(t *testing.T) {
 	setupFC2SampleImageTest(t)
-
-	if err := cacheFC2Magnet("FC2-PPV-123.mp4", "FC2-PPV-123", "magnet:fc2"); err != nil {
-		t.Fatalf("cache FC2 magnet: %v", err)
+	for _, value := range []interface{}{&model.CloudFileCache{}, &model.SourceMagnet{}, &model.FilmFile{}, &model.FilmWork{}} {
+		if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(value).Error; err != nil {
+			t.Fatalf("reset %T: %v", value, err)
+		}
 	}
-
-	var cached model.MagnetCache
-	if err := db.GetDb().Where("code = ?", "FC2-PPV-123").First(&cached).Error; err != nil {
-		t.Fatalf("load FC2 magnet cache: %v", err)
+	work := model.FilmWork{
+		StorageID: 71, Source: "fc2", Code: "FC2-PPV-123", SourceRef: "FC2-PPV-123",
+		PrimaryDir: "Ranked", Tags: model.StringArray{"existing"},
 	}
-	if cached.DriverType != "fc2" {
-		t.Fatalf("driver type = %q, want fc2", cached.DriverType)
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatalf("create existing work: %v", err)
+	}
+	if err := db.GetDb().Create(&model.FilmFile{WorkID: work.ID, PartIndex: 1, PartCount: 1}).Error; err != nil {
+		t.Fatalf("create existing file: %v", err)
+	}
+	driver := FC2{Storage: model.Storage{ID: 71}}
+	queried := []model.EmbyFileObj{{
+		ObjThumb: model.ObjThumb{Object: model.Object{Name: "FC2-PPV-123"}},
+		Tags:     []string{"Ranked-Top30", "Ranked"},
+	}}
+	if err := driver.syncMissAvFilms(queried); err != nil {
+		t.Fatalf("sync MissAV films: %v", err)
+	}
+	stored, err := db.GetFilmWorkByIdentity(71, "fc2", "FC2-PPV-123")
+	if err != nil {
+		t.Fatalf("load synced work: %v", err)
+	}
+	if !reflect.DeepEqual(stored.Tags, model.StringArray{"existing", "Ranked-Top30", "Ranked"}) {
+		t.Fatalf("synced tags = %#v", stored.Tags)
+	}
+	var legacyCount int64
+	if err := db.GetDb().Model(&model.MagnetCache{}).Count(&legacyCount).Error; err != nil {
+		t.Fatalf("count legacy caches: %v", err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("MissAV sync wrote %d legacy magnet caches", legacyCount)
 	}
 }
 
