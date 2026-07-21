@@ -168,7 +168,7 @@ func (d *Pornhub) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	}
 
 	if embyFile, ok := file.(*model.EmbyFileObj); ok {
-		link, err := d.getVideoLink(embyFile.Url)
+		link, err := d.getVideoLink(ctx, embyFile.Url)
 		if err != nil {
 			utils.Log.Warnf("failed to get video link: %v", err.Error())
 			return videoLink, nil
