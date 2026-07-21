@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
@@ -23,10 +24,19 @@ import (
 type Pornhub struct {
 	model.Storage
 	Addition
-	AccessToken string
-	ShareToken  string
-	DriveId     string
-	cron        *cron.Cron
+	AccessToken        string
+	ShareToken         string
+	DriveId            string
+	cron               *cron.Cron
+	fanartCron         *cron.Cron
+	fanartCtx          context.Context
+	fanartCancel       context.CancelFunc
+	fanartMu           sync.Mutex
+	fanartWg           sync.WaitGroup
+	fanartStopping     bool
+	fanartMedia        fanartMediaOps
+	fanartGetVideo     func(context.Context, string) (string, error)
+	removeBackgroundCb func(string, string, string) error
 }
 
 func (d *Pornhub) Config() driver.Config {
@@ -49,14 +59,55 @@ func (d *Pornhub) Init(ctx context.Context) error {
 		d.reMatchTags()
 	})
 
+	if d.FanartCount > 0 && d.FanartScanLimit > 0 {
+		fanartDuration := time.Minute * time.Duration(d.FanartScanTime)
+		if fanartDuration <= 0 {
+			fanartDuration = time.Minute * 360
+		}
+		if d.fanartMedia == nil {
+			d.fanartMedia = &fanartFFmpeg{serverURL: d.ServerUrl}
+		}
+		d.fanartMu.Lock()
+		d.fanartStopping = false
+		d.fanartCtx, d.fanartCancel = context.WithCancel(context.Background())
+		d.fanartMu.Unlock()
+		d.fanartCron = cron.NewCron(fanartDuration)
+		d.fanartCron.Do(d.runFanart)
+	}
+
 	return nil
 }
 
 func (d *Pornhub) Drop(ctx context.Context) error {
+	d.fanartMu.Lock()
+	d.fanartStopping = true
+	fanartCancel := d.fanartCancel
+	d.fanartMu.Unlock()
+	if fanartCancel != nil {
+		fanartCancel()
+	}
+	if d.fanartCron != nil {
+		d.fanartCron.Stop()
+	}
+	d.fanartWg.Wait()
 	if d.cron != nil {
 		d.cron.Stop()
 	}
 	return nil
+}
+
+func (d *Pornhub) runFanart() {
+	d.fanartMu.Lock()
+	if d.fanartStopping {
+		d.fanartMu.Unlock()
+		return
+	}
+	ctx := d.fanartCtx
+	d.fanartWg.Add(1)
+	d.fanartMu.Unlock()
+
+	defer d.fanartWg.Done()
+	d.scanFanart(ctx)
 }
 
 func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {

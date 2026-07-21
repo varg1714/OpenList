@@ -19,6 +19,9 @@ type Addition struct {
 	ServerUrl            string `json:"server_url" required:"true"`
 	MatchFilmTagScanTime int    `json:"MatchFilmTagScanTime" required:"true" type:"number" `
 	MatchFilmTagLimit    int    `json:"match_film_tag_limit" required:"false" type:"number" `
+	FanartScanTime       int    `json:"fanart_scan_time" required:"false" type:"number" default:"360" help:"fanart extraction interval in minutes"`
+	FanartScanLimit      int    `json:"fanart_scan_limit" required:"false" type:"number" default:"10" help:"max films per fanart scan"`
+	FanartCount          int    `json:"fanart_count" required:"false" type:"number" default:"3" help:"fanart frames to extract per film"`
 	LinkCacheTime        int    `json:"linkCacheTime" type:"number"`
 	SyncNfo              bool   `json:"sync_nfo" required:"false" help:"Sync nfo from db to disk"`
 }
