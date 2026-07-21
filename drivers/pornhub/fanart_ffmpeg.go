@@ -91,6 +91,7 @@ func (a *fanartFFmpeg) buildExtractArgs(videoURL string, positionSec float64) []
 		"-vframes", "1",
 		"-f", "image2",
 		"-vcodec", "mjpeg",
+		"-q:v", "2",
 		"pipe:",
 	}
 }
@@ -115,6 +116,7 @@ func (a *fanartFFmpeg) buildPreciseExtractArgs(videoURL string, positionSec floa
 		"-vframes", "1",
 		"-f", "image2",
 		"-vcodec", "mjpeg",
+		"-q:v", "2",
 		"pipe:",
 	)
 }
