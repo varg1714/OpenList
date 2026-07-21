@@ -135,6 +135,37 @@ func PublishPoster(source, dir, filmName string, content []byte) (PosterPublishR
 	return result, nil
 }
 
+// PromoteLegacyPoster renames the legacy poster to poster.jpg when the canonical
+// poster does not already exist. Missing legacy is idempotent success. Existing
+// regular poster.jpg means the legacy file is left untouched.
+func PromoteLegacyPoster(source, dir, filmName string) error {
+	paths, err := PosterPaths(source, dir, filmName)
+	if err != nil {
+		return err
+	}
+	posterInfo, err := os.Lstat(paths.Poster)
+	if err == nil {
+		if !posterInfo.Mode().IsRegular() {
+			return fmt.Errorf("poster destination is not a regular file: %s", paths.Poster)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	legacyInfo, err := os.Lstat(paths.LegacyPoster)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !legacyInfo.Mode().IsRegular() {
+		return fmt.Errorf("legacy poster is not a regular file: %s", paths.LegacyPoster)
+	}
+	return os.Rename(paths.LegacyPoster, paths.Poster)
+}
+
 // ReplacePoster publishes poster content using the legacy API name.
 // Deprecated: use PublishPoster.
 func ReplacePoster(source, dir, filmName string, content []byte) (PosterReplaceResult, error) {

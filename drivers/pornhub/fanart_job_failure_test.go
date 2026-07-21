@@ -138,7 +138,7 @@ func TestScanFilmFanartCancellationDoesNotDelayRetry(t *testing.T) {
 	}
 }
 
-func TestScanFilmFanartRemovesBackground(t *testing.T) {
+func TestScanFilmFanartRemovesBackgroundThenPromotesLegacyPoster(t *testing.T) {
 	dataDir := setupPornhubFanartTest(t)
 	media := &mockFanartMedia{duration: 100.0}
 	driver := newFanartDriver(media, func(_ context.Context, key string) (string, error) {
@@ -159,14 +159,30 @@ func TestScanFilmFanartRemovesBackground(t *testing.T) {
 	if err := os.WriteFile(paths.Background, []byte("regular background"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	driver.removeBackgroundCb = func(_, _, _ string) error {
+		if _, err := os.Lstat(paths.LegacyPoster); err != nil {
+			return fmt.Errorf("legacy poster unavailable before background cleanup: %w", err)
+		}
+		if _, err := os.Lstat(paths.Poster); !os.IsNotExist(err) {
+			return fmt.Errorf("poster promoted before background cleanup: %v", err)
+		}
+		return os.Remove(paths.Background)
+	}
 
 	driver.scanFilmFanart(context.Background(), &film)
 
 	if _, err := os.Lstat(paths.Background); !os.IsNotExist(err) {
 		t.Fatalf("background not removed: %v", err)
 	}
-	if _, err := os.Lstat(paths.LegacyPoster); err != nil {
-		t.Fatalf("legacy poster lost: %v", err)
+	content, err := os.ReadFile(paths.Poster)
+	if err != nil {
+		t.Fatalf("promoted poster not readable: %v", err)
+	}
+	if string(content) != "old poster" {
+		t.Fatalf("promoted poster content = %q, want %q", content, "old poster")
+	}
+	if _, err := os.Lstat(paths.LegacyPoster); !os.IsNotExist(err) {
+		t.Fatalf("legacy poster not renamed: %v", err)
 	}
 
 	fanartPath := filepath.Join(dataDir, "emby", DriverName, film.Actor, virtual_file.GetRealName(virtual_file.AppendImageName(film.Name)), "fanart1.jpg")
@@ -174,7 +190,6 @@ func TestScanFilmFanartRemovesBackground(t *testing.T) {
 		t.Fatalf("fanart1 not published: %v", err)
 	}
 }
-
 func TestScanFilmFanartDisabledWhenCountZero(t *testing.T) {
 	setupPornhubFanartTest(t)
 	d := &Pornhub{Addition: Addition{FanartCount: 0, FanartScanLimit: 10}}

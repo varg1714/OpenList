@@ -54,6 +54,9 @@ func (d *Pornhub) scanFilmFanart(ctx context.Context, film *model.Film) {
 		if err := removeBg(source, dir, filmName); err != nil {
 			return err
 		}
+		if err := virtual_file.PromoteLegacyPoster(source, dir, filmName); err != nil {
+			return err
+		}
 		backgroundRemoved = true
 		return nil
 	}
@@ -138,7 +141,6 @@ func (d *Pornhub) scanFilmFanart(ctx context.Context, film *model.Film) {
 			return
 		}
 
-		// Remove background once after first successful fanart publish.
 		// Cleanup failure prevents progress advancement so the film is retried.
 		if err := cleanupBackground(DriverName, film.Actor, film.Name); err != nil {
 			utils.Log.Warnf("failed to remove background for film %s: %s", film.Name, err.Error())
