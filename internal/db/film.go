@@ -312,6 +312,19 @@ func QuerySampleImageFilms(source string, scanInterval time.Duration, limit int)
 	return films, errors.WithStack(err)
 }
 
+func QueryFanartFilms(source string, scanInterval time.Duration, limit, targetCount int) ([]model.Film, error) {
+	var films []model.Film
+	query := db.Where("source = ?", source).
+		Where("url is not null and url <> ''").
+		Where("(COALESCE(sample_image_count, 0) < ? OR sample_image_complete = true)", targetCount).
+		Where("(sample_image_scan_at is null or sample_image_scan_at < ?)", time.Now().Add(-scanInterval)).
+		Order("date desc, id desc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	return films, errors.WithStack(query.Find(&films).Error)
+}
+
 func QueryDMMPosterFilms(retryInterval time.Duration, limit int) ([]model.Film, error) {
 	var films []model.Film
 	query := db.Where("source = ?", "javdb").
