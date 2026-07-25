@@ -369,6 +369,30 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 	if film.SampleImageComplete {
 		return false
 	}
+	removeBackground := d.removeBackground
+	if removeBackground == nil {
+		removeBackground = virtual_file.RemoveBackground
+	}
+	backgroundRemoved := false
+	if film.SampleImageCount > 0 {
+		firstFanart, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+		if err != nil {
+			d.updateSampleImageScanAt(film, err)
+			return false
+		}
+		info, err := os.Lstat(firstFanart)
+		if err != nil && !os.IsNotExist(err) {
+			d.updateSampleImageScanAt(film, err)
+			return false
+		}
+		if err == nil && info.Mode().IsRegular() {
+			if err := removeBackground(DriverName, film.Actor, film.Name); err != nil {
+				d.updateSampleImageScanAt(film, err)
+				return false
+			}
+			backgroundRemoved = true
+		}
+	}
 	landscapeReady, err := d.promoteLandscapeFanart(film, film.SampleImageCount)
 	if err != nil {
 		d.updateSampleImageScanAt(film, err)
@@ -425,6 +449,14 @@ func (d *Javdb) scanFilmSampleImagesWithBudget(ctx context.Context, film *model.
 			}
 			d.updateSampleImageScanAt(film, err)
 			return false
+		}
+		if !backgroundRemoved {
+			if err := removeBackground(DriverName, film.Actor, film.Name); err != nil {
+				utils.Log.Warnf("failed to remove background for film %s: %s", film.Name, err.Error())
+				d.updateSampleImageScanAt(film, err)
+				return false
+			}
+			backgroundRemoved = true
 		}
 		if !landscapeReady {
 			landscapeReady, err = d.promoteLandscapeFanart(film, index)

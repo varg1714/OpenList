@@ -30,6 +30,7 @@ type Javdb struct {
 	cron             *cron.Cron
 	matchTopFilmCorn *cron.Cron
 	client           *resty.Client
+	removeBackground func(string, string, string) error
 }
 
 func (d *Javdb) Config() driver.Config {

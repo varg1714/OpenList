@@ -1,6 +1,7 @@
 package pornhub
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,10 +130,10 @@ func canonicalVideoURL(base, raw string) (string, error) {
 	return parsed.String(), nil
 }
 
-func (d *Pornhub) getVideoLink(viewKey string) (string, error) {
+func (d *Pornhub) getVideoLink(ctx context.Context, viewKey string) (string, error) {
 
-	client := resty.New()
-	res, err := client.R().SetQueryParam("viewkey", viewKey).Get(fmt.Sprintf("%s/view_video.php", d.ServerUrl))
+	client := resty.New().SetTimeout(30 * time.Second)
+	res, err := client.R().SetContext(ctx).SetQueryParam("viewkey", viewKey).Get(fmt.Sprintf("%s/view_video.php", d.ServerUrl))
 	if err != nil {
 		utils.Log.Warnf("failed to get film page info from pornhub, %s", err.Error())
 		return "", err
@@ -158,7 +159,9 @@ func (d *Pornhub) getVideoLink(viewKey string) (string, error) {
 	flashId := regexp.MustCompile(`flashvars_\d+`).FindString(encryptedScript)
 
 	vm := otto.New()
-	_, err = vm.Run(`var playerObjList = {};` + encryptedScript + fmt.Sprintf(`;var __VM__OUTPUT = JSON.stringify(%s.mediaDefinitions)`, flashId))
+	scriptCtx, cancelScript := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelScript()
+	err = runPornhubScript(scriptCtx, vm, `var playerObjList = {};`+encryptedScript+fmt.Sprintf(`;var __VM__OUTPUT = JSON.stringify(%s.mediaDefinitions)`, flashId))
 	if err != nil {
 		utils.Log.Warnf("failed to run script, %s", err.Error())
 		return "", err
@@ -178,10 +181,10 @@ func (d *Pornhub) getVideoLink(viewKey string) (string, error) {
 	mediaDefinitions := make([]MediaDefinition, 0)
 
 	if str, err1 := value.ToString(); err1 != nil {
-		return "", err
+		return "", err1
 	} else {
 		if err2 := json.Unmarshal([]byte(str), &mediaDefinitions); err2 != nil {
-			return "", err
+			return "", err2
 		}
 	}
 
@@ -199,7 +202,7 @@ func (d *Pornhub) getVideoLink(viewKey string) (string, error) {
 
 	pornVideos := make([]videoInfo, 0)
 
-	_, err = client.R().SetHeaders(map[string]string{
+	_, err = client.R().SetContext(ctx).SetHeaders(map[string]string{
 		"Referer": mp4MediaDefinition.VideoURL,
 	}).SetResult(&pornVideos).Get(mp4MediaDefinition.VideoURL)
 
@@ -211,6 +214,42 @@ func (d *Pornhub) getVideoLink(viewKey string) (string, error) {
 
 	return pornVideos[len(pornVideos)-1].VideoURL, nil
 
+}
+
+func runPornhubScript(ctx context.Context, vm *otto.Otto, script string) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	interrupted := errors.New("pornhub script interrupted")
+	vm.Interrupt = make(chan func(), 1)
+	done := make(chan struct{})
+	defer close(done)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if recovered == interrupted {
+				err = ctx.Err()
+				if err == nil {
+					err = context.Canceled
+				}
+				return
+			}
+			panic(recovered)
+		}
+	}()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			select {
+			case vm.Interrupt <- func() { panic(interrupted) }:
+			case <-done:
+			}
+		case <-done:
+		}
+	}()
+
+	_, err = vm.Run(script)
+	return err
 }
 
 func (d *Pornhub) getPlayListFilms(playlistId, dirName string) ([]PornFilm, error) {

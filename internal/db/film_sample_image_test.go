@@ -378,6 +378,37 @@ func TestQuerySampleImageFilms(t *testing.T) {
 	}
 }
 
+func TestQueryFanartFilmsUsesURLAndConfiguredCount(t *testing.T) {
+	setupFilmSampleImageTestDB(t)
+
+	now := time.Now()
+	films := []model.Film{
+		{Name: "no-cover", Source: "target", Url: "view-1", Date: now, SampleImageScanAt: now.Add(-2 * time.Hour)},
+		{Name: "count-increased", Source: "target", Url: "view-2", Date: now.Add(-time.Minute), SampleImageCount: 2, SampleImageComplete: true, SampleImageScanAt: now.Add(-2 * time.Hour)},
+		{Name: "at-target", Source: "target", Url: "view-3", Date: now.Add(time.Hour), SampleImageCount: 3, SampleImageComplete: true, SampleImageScanAt: now.Add(-2 * time.Hour)},
+		{Name: "wrong-source", Source: "other", Url: "view-4", Date: now.Add(time.Hour), SampleImageScanAt: now.Add(-2 * time.Hour)},
+		{Name: "empty-url", Source: "target", Date: now.Add(time.Hour), SampleImageScanAt: now.Add(-2 * time.Hour)},
+		{Name: "fresh", Source: "target", Url: "view-5", Date: now.Add(time.Hour), SampleImageScanAt: now},
+	}
+	if err := db.Create(&films).Error; err != nil {
+		t.Fatalf("create films: %v", err)
+	}
+
+	got, err := QueryFanartFilms("target", time.Hour, 10, 3)
+	if err != nil {
+		t.Fatalf("query fanart films: %v", err)
+	}
+	wantIDs := []uint{films[2].ID, films[0].ID, films[1].ID}
+	if len(got) != len(wantIDs) {
+		t.Fatalf("got %d films, want %d", len(got), len(wantIDs))
+	}
+	for index, wantID := range wantIDs {
+		if got[index].ID != wantID {
+			t.Errorf("film %d ID = %d, want %d", index, got[index].ID, wantID)
+		}
+	}
+}
+
 func TestSampleImageUpdateHelpers(t *testing.T) {
 	setupFilmSampleImageTestDB(t)
 

@@ -6,41 +6,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
-
-func TestMain(m *testing.M) {
-	dataDir, err := os.MkdirTemp("", "pornhub-test-")
-	if err != nil {
-		os.Exit(1)
-	}
-	conf.Conf = conf.DefaultConfig(dataDir)
-	testDB, err := gorm.Open(sqlite.Open(filepath.Join(dataDir, "pornhub-test.db")), &gorm.Config{})
-	if err != nil {
-		_ = os.RemoveAll(dataDir)
-		os.Exit(1)
-	}
-	if err := db.Init(testDB); err != nil {
-		_ = os.RemoveAll(dataDir)
-		os.Exit(1)
-	}
-	code := m.Run()
-	if sqlDB, sqlErr := testDB.DB(); sqlErr == nil {
-		_ = sqlDB.Close()
-	}
-	_ = os.RemoveAll(dataDir)
-	os.Exit(code)
-}
 
 func TestBuildDiscoveredWorkUsesNormalizedViewKeyIdentity(t *testing.T) {
 	work, err := buildDiscoveredWork(12, "Actor A", PornFilm{
@@ -143,7 +117,7 @@ func TestLinkUsesCanonicalSourceURLDirectly(t *testing.T) {
 func TestLinkAddsRefererToResolvedPornhubVideo(t *testing.T) {
 	oldResolve := resolvePornhubVideoLink
 	t.Cleanup(func() { resolvePornhubVideoLink = oldResolve })
-	resolvePornhubVideoLink = func(*Pornhub, string) (string, error) {
+	resolvePornhubVideoLink = func(context.Context, *Pornhub, string) (string, error) {
 		return "https://cdn.pornhub.test/video.mp4", nil
 	}
 	driver := Pornhub{Addition: Addition{ServerUrl: "https://www.pornhub.com"}}
@@ -162,7 +136,7 @@ func TestLinkReturnsMockedLinkWithoutResolutionWhenMockedEnabled(t *testing.T) {
 	oldResolve := resolvePornhubVideoLink
 	t.Cleanup(func() { resolvePornhubVideoLink = oldResolve })
 	calls := 0
-	resolvePornhubVideoLink = func(*Pornhub, string) (string, error) {
+	resolvePornhubVideoLink = func(context.Context, *Pornhub, string) (string, error) {
 		calls++
 		return "", errors.New("unexpected resolution")
 	}
@@ -185,7 +159,7 @@ func TestLinkReturnsResolutionErrorWhenMockedDisabled(t *testing.T) {
 	oldResolve := resolvePornhubVideoLink
 	t.Cleanup(func() { resolvePornhubVideoLink = oldResolve })
 	wantErr := errors.New("resolution failed")
-	resolvePornhubVideoLink = func(*Pornhub, string) (string, error) { return "", wantErr }
+	resolvePornhubVideoLink = func(context.Context, *Pornhub, string) (string, error) { return "", wantErr }
 	driver := Pornhub{Addition: Addition{MockedLink: "https://dormant.test/video.mp4"}}
 
 	_, err := driver.Link(context.Background(), &model.EmbyFileObj{SourceRef: "abc123"}, model.LinkArgs{})
