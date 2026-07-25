@@ -18,6 +18,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/open_ai"
 	"github.com/go-resty/resty/v2"
 	"gorm.io/gorm"
 )
@@ -285,4 +286,98 @@ func assertMediaJobDimensions(t *testing.T, path string, wantWidth, wantHeight i
 	if config.Width != wantWidth || config.Height != wantHeight {
 		t.Fatalf("dimensions at %s = %dx%d, want %dx%d", path, config.Width, config.Height, wantWidth, wantHeight)
 	}
+}
+
+func TestPersistMediaSynopsesBatchesAllThroughSingleTranslateCall(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	works := createMediaWorksForSynopsis(t, "airav-code", "dmm-code")
+
+	var translateArgs []open_ai.TranslateItem
+	original := batchSynopsisMediaTranslate
+	t.Cleanup(func() { batchSynopsisMediaTranslate = original })
+	batchSynopsisMediaTranslate = func(items []open_ai.TranslateItem) []string {
+		translateArgs = items
+		return []string{"airav-translated", "dmm-translated"}
+	}
+
+	persistMediaSynopses([]mediaSynopsisCandidate{
+		{workID: works[0].ID, code: works[0].Code, origin: "airav-raw"},
+		{workID: works[1].ID, code: works[1].Code, origin: "dmm-raw"},
+	})
+
+	if len(translateArgs) != 2 {
+		t.Fatalf("BatchTranslate items = %d, want 2", len(translateArgs))
+	}
+	if translateArgs[0].Origin != "airav-raw" || translateArgs[1].Origin != "dmm-raw" {
+		t.Fatalf("BatchTranslate origins = %q, %q", translateArgs[0].Origin, translateArgs[1].Origin)
+	}
+	first, err := db.GetFilmWork(works[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Synopsis != "airav-translated" {
+		t.Fatalf("first synopsis = %q, want airav-translated", first.Synopsis)
+	}
+	second, err := db.GetFilmWork(works[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Synopsis != "dmm-translated" {
+		t.Fatalf("second synopsis = %q, want dmm-translated", second.Synopsis)
+	}
+}
+
+func TestPersistMediaSynopsesFallsBackToRawWhenTranslationEmpty(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	work := createMediaWorksForSynopsis(t, "empty-translation")[0]
+
+	original := batchSynopsisMediaTranslate
+	t.Cleanup(func() { batchSynopsisMediaTranslate = original })
+	batchSynopsisMediaTranslate = func(items []open_ai.TranslateItem) []string {
+		return []string{""}
+	}
+
+	persistMediaSynopses([]mediaSynopsisCandidate{
+		{workID: work.ID, code: work.Code, origin: "raw-synopsis"},
+	})
+
+	stored, err := db.GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Synopsis != "raw-synopsis" {
+		t.Fatalf("synopsis = %q, want raw-synopsis", stored.Synopsis)
+	}
+}
+
+func TestPersistMediaSynopsesSkipsWhenNoCollected(t *testing.T) {
+	resetJavdbMediaWorks(t)
+
+	called := false
+	original := batchSynopsisMediaTranslate
+	t.Cleanup(func() { batchSynopsisMediaTranslate = original })
+	batchSynopsisMediaTranslate = func([]open_ai.TranslateItem) []string {
+		called = true
+		return nil
+	}
+
+	persistMediaSynopses(nil)
+	if called {
+		t.Fatal("BatchTranslate called with no collected synopses")
+	}
+}
+
+func createMediaWorksForSynopsis(t *testing.T, codes ...string) []model.FilmWork {
+	t.Helper()
+	works := make([]model.FilmWork, len(codes))
+	for i, code := range codes {
+		works[i] = model.FilmWork{
+			StorageID: 91, Source: DriverName, Code: code,
+			SourceRef: code, SourceURL: code, PrimaryDir: "Actor A",
+		}
+		if err := db.GetDb().Create(&works[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	return works
 }

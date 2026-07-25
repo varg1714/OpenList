@@ -19,8 +19,9 @@ import (
 const currentTranslationVersion = model.CurrentTranslationVersion
 
 var (
-	batchTranslateMediaWorks = open_ai.BatchTranslate
-	matchMediaSubtitles      = MatchSubtitleCatSubtitles
+	batchTranslateMediaWorks    = open_ai.BatchTranslate
+	batchSynopsisMediaTranslate = open_ai.BatchTranslate
+	matchMediaSubtitles         = MatchSubtitleCatSubtitles
 )
 
 func (d *Javdb) scanTranslations() {
@@ -64,6 +65,12 @@ func (d *Javdb) scanTranslations() {
 	}
 }
 
+type mediaSynopsisCandidate struct {
+	workID uint
+	code   string
+	origin string
+}
+
 func (d *Javdb) scanMediaSynopsis() {
 	limit := d.SynopsisScanLimit
 	if limit <= 0 {
@@ -74,6 +81,8 @@ func (d *Javdb) scanMediaSynopsis() {
 		utils.Log.Warnf("failed to query JavDB synopsis works: %s", err)
 		return
 	}
+
+	var collected []mediaSynopsisCandidate
 	for index := range works {
 		work := works[index]
 		file := model.EmbyFileObj{
@@ -83,9 +92,7 @@ func (d *Javdb) scanMediaSynopsis() {
 		}
 		_, candidate, airErr := d.getAiravNamingAddr(file)
 		if airErr == nil && candidate.Synopsis != "" {
-			if err := db.UpdateMediaWorkSynopsis(work.ID, candidate.Synopsis); err != nil {
-				utils.Log.Warnf("failed to save JavDB synopsis for %s: %s", work.Code, err)
-			}
+			collected = append(collected, mediaSynopsisCandidate{workID: work.ID, code: work.Code, origin: candidate.Synopsis})
 			continue
 		}
 		synopsis, dmmErr := d.fetchDmmSynopsis(work.Code)
@@ -109,12 +116,31 @@ func (d *Javdb) scanMediaSynopsis() {
 			}
 			continue
 		}
-		translated := open_ai.Translate(synopsis)
-		if translated == "" {
-			translated = synopsis
+		collected = append(collected, mediaSynopsisCandidate{workID: work.ID, code: work.Code, origin: synopsis})
+	}
+
+	persistMediaSynopses(collected)
+}
+
+func persistMediaSynopses(collected []mediaSynopsisCandidate) {
+	if len(collected) == 0 {
+		return
+	}
+	items := make([]open_ai.TranslateItem, len(collected))
+	for i, c := range collected {
+		items[i] = open_ai.TranslateItem{Origin: c.origin}
+	}
+	translations := batchSynopsisMediaTranslate(items)
+	for i, c := range collected {
+		translated := ""
+		if i < len(translations) {
+			translated = translations[i]
 		}
-		if err := db.UpdateMediaWorkSynopsis(work.ID, translated); err != nil {
-			utils.Log.Warnf("failed to save DMM synopsis for %s: %s", work.Code, err)
+		if translated == "" {
+			translated = c.origin
+		}
+		if err := db.UpdateMediaWorkSynopsis(c.workID, translated); err != nil {
+			utils.Log.Warnf("failed to save synopsis for %s: %s", c.code, err)
 		}
 	}
 }
