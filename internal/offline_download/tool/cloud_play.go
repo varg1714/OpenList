@@ -7,12 +7,9 @@ import (
 	"fmt"
 	_115 "github.com/OpenListTeam/OpenList/v4/drivers/115"
 	"github.com/OpenListTeam/OpenList/v4/internal/av"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/internal/op"
-	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	driver2 "github.com/SheltonZhu/115driver/pkg/driver"
 	"math"
@@ -20,104 +17,6 @@ import (
 	"slices"
 	"time"
 )
-
-func CloudPlay(ctx context.Context, args model.LinkArgs, driverType, driverPath string, downloadingFile model.Obj, magnetGetter func(obj model.Obj) (string, error)) (*model.Link, error) {
-
-	if driverPath == "" {
-		switch driverType {
-		case "115 Cloud":
-			driverPath = setting.GetStr(conf.Pan115TempDir)
-		case "PikPak":
-			driverPath = setting.GetStr(conf.PikPakTempDir)
-		}
-	}
-
-	if driverPath == "" {
-		return nil, errors.New("尚未配置用于云播的网盘")
-	}
-
-	storage := op.GetBalancedStorage(driverPath)
-	if storage == nil {
-		return nil, errors.New("网盘配置未找到")
-	}
-
-	// 1. 尝试获取缓存文件
-	fileName := downloadingFile.GetName()
-
-	// 1.1 获取缓存的文件ID
-	fileCache := db.QueryMagnetCacheByName(driverType, fileName)
-
-	// 1.2 缓存文件不为空，返回该文件
-	if fileCache.FileId != "" {
-		cache, err := getLinkByCache(ctx, args, driverType, storage, fileCache)
-		if err != nil {
-			return cache, err
-		} else if cache != nil {
-			return cache, nil
-		}
-	}
-
-	// 2. 获取磁力链接
-	start := time.Now().UnixMilli()
-	magnet, err := magnetGetter(downloadingFile)
-	if err != nil {
-		utils.Log.Info("磁力链接获取失败", err)
-	}
-	utils.Log.Infof("获取:[%s]的磁力链接结果为:[%s]耗时:[%d]", downloadingFile.GetName(), magnet, time.Now().UnixMilli()-start)
-	if magnet == "" {
-		return nil, errors.New("磁力信息获取为空")
-	}
-
-	// 3. 下载文件
-	status, _, err := downloadMagnet(ctx, driverType, fmt.Sprintf("%s/%s", driverPath, downloadingFile.GetPath()), magnet, fileName)
-	if err != nil {
-		return nil, err
-	}
-
-	// 4. 解析下载结果
-	downloadedFile := &model.ObjThumb{
-		Object: model.Object{ID: status.FileInfo.FileId},
-	}
-	// 4.1 获取下载完毕的文件
-	fileList, err2 := storage.List(ctx, downloadedFile, model.ListArgs{})
-	if err2 != nil {
-		return nil, err2
-	}
-
-	switch driverType {
-	case "PikPak":
-		if len(fileList) == 0 {
-			downloadedFile.ID = status.FileInfo.FileId
-			err1 := db.CreateMagnetCache(model.MagnetCache{
-				DriverType: driverType,
-				Magnet:     magnet,
-				FileId:     status.FileInfo.FileId,
-				Name:       fileName,
-				Code:       av.GetFilmCode(fileName),
-			})
-			if err1 != nil {
-				utils.Log.Infof("文件缓存失败:%s", err1.Error())
-			}
-			return storage.Link(ctx, downloadedFile, args)
-		} else {
-			lookedFile := cacheFiles(driverType, magnet, fileName, fileList, func(obj model.Obj) map[string]string {
-				return nil
-			})
-			return storage.Link(ctx, lookedFile, args)
-		}
-	case "115 Cloud":
-		lookedFile := cacheFiles(driverType, magnet, fileName, fileList, func(obj model.Obj) map[string]string {
-			return map[string]string{
-				"pickCode": obj.(*_115.FileObj).PickCode,
-			}
-		})
-
-		return storage.Link(ctx, lookedFile, args)
-	}
-
-	return nil, nil
-
-}
 
 func downloadMagnet(ctx context.Context, driverType string, driverPath string, magnet string, fileName string) (*Status, *DownloadTask, error) {
 
@@ -254,7 +153,8 @@ func getLinkByCache(ctx context.Context, args model.LinkArgs, driverType string,
 		}, args)
 
 		if err != nil {
-			utils.Log.Infof("缓存文件已被删除，清除原缓存的文件：%s", err.Error())
+			utils.Log.Warnf("cached PikPak file is unavailable, retrying from source magnet: %s", err)
+			return nil, nil
 		}
 		return link, nil
 	case "115 Cloud":
@@ -266,7 +166,8 @@ func getLinkByCache(ctx context.Context, args model.LinkArgs, driverType string,
 		}, args)
 
 		if err != nil {
-			utils.Log.Infof("缓存文件已被删除，清除原缓存的文件：%s", err.Error())
+			utils.Log.Warnf("cached 115 file is unavailable, retrying from source magnet: %s", err)
+			return nil, nil
 		}
 		return link, nil
 	}
