@@ -16,7 +16,7 @@ func TestPornhubDropWaitsForActiveFanartWork(t *testing.T) {
 		close(released)
 		return "", ctx.Err()
 	})
-	createFanartFilm(t, "drop-active", "view-active", 0, time.Time{})
+	createFanartWork(t, "drop-active", "view-active", 0, time.Time{})
 	driver.fanartCtx, driver.fanartCancel = context.WithCancel(context.Background())
 
 	go driver.runFanart()

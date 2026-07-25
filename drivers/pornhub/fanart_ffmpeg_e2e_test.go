@@ -55,8 +55,8 @@ func TestFanartWorkflowE2ERefererAndThreeFrames(t *testing.T) {
 	driver := newFanartDriver(&fanartFFmpeg{serverURL: referer}, func(_ context.Context, _ string) (string, error) {
 		return videoURL, nil
 	})
-	film := createFanartFilm(t, "workflow-e2e", "view-e2e", 0, time.Time{})
-	paths, err := virtual_file.PosterPaths(DriverName, film.Actor, film.Name)
+	film := createFanartWork(t, "workflow-e2e", "view-e2e", 0, time.Time{})
+	paths, err := virtual_file.PosterPaths(DriverName, film.PrimaryDir, film.Code)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestFanartWorkflowE2ERefererAndThreeFrames(t *testing.T) {
 
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
@@ -77,7 +77,7 @@ func TestFanartWorkflowE2ERefererAndThreeFrames(t *testing.T) {
 		t.Fatalf("background still exists: %v", err)
 	}
 	for index := 1; index <= 3; index++ {
-		path, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
 		if err != nil {
 			t.Fatal(err)
 		}

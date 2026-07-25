@@ -47,18 +47,18 @@ func TestScanFilmFanartPromotesFirstLaterLandscapeAfterAllFramesExist(t *testing
 	driver := newFanartDriver(media, func(_ context.Context, key string) (string, error) {
 		return "https://example.test/video/" + key, nil
 	})
-	film := createFanartFilm(t, "promotion-test", "view-promotion", 0, time.Time{})
+	film := createFanartWork(t, "promotion-test", "view-promotion", 0, time.Time{})
 
 	driver.scanFilmFanart(context.Background(), &film)
 
 	if !allFramesExisted {
 		t.Fatal("landscape promotion did not run after all configured frames existed")
 	}
-	firstPath, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+	firstPath, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondPath, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 2)
+	secondPath, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,15 +85,15 @@ func TestScanFilmFanartKeepsOrderWhenAllFramesArePortrait(t *testing.T) {
 	driver := newFanartDriver(media, func(_ context.Context, key string) (string, error) {
 		return "https://example.test/video/" + key, nil
 	})
-	film := createFanartFilm(t, "portrait-test", "view-portrait", 0, time.Time{})
+	film := createFanartWork(t, "portrait-test", "view-portrait", 0, time.Time{})
 
 	driver.scanFilmFanart(context.Background(), &film)
 
-	firstPath, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+	firstPath, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondPath, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 2)
+	secondPath, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestScanFilmFanartKeepsOrderWhenAllFramesArePortrait(t *testing.T) {
 	if secondWidth != 3 || secondHeight != 4 || secondColor != (color.RGBA{G: 220, A: 255}) {
 		t.Fatalf("fanart2 changed to (%d, %d, %v), want original portrait green frame", secondWidth, secondHeight, secondColor)
 	}
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
@@ -128,17 +128,17 @@ func TestScanFanartRetriesPromotionFailureThroughQuery(t *testing.T) {
 	}, func(_ context.Context, key string) (string, error) {
 		return "https://example.test/video/" + key, nil
 	})
-	film := createFanartFilm(t, "retry-test", "view-retry", 0, time.Time{})
+	film := createFanartWork(t, "retry-test", "view-retry", 0, time.Time{})
 	started := time.Now()
 
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 2 || stored.SampleImageComplete {
 		t.Fatalf("failed progress = (%d, %t), want (2, false)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
-	if stored.SampleImageScanAt.Before(started) {
-		t.Fatalf("failed scan time = %s, want at or after %s", stored.SampleImageScanAt, started)
+	if stored.SampleImageScanAt == nil || stored.SampleImageScanAt.Before(started) {
+		t.Fatalf("failed scan time = %v, want at or after %s", stored.SampleImageScanAt, started)
 	}
 
 	promoteLandscapeFanartCandidate = originalPromote
@@ -147,11 +147,11 @@ func TestScanFanartRetriesPromotionFailureThroughQuery(t *testing.T) {
 	}
 	driver.scanFanart(context.Background())
 
-	stored = loadFanartFilm(t, film.ID)
+	stored = loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
 		t.Fatalf("retried progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
-	firstPath, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+	firstPath, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestScanFanartCompletedAuditRecoversInterruptedPromotion(t *testing.T) {
 	driver := newFanartDriver(&mockFanartMedia{}, func(_ context.Context, _ string) (string, error) {
 		return "", errors.New("completed audit should not resolve video")
 	})
-	film := createFanartFilm(t, "audit-recovery", "view-audit", 3, time.Time{})
+	film := createFanartWork(t, "audit-recovery", "view-audit", 3, time.Time{})
 	film.SampleImageComplete = true
 	if err := db.GetDb().Model(&film).Update("sample_image_complete", true).Error; err != nil {
 		t.Fatal(err)
@@ -195,9 +195,9 @@ func TestScanFanartCompletedAuditRecoversInterruptedPromotion(t *testing.T) {
 	if width != 2 || height != 3 || gotColor != (color.RGBA{R: 220, A: 255}) {
 		t.Fatalf("recovered fanart2 = (%d, %d, %v), want portrait red frame", width, height, gotColor)
 	}
-	stored := loadFanartFilm(t, film.ID)
-	if !stored.SampleImageComplete || stored.SampleImageScanAt.IsZero() {
-		t.Fatalf("audit progress = (%d, %t), scan time = %s, want complete with scan time", stored.SampleImageCount, stored.SampleImageComplete, stored.SampleImageScanAt)
+	stored := loadFanartWork(t, film.ID)
+	if !stored.SampleImageComplete || stored.SampleImageScanAt == nil {
+		t.Fatalf("audit progress = (%d, %t), scan time = %v, want complete with scan time", stored.SampleImageCount, stored.SampleImageComplete, stored.SampleImageScanAt)
 	}
 }
 
@@ -222,9 +222,9 @@ func (f fanartJPEGFixture) encode(t *testing.T) []byte {
 	return encoded.Bytes()
 }
 
-func (f fanartJPEGFixture) write(t *testing.T, film model.Film, index int) string {
+func (f fanartJPEGFixture) write(t *testing.T, film model.FilmWork, index int) string {
 	t.Helper()
-	path, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+	path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
 	if err != nil {
 		t.Fatal(err)
 	}
