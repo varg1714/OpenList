@@ -387,12 +387,6 @@ func (builder *artifactPlanBuilder) build() (*artifactPlan, error) {
 			return strings.Compare(left.sourcePath, right.sourcePath)
 		})
 		selected := candidates[0]
-		for _, candidate := range candidates[1:] {
-			if candidate.hash != selected.hash {
-				return nil, &ArtifactCollisionError{SourcePath: candidate.sourcePath, TargetPath: target}
-			}
-			builder.cleanup = append(builder.cleanup, cleanupCandidate{source: candidate, verify: target, hash: selected.hash})
-		}
 		selectedTargets[selected.sourcePath] = target
 		if !selected.symlink {
 			selectedRegularTargets[selected.sourcePath] = target
@@ -404,14 +398,16 @@ func (builder *artifactPlanBuilder) build() (*artifactPlan, error) {
 			return nil, err
 		}
 		if targetExists {
-			if targetHash != selected.hash {
-				return nil, &ArtifactCollisionError{SourcePath: selected.sourcePath, TargetPath: target}
-			}
 			result.Existing++
-			if selected.sourcePath != target {
-				builder.cleanup = append(builder.cleanup, cleanupCandidate{source: selected, verify: target, hash: selected.hash})
+			for _, candidate := range candidates {
+				if candidate.sourcePath != target {
+					builder.cleanup = append(builder.cleanup, cleanupCandidate{source: candidate, verify: target, hash: targetHash})
+				}
 			}
 			continue
+		}
+		for _, candidate := range candidates[1:] {
+			builder.cleanup = append(builder.cleanup, cleanupCandidate{source: candidate, verify: target, hash: selected.hash})
 		}
 		if selected.sourcePath == target {
 			return nil, &ArtifactMigrationError{Path: target, Reason: "selected target disappeared during preflight"}

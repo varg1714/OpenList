@@ -175,7 +175,7 @@ func TestMigrateLegacyMediaArtifactRerunIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestMigrateLegacyMediaRefusesConflictingArtifactTarget(t *testing.T) {
+func TestMigrateLegacyMediaKeepsFirstArtifactAndDeletesLaterConflict(t *testing.T) {
 	database := newMigrationTestDB(t)
 	dataDir := t.TempDir()
 	previousDataDir := flags.DataDir
@@ -185,20 +185,24 @@ func TestMigrateLegacyMediaRefusesConflictingArtifactTarget(t *testing.T) {
 	if err := database.Create(&model.Film{Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123"}).Error; err != nil {
 		t.Fatalf("seed film: %v", err)
 	}
-	writeArtifactFixture(t, filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123 title"), map[string]string{"poster.jpg": "legacy poster"})
+	legacyRoot := filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123 title")
+	writeArtifactFixture(t, legacyRoot, map[string]string{"poster.jpg": "legacy poster"})
 	targetRoot := filepath.Join(dataDir, "emby", "javdb", "1", "Actor A", "ABP-123")
 	writeArtifactFixture(t, targetRoot, map[string]string{"poster.jpg": "different target"})
 
-	_, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{
+	report, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{
 		Mode: MigrationApply, DataDir: dataDir, JournalPath: filepath.Join(dataDir, "journal.json"),
 	})
-	if !errors.Is(err, ErrArtifactCollision) {
-		t.Fatalf("artifact error = %v, want ErrArtifactCollision", err)
+	if err != nil {
+		t.Fatalf("migrate differing poster files: %v", err)
 	}
-	assertArtifactContent(t, filepath.Join(targetRoot, "poster.jpg"), "different target")
-	assertCount(t, database, &model.FilmWork{}, 0)
-	assertCount(t, database, &model.FilmFile{}, 0)
-	assertCount(t, database, &model.SourceMagnet{}, 0)
+	if report.ArtifactMovesPlanned != 1 || report.ArtifactDeletesPlanned != 1 || report.ArtifactsMoved != 1 || report.ArtifactsDeleted != 1 {
+		t.Fatalf("poster conflict report = %+v", report)
+	}
+	assertArtifactContent(t, filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123", "poster.jpg"), "different target")
+	if _, err := os.Stat(legacyRoot); !os.IsNotExist(err) {
+		t.Fatalf("later poster artifact root remains: %v", err)
+	}
 }
 
 func TestMigrateLegacyMediaRejectsAmbiguousPlainSourcesBeforeArtifactPlanning(t *testing.T) {

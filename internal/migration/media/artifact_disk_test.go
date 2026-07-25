@@ -2,7 +2,6 @@ package media
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,7 +246,7 @@ func TestMigrateLegacyMediaRemovesCodePrefixedDirectoryWithoutDatabaseWork(t *te
 	}
 }
 
-func TestMigrateLegacyMediaRefusesDifferingNFOInCodePrefixedDirectory(t *testing.T) {
+func TestMigrateLegacyMediaKeepsExistingNFOAndDeletesLaterConflict(t *testing.T) {
 	// Given
 	database := newMigrationTestDB(t)
 	dataDir := t.TempDir()
@@ -267,14 +266,19 @@ func TestMigrateLegacyMediaRefusesDifferingNFOInCodePrefixedDirectory(t *testing
 	writeArtifactFixture(t, targetRoot, map[string]string{"SSNI-772.nfo": "new nfo"})
 
 	// When
-	_, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{
+	report, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{
 		Mode: MigrationApply, DataDir: dataDir, JournalPath: filepath.Join(dataDir, "migration-journal.json"),
 	})
 
 	// Then
-	if !errors.Is(err, ErrArtifactCollision) {
-		t.Fatalf("migration error = %v, want ErrArtifactCollision", err)
+	if err != nil {
+		t.Fatalf("migrate differing NFO files: %v", err)
 	}
-	assertArtifactContent(t, filepath.Join(legacyRoot, "SSNI-772 original-title.nfo"), "legacy nfo")
+	if report.ArtifactDeletesPlanned != 1 || report.ArtifactsDeleted != 1 || report.ArtifactsExisting != 1 {
+		t.Fatalf("NFO conflict report = %+v", report)
+	}
 	assertArtifactContent(t, filepath.Join(targetRoot, "SSNI-772.nfo"), "new nfo")
+	if _, err := os.Stat(legacyRoot); !os.IsNotExist(err) {
+		t.Fatalf("later NFO artifact root remains: %v", err)
+	}
 }

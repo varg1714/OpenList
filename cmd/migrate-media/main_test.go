@@ -148,7 +148,7 @@ func TestMigrateMediaCommandApplyPrintsStructuredReport(t *testing.T) {
 	assertCommandWorkCount(t, dbPath, 1)
 }
 
-func TestMigrateMediaCommandApplyPreflightFailureDoesNotInitializeSchema(t *testing.T) {
+func TestMigrateMediaCommandApplyKeepsExistingArtifactAndDeletesLaterConflict(t *testing.T) {
 	dbPath, dataDir := seedCommandDatabase(t)
 	legacyRoot := filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123 title")
 	targetRoot := filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123")
@@ -163,18 +163,27 @@ func TestMigrateMediaCommandApplyPreflightFailureDoesNotInitializeSchema(t *test
 			t.Fatalf("write artifact fixture: %v", err)
 		}
 	}
-	command := NewCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	var stdout, stderr bytes.Buffer
+	command := NewCommand(&stdout, &stderr)
 	command.SetArgs([]string{"--db", dbPath, "--data-dir", dataDir, "--apply"})
-	if err := command.Execute(); err == nil {
-		t.Fatal("conflicting apply unexpectedly succeeded")
+	if err := command.Execute(); err != nil {
+		t.Fatalf("apply with differing artifacts: %v, stderr=%s", err, stderr.String())
 	}
-	database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("reopen failed apply database: %v", err)
+	var report migrationReportOutput
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode conflict cleanup report: %v; output=%s", err, stdout.String())
 	}
-	if database.Migrator().HasTable(&model.FilmWork{}) {
-		t.Fatal("failed apply preflight initialized normalized schema")
+	if report.ArtifactDeletesPlanned != 1 || report.ArtifactsDeleted != 1 || report.ArtifactsExisting != 1 {
+		t.Fatalf("conflict cleanup report = %+v", report)
 	}
+	content, err := os.ReadFile(filepath.Join(targetRoot, "poster.jpg"))
+	if err != nil || string(content) != "different" {
+		t.Fatalf("retained artifact = %q, err=%v", content, err)
+	}
+	if _, err := os.Stat(legacyRoot); !os.IsNotExist(err) {
+		t.Fatalf("later artifact root remains: %v", err)
+	}
+	assertCommandWorkCount(t, dbPath, 1)
 }
 
 func TestMigrateMediaCommandApplySupportsPrefixedSQLiteSchema(t *testing.T) {
