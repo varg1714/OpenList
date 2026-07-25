@@ -31,9 +31,10 @@ type artifactOperation struct {
 }
 
 type artifactPlan struct {
-	ID         string
-	Operations []artifactOperation
-	Existing   int
+	ID             string
+	Operations     []artifactOperation
+	Existing       int
+	ReplaceJournal bool
 }
 
 type artifactCandidate struct {
@@ -72,6 +73,18 @@ func inspectArtifacts(plan *migrationPlan, options MigrationOptions, report *Mig
 	if exists {
 		if journal.PlanID != planID {
 			return nil, &ArtifactMigrationError{Path: options.JournalPath, Reason: "journal plan ID does not match the current database plan"}
+		}
+		if artifactJournalComplete(journal) {
+			artifacts, err = collectArtifactPlan(plan, options.DataDir)
+			if err != nil {
+				return nil, err
+			}
+			if len(artifacts.Operations) > 0 {
+				artifacts.ID = planID
+				artifacts.ReplaceJournal = true
+				populateArtifactReport(report, artifacts)
+				return artifacts, nil
+			}
 		}
 		artifacts = &artifactPlan{ID: journal.PlanID, Operations: append([]artifactOperation(nil), journal.Operations...)}
 		if err := preflightJournalOperations(artifacts, options.DataDir); err != nil {
@@ -134,14 +147,18 @@ func (builder *artifactPlanBuilder) collectWork(work *plannedWork) error {
 		return err
 	}
 	builder.targetRoots[targetRoot] = struct{}{}
+	artifactSources, err := builder.artifactSourcesFor(work)
+	if err != nil {
+		return err
+	}
 
 	exactPart := make(map[int]bool)
-	for _, source := range work.artifactSources {
+	for _, source := range artifactSources {
 		if legacyRealNameFor(source.name) == work.identity.Code {
 			exactPart[source.partIndex] = true
 		}
 	}
-	for _, source := range work.artifactSources {
+	for _, source := range artifactSources {
 		legacyBase := clearArtifactExtension(source.name)
 		legacyRoot, err := safeArtifactPath(builder.dataDir, "emby", work.identity.Source, work.work.PrimaryDir, legacyRealNameFor(source.name))
 		if err != nil {
@@ -426,6 +443,9 @@ func (builder *artifactPlanBuilder) build() (*artifactPlan, error) {
 		}
 		removable := true
 		for _, entry := range entries {
+			if removableArtifactMetadata(entry) {
+				continue
+			}
 			if _, removed := removalSources[filepath.Join(root, entry.Name())]; !removed {
 				removable = false
 				break

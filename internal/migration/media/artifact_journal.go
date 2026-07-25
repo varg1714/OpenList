@@ -32,6 +32,15 @@ type artifactProgressLog struct {
 	planID  string
 }
 
+func artifactJournalComplete(journal artifactJournal) bool {
+	for _, operation := range journal.Operations {
+		if operation.State != "done" {
+			return false
+		}
+	}
+	return true
+}
+
 func loadArtifactJournal(path, dataDir string) (artifactJournal, bool, error) {
 	if err := ensurePathWithin(dataDir, path); err != nil {
 		return artifactJournal{}, false, err
@@ -347,6 +356,17 @@ func migrateArtifacts(plan *artifactPlan, options MigrationOptions, report *Migr
 	if err != nil {
 		return err
 	}
+	if exists && plan.ReplaceJournal {
+		if !artifactJournalComplete(journal) {
+			return &ArtifactMigrationError{Path: options.JournalPath, Reason: "cannot replace incomplete artifact journal"}
+		}
+		for _, path := range []string{options.JournalPath + ".progress", options.JournalPath} {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return &ArtifactMigrationError{Path: path, Reason: err.Error()}
+			}
+		}
+		exists = false
+	}
 	if !exists {
 		if _, err := os.Lstat(options.JournalPath + ".progress"); err == nil {
 			return &ArtifactMigrationError{Path: options.JournalPath + ".progress", Reason: "progress file exists without its immutable journal"}
@@ -559,15 +579,20 @@ func executeDirectoryRemoval(operation *artifactOperation, progress *artifactPro
 	if err != nil {
 		return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: err.Error()}
 	}
-	changed := false
-	if len(entries) == 0 {
-		if err := os.Remove(operation.SourcePath); err != nil {
-			return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: err.Error()}
+	for _, entry := range entries {
+		if !removableArtifactMetadata(entry) {
+			continue
 		}
-		changed = true
+		path := filepath.Join(operation.SourcePath, entry.Name())
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return false, &ArtifactMigrationError{Path: path, Reason: err.Error()}
+		}
+	}
+	if err := os.Remove(operation.SourcePath); err != nil {
+		return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: err.Error()}
 	}
 	if err := progress.record(operation, "done"); err != nil {
 		return false, err
 	}
-	return changed, nil
+	return true, nil
 }
