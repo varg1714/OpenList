@@ -663,27 +663,25 @@ func (d *Javdb) updateNfo(film *model.Film, synopsis string) {
 	})
 }
 
-func (d *Javdb) filterFilms() {
-
-	utils.Log.Info("start to filter javdb films")
-	defer utils.Log.Info("finish filter javdb films")
-
-	films, err := db.QueryFilmsByNamePrefix(DriverName, strings.Split(d.Filter, ","))
-	if err != nil {
-		utils.Log.Warn("failed to query films:", err.Error())
-		return
-	}
-
-	if len(films) > 0 {
-		utils.Log.Infof("deleting films:[%v]", films)
-		for _, film := range films {
-			err1 := d.deleteFilm(film.Actor, virtual_file.AppendFilmName(virtual_file.CutString(virtual_file.ClearFilmName(film.Name))), fmt.Sprintf("%d", film.ID))
-			if err1 != nil {
-				utils.Log.Warn("failed to delete film:", err1.Error())
-			}
+func (d *Javdb) filterFilms() error {
+	prefixes := make([]string, 0)
+	for _, raw := range strings.Split(d.Filter, ",") {
+		prefix := strings.ToUpper(strings.TrimSpace(raw))
+		if prefix != "" {
+			prefixes = append(prefixes, prefix)
 		}
 	}
-
+	works, err := db.QueryFilmWorksByCodePrefixes(d.ID, DriverName, prefixes)
+	if err != nil {
+		return fmt.Errorf("query normalized JavDB filter works: %w", err)
+	}
+	deleteErrors := make([]error, 0)
+	for _, work := range works {
+		if err := virtual_file.DeleteMediaWork(work.ID); err != nil {
+			deleteErrors = append(deleteErrors, fmt.Errorf("delete filtered work %s: %w", work.Code, err))
+		}
+	}
+	return errors.Join(deleteErrors...)
 }
 
 func (d *Javdb) reMatchTags() {

@@ -129,7 +129,7 @@ func (d *Javdb) scanMediaMetadataAndMagnets() {
 	}
 	for index := range works {
 		work := works[index]
-		meta, fetchErr := av.GetMetaFromJavdb(work.SourceURL)
+		meta, fetchErr := getJavdbMeta(work.SourceURL)
 		if fetchErr != nil || len(meta.Magnets) == 0 {
 			if fetchErr == nil {
 				fetchErr = errors.New("JavDB returned no magnets")
@@ -404,36 +404,6 @@ func (d *Javdb) updateMediaDMMStatus(work model.FilmWork, status string, cause e
 	}
 }
 
-func (d *Javdb) refreshMediaNFOs() {
-	works, err := db.QueryStaleNFOMediaWorks(DriverName, 100)
-	if err != nil {
-		utils.Log.Warnf("failed to query stale JavDB NFO works: %s", err)
-		return
-	}
-	for index := range works {
-		work := works[index]
-		info := mediaInfo(work)
-		if err := virtual_file.UpdateMediaNfo(info); err != nil {
-			if updateErr := db.UpdateMediaWorkNFOResult(work.ID, work.NfoVersion, err.Error()); updateErr != nil {
-				utils.Log.Warnf("failed to persist NFO error for %s: %s", work.Code, updateErr)
-			}
-			continue
-		}
-		if err := db.UpdateMediaWorkNFOResult(work.ID, work.MetadataVersion, ""); err != nil {
-			utils.Log.Warnf("failed to complete NFO stage for %s: %s", work.Code, err)
-		}
-	}
-}
-
 func mediaIdentity(work model.FilmWork) virtual_file.MediaIdentity {
 	return virtual_file.MediaIdentity{StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code}
-}
-
-func mediaInfo(work model.FilmWork) virtual_file.MediaInfo {
-	identity := mediaIdentity(work)
-	return virtual_file.MediaInfo{
-		Identity: &identity,
-		Title:    model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle), Synopsis: work.Synopsis,
-		ImgUrl: work.ImageURL, Release: work.ReleaseDate, Actors: []string(work.Actors), Tags: []string(work.Tags),
-	}
 }
