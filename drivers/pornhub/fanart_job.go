@@ -28,6 +28,7 @@ func (d *Pornhub) scanFanart(ctx context.Context) {
 		utils.Log.Warnf("failed to query fanart works: %s", err.Error())
 		return
 	}
+	utils.Log.Infof("found %d Pornhub fanart works, ids: %v", len(works), filmWorkIDs(works))
 
 	for workIndex := range works {
 		if err := ctx.Err(); err != nil {

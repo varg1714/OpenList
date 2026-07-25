@@ -24,6 +24,7 @@ func (d *Pornhub) reMatchTags() {
 		utils.Log.Warn("failed to query films:", err.Error())
 		return
 	}
+	utils.Log.Infof("found %d Pornhub tag works, ids: %v", len(films), filmWorkIDs(films))
 
 	for _, film := range films {
 

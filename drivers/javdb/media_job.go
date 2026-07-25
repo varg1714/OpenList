@@ -25,11 +25,15 @@ var (
 )
 
 func (d *Javdb) scanTranslations() {
+	utils.Log.Info("start scanning JavDB translations")
+	defer utils.Log.Info("finish scanning JavDB translations")
+
 	works, err := db.QueryTranslationMediaWorks(DriverName, currentTranslationVersion, 20)
 	if err != nil {
 		utils.Log.Warnf("failed to query JavDB translation works: %s", err)
 		return
 	}
+	utils.Log.Infof("found %d JavDB translation works, ids: %v", len(works), mediaWorkIDs(works))
 	items := make([]open_ai.TranslateItem, len(works))
 	for index, work := range works {
 		items[index] = open_ai.TranslateItem{Origin: work.RawTitle}
@@ -72,6 +76,9 @@ type mediaSynopsisCandidate struct {
 }
 
 func (d *Javdb) scanMediaSynopsis() {
+	utils.Log.Info("start scanning JavDB synopsis")
+	defer utils.Log.Info("finish scanning JavDB synopsis")
+
 	limit := d.SynopsisScanLimit
 	if limit <= 0 {
 		limit = 20
@@ -81,6 +88,7 @@ func (d *Javdb) scanMediaSynopsis() {
 		utils.Log.Warnf("failed to query JavDB synopsis works: %s", err)
 		return
 	}
+	utils.Log.Infof("found %d JavDB empty-synopsis works, ids: %v", len(works), mediaWorkIDs(works))
 
 	var collected []mediaSynopsisCandidate
 	for index := range works {
@@ -150,6 +158,9 @@ func persistMediaSynopses(collected []mediaSynopsisCandidate) {
 }
 
 func (d *Javdb) scanMediaMetadataAndMagnets() {
+	utils.Log.Info("start scanning JavDB metadata and magnets")
+	defer utils.Log.Info("finish scanning JavDB metadata and magnets")
+
 	limit := d.MatchFilmTagLimit
 	if limit <= 0 {
 		return
@@ -159,6 +170,7 @@ func (d *Javdb) scanMediaMetadataAndMagnets() {
 		utils.Log.Warnf("failed to query JavDB metadata works: %s", err)
 		return
 	}
+	utils.Log.Infof("found %d JavDB pending metadata works, ids: %v", len(works), mediaWorkIDs(works))
 	for index := range works {
 		work := works[index]
 		meta, fetchErr := getJavdbMeta(work.SourceURL)
@@ -242,11 +254,15 @@ func sourceMagnetsFromMeta(meta av.Meta) []model.SourceMagnet {
 }
 
 func (d *Javdb) scanMediaSubtitles() {
+	utils.Log.Info("start scanning JavDB subtitles")
+	defer utils.Log.Info("finish scanning JavDB subtitles")
+
 	works, err := db.QuerySubtitleMediaWorks(DriverName, d.SubtitlesScanLimit)
 	if err != nil {
 		utils.Log.Warnf("failed to query JavDB subtitle works: %s", err)
 		return
 	}
+	utils.Log.Infof("found %d JavDB subtitle works, ids: %v", len(works), mediaWorkIDs(works))
 	for index := range works {
 		work := works[index]
 		subtitles, matchErr := matchMediaSubtitles(work.Code)
@@ -298,11 +314,15 @@ func (d *Javdb) scanMediaSubtitles() {
 }
 
 func (d *Javdb) scanMediaDMMPosters() {
+	utils.Log.Info("start scanning JavDB DMM posters")
+	defer utils.Log.Info("finish scanning JavDB DMM posters")
+
 	works, err := db.QueryDMMPosterMediaWorks(72*time.Hour, 20)
 	if err != nil {
 		utils.Log.Warnf("failed to query JavDB DMM poster works: %s", err)
 		return
 	}
+	utils.Log.Infof("found %d JavDB DMM poster works, ids: %v", len(works), mediaWorkIDs(works))
 	for index := range works {
 		d.scanMediaDMMPoster(context.Background(), works[index])
 	}
@@ -400,6 +420,14 @@ func (d *Javdb) updateMediaDMMStatus(work model.FilmWork, status string, cause e
 	if err := db.UpdateMediaWorkDMMPosterStatus(work.ID, status); err != nil {
 		utils.Log.Warnf("failed to update DMM status for %s: %s", work.Code, err)
 	}
+}
+
+func mediaWorkIDs(works []model.FilmWork) []uint {
+	ids := make([]uint, len(works))
+	for i, w := range works {
+		ids[i] = w.ID
+	}
+	return ids
 }
 
 func mediaIdentity(work model.FilmWork) virtual_file.MediaIdentity {

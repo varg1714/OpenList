@@ -13,6 +13,9 @@ import (
 )
 
 func (d *Javdb) filterFilms() error {
+	utils.Log.Info("start filtering JavDB films")
+	defer utils.Log.Info("finish filtering JavDB films")
+
 	prefixes := make([]string, 0)
 	for _, raw := range strings.Split(d.Filter, ",") {
 		prefix := strings.ToUpper(strings.TrimSpace(raw))
@@ -24,6 +27,7 @@ func (d *Javdb) filterFilms() error {
 	if err != nil {
 		return fmt.Errorf("query normalized JavDB filter works: %w", err)
 	}
+	utils.Log.Infof("found %d JavDB works matching filter prefixes %v, ids to delete: %v", len(works), prefixes, mediaWorkIDs(works))
 	deleteErrors := make([]error, 0)
 	for _, work := range works {
 		if err := virtual_file.DeleteMediaWork(work.ID); err != nil {

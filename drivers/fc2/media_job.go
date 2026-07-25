@@ -15,11 +15,15 @@ import (
 )
 
 func (d *FC2) rematchMediaReleaseTime() {
+	utils.Log.Info("start scanning FC2 media release time")
+	defer utils.Log.Info("finish scanning FC2 media release time")
+
 	works, err := db.QueryReleaseMediaWorks("fc2", d.BatchScanSize)
 	if err != nil {
 		utils.Log.Warnf("failed to query FC2 release works: %s", err)
 		return
 	}
+	utils.Log.Infof("found %d FC2 release works, ids: %v", len(works), filmWorkIDs(works))
 	for index := range works {
 		work := works[index]
 		info, fetchErr := d.getFc2DailyFilm(work.Code)
@@ -61,11 +65,15 @@ func (d *FC2) rematchMediaReleaseTime() {
 }
 
 func (d *FC2) scanMediaSampleImages() {
+	utils.Log.Info("start scanning FC2 sample images")
+	defer utils.Log.Info("finish scanning FC2 sample images")
+
 	works, err := db.QuerySampleImageMediaWorks("fc2", 72*time.Hour, 20)
 	if err != nil {
 		utils.Log.Warnf("failed to query FC2 sample works: %s", err)
 		return
 	}
+	utils.Log.Infof("found %d FC2 sample-image works, ids: %v", len(works), filmWorkIDs(works))
 	remaining := maxSampleImageRequestsPerRun
 	for index := range works {
 		work := works[index]
@@ -150,4 +158,12 @@ func (d *FC2) scanMediaSampleImages() {
 
 func fc2MediaIdentity(work model.FilmWork) virtual_file.MediaIdentity {
 	return virtual_file.MediaIdentity{StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code}
+}
+
+func filmWorkIDs(works []model.FilmWork) []uint {
+	ids := make([]uint, len(works))
+	for i, w := range works {
+		ids[i] = w.ID
+	}
+	return ids
 }

@@ -14,11 +14,15 @@ import (
 )
 
 func (d *Javdb) scanMediaSampleImages() {
+	utils.Log.Info("start scanning JavDB sample images")
+	defer utils.Log.Info("finish scanning JavDB sample images")
+
 	works, err := db.QuerySampleImageMediaWorks(DriverName, 72*time.Hour, 20)
 	if err != nil {
 		utils.Log.Warnf("failed to query JavDB sample works: %s", err)
 		return
 	}
+	utils.Log.Infof("found %d JavDB sample-image works, ids: %v", len(works), mediaWorkIDs(works))
 	remaining := maxSampleImageRequestsPerRun
 	for index := range works {
 		work := works[index]
