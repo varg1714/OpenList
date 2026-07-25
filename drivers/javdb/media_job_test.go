@@ -327,7 +327,7 @@ func TestPersistMediaSynopsesBatchesAllThroughSingleTranslateCall(t *testing.T) 
 	}
 }
 
-func TestPersistMediaSynopsesFallsBackToRawWhenTranslationEmpty(t *testing.T) {
+func TestPersistMediaSynopsesRetriesWhenTranslationEmpty(t *testing.T) {
 	resetJavdbMediaWorks(t)
 	work := createMediaWorksForSynopsis(t, "empty-translation")[0]
 
@@ -345,8 +345,14 @@ func TestPersistMediaSynopsesFallsBackToRawWhenTranslationEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Synopsis != "raw-synopsis" {
-		t.Fatalf("synopsis = %q, want raw-synopsis", stored.Synopsis)
+	if stored.Synopsis != "" {
+		t.Fatalf("synopsis = %q, want empty for retry", stored.Synopsis)
+	}
+	if stored.SynopsisScanAt == nil || stored.SynopsisNextRetryAt == nil {
+		t.Fatalf("retry state = (scan=%v, retry=%v), want both non-nil", stored.SynopsisScanAt, stored.SynopsisNextRetryAt)
+	}
+	if stored.SynopsisLastError != "translation returned an empty result" {
+		t.Fatalf("last error = %q, want translation returned an empty result", stored.SynopsisLastError)
 	}
 }
 

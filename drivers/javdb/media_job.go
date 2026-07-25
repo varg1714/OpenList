@@ -137,7 +137,11 @@ func persistMediaSynopses(collected []mediaSynopsisCandidate) {
 			translated = translations[i]
 		}
 		if translated == "" {
-			translated = c.origin
+			next := time.Now().Add(72 * time.Hour)
+			if err := db.UpdateMediaWorkSynopsisRetry(c.workID, next, "translation returned an empty result"); err != nil {
+				utils.Log.Warnf("failed to update synopsis retry for %s: %s", c.code, err)
+			}
+			continue
 		}
 		if err := db.UpdateMediaWorkSynopsis(c.workID, translated); err != nil {
 			utils.Log.Warnf("failed to save synopsis for %s: %s", c.code, err)
