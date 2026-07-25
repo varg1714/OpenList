@@ -403,10 +403,6 @@ func QueryPendingMediaWorks(source string, stages MediaWorkScanStages, limit int
 	return works, query.Find(&works).Error
 }
 
-func QueryTagMediaWorks(source string, limit int) ([]model.FilmWork, error) {
-	return QueryPendingMediaWorks(source, MediaWorkScanTags, limit)
-}
-
 func UpdateMediaWorkTags(workID uint, tags model.StringArray, tagVersion uint) error {
 	var existing model.FilmWork
 	if err := db.Select("tags").First(&existing, workID).Error; err != nil {
