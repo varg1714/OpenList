@@ -143,17 +143,29 @@ func PromoteLegacyPoster(source, dir, filmName string) error {
 	if err != nil {
 		return err
 	}
-	posterInfo, err := os.Lstat(paths.Poster)
+	return promoteLegacyPoster(paths.Poster, paths.LegacyPoster)
+}
+
+func PromoteLegacyMediaPoster(identity MediaIdentity) error {
+	paths, err := ResolveMediaArtifactPaths(identity)
+	if err != nil {
+		return err
+	}
+	return promoteLegacyPoster(paths.Poster, paths.LegacyPoster)
+}
+
+func promoteLegacyPoster(poster, legacyPoster string) error {
+	posterInfo, err := os.Lstat(poster)
 	if err == nil {
 		if !posterInfo.Mode().IsRegular() {
-			return fmt.Errorf("poster destination is not a regular file: %s", paths.Poster)
+			return fmt.Errorf("poster destination is not a regular file: %s", poster)
 		}
 		return nil
 	}
 	if !os.IsNotExist(err) {
 		return err
 	}
-	legacyInfo, err := os.Lstat(paths.LegacyPoster)
+	legacyInfo, err := os.Lstat(legacyPoster)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -161,9 +173,9 @@ func PromoteLegacyPoster(source, dir, filmName string) error {
 		return err
 	}
 	if !legacyInfo.Mode().IsRegular() {
-		return fmt.Errorf("legacy poster is not a regular file: %s", paths.LegacyPoster)
+		return fmt.Errorf("legacy poster is not a regular file: %s", legacyPoster)
 	}
-	return os.Rename(paths.LegacyPoster, paths.Poster)
+	return os.Rename(legacyPoster, poster)
 }
 
 // ReplacePoster publishes poster content using the legacy API name.

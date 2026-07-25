@@ -33,6 +33,21 @@ func PublishFanart(req FanartPublishRequest) (FanartPublishResult, error) {
 	if err := ensureFanartDirectories(req.Source, req.Dir, filepath.Base(filepath.Dir(destination))); err != nil {
 		return FanartPublishResult{}, err
 	}
+	return publishFanart(destination, req.Content)
+}
+
+func PublishMediaFanart(identity MediaIdentity, index int, content []byte) (FanartPublishResult, error) {
+	destination, err := MediaFanartPath(identity, index)
+	if err != nil {
+		return FanartPublishResult{}, err
+	}
+	if err := ensureMediaArtifactRoot(identity); err != nil {
+		return FanartPublishResult{}, err
+	}
+	return publishFanart(destination, content)
+}
+
+func publishFanart(destination string, content []byte) (FanartPublishResult, error) {
 	directory := filepath.Dir(destination)
 
 	info, err := os.Lstat(destination)
@@ -59,7 +74,7 @@ func PublishFanart(req FanartPublishRequest) (FanartPublishResult, error) {
 		_ = os.Remove(temporaryPath)
 	}()
 
-	if _, err := temporary.Write(req.Content); err != nil {
+	if _, err := temporary.Write(content); err != nil {
 		return FanartPublishResult{}, err
 	}
 	if err := temporary.Sync(); err != nil {
@@ -116,8 +131,19 @@ func RemoveBackground(source, dir, filmName string) error {
 	if err != nil {
 		return err
 	}
+	return removeBackground(paths.Background)
+}
 
-	info, err := os.Lstat(paths.Background)
+func RemoveMediaBackground(identity MediaIdentity) error {
+	paths, err := ResolveMediaArtifactPaths(identity)
+	if err != nil {
+		return err
+	}
+	return removeBackground(paths.Background)
+}
+
+func removeBackground(path string) error {
+	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -125,7 +151,7 @@ func RemoveBackground(source, dir, filmName string) error {
 		return err
 	}
 	if info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return os.Remove(paths.Background)
+		return os.Remove(path)
 	}
-	return fmt.Errorf("background is neither a regular file nor a symlink: %s", paths.Background)
+	return fmt.Errorf("background is neither a regular file nor a symlink: %s", path)
 }
