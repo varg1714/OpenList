@@ -359,17 +359,52 @@ func MarkMediaWorkSynopsisExcluded(workID uint) error {
 	}).Error
 }
 
-func QueryTagMediaWorks(source string, limit int) ([]model.FilmWork, error) {
+type MediaWorkScanStages uint8
+
+const MediaWorkScanAll MediaWorkScanStages = 0
+
+const (
+	MediaWorkScanTags MediaWorkScanStages = 1 << iota
+	MediaWorkScanActors
+	mediaWorkScanStagesEnd
+)
+
+const mediaWorkScanStagesKnown = mediaWorkScanStagesEnd - 1
+
+var ErrInvalidMediaWorkScanStages = errors.New("invalid media work scan stages")
+
+func QueryPendingMediaWorks(source string, stages MediaWorkScanStages, limit int) ([]model.FilmWork, error) {
 	var works []model.FilmWork
+	if stages == MediaWorkScanAll {
+		stages = mediaWorkScanStagesKnown
+	}
+	if stages&^mediaWorkScanStagesKnown != 0 {
+		return works, ErrInvalidMediaWorkScanStages
+	}
 	now := time.Now()
+	var pendingStages *gorm.DB
+	if stages&MediaWorkScanTags != 0 {
+		pendingStages = db.Where("((tags IS NULL OR tags = ?) AND tag_scan_at IS NULL) OR (tag_next_retry_at IS NOT NULL AND tag_next_retry_at <= ?)", "[]", now)
+	}
+	if stages&MediaWorkScanActors != 0 {
+		actors := db.Where("((actors IS NULL OR actors = ?) AND actor_scan_at IS NULL) OR (actor_next_retry_at IS NOT NULL AND actor_next_retry_at <= ?)", "[]", now)
+		if pendingStages == nil {
+			pendingStages = actors
+		} else {
+			pendingStages = pendingStages.Or(actors)
+		}
+	}
 	query := db.Where("source = ?", source).
-		Where("(tags IS NULL OR tags = ? OR tag_scan_at IS NULL)", "[]").
-		Where("tag_next_retry_at IS NULL OR tag_next_retry_at <= ?", now).
-		Order("id ASC")
+		Where(pendingStages).
+		Order("id DESC")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
 	return works, query.Find(&works).Error
+}
+
+func QueryTagMediaWorks(source string, limit int) ([]model.FilmWork, error) {
+	return QueryPendingMediaWorks(source, MediaWorkScanTags, limit)
 }
 
 func UpdateMediaWorkTags(workID uint, tags model.StringArray, tagVersion uint) error {
@@ -523,7 +558,10 @@ func UpdateMediaWorkDMMPosterStatus(workID uint, status string) error {
 
 func QuerySubtitleMediaWorks(source string, limit int) ([]model.FilmWork, error) {
 	now := time.Now()
-	query := db.Where("source = ? AND ((subtitle_scan_at IS NULL AND subtitle_next_retry_at IS NULL) OR (subtitle_next_retry_at IS NOT NULL AND subtitle_next_retry_at <= ?))", source, now).Order("id ASC")
+	subtitleWorks := db.Model(&model.SourceMagnet{}).Select("work_id").Where("subtitle = ?", true)
+	query := db.Where("source = ? AND ((subtitle_scan_at IS NULL AND subtitle_next_retry_at IS NULL) OR (subtitle_next_retry_at IS NOT NULL AND subtitle_next_retry_at <= ?))", source, now).
+		Where("id NOT IN (?)", subtitleWorks).
+		Order("id ASC")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}

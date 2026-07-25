@@ -15,8 +15,11 @@ import (
 func setupMediaRepositoryTestDB(t *testing.T) {
 	t.Helper()
 
-	if err := AutoMigrate(new(model.FilmWork), new(model.FilmFile)); err != nil {
+	if err := AutoMigrate(new(model.FilmWork), new(model.FilmFile), new(model.SourceMagnet)); err != nil {
 		t.Fatalf("migrate media tables: %v", err)
+	}
+	if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.SourceMagnet{}).Error; err != nil {
+		t.Fatalf("reset source magnets: %v", err)
 	}
 	if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.FilmFile{}).Error; err != nil {
 		t.Fatalf("reset film files: %v", err)
@@ -426,6 +429,7 @@ func TestQuerySubtitleMediaWorksIncludesDueRetriesOnly(t *testing.T) {
 	dueRetry := now.Add(-time.Hour)
 	works := []model.FilmWork{
 		{StorageID: 1, Source: "javdb", Code: "NEW", PrimaryDir: "actor"},
+		{StorageID: 1, Source: "javdb", Code: "KNOWN", PrimaryDir: "actor"},
 		{StorageID: 1, Source: "javdb", Code: "DONE", PrimaryDir: "actor", SubtitleScanAt: &completedAt},
 		{StorageID: 1, Source: "javdb", Code: "DUE", PrimaryDir: "actor", SubtitleScanAt: &completedAt, SubtitleNextRetryAt: &dueRetry},
 		{StorageID: 1, Source: "javdb", Code: "WAIT", PrimaryDir: "actor", SubtitleScanAt: &completedAt, SubtitleNextRetryAt: &futureRetry},
@@ -434,6 +438,11 @@ func TestQuerySubtitleMediaWorksIncludesDueRetriesOnly(t *testing.T) {
 		if err := db.Create(&works[index]).Error; err != nil {
 			t.Fatalf("create subtitle fixture %s: %v", works[index].Code, err)
 		}
+	}
+	if err := db.Create(&model.SourceMagnet{
+		WorkID: works[1].ID, MagnetURI: "magnet:known-subtitle", Fingerprint: "known-subtitle", Subtitle: true,
+	}).Error; err != nil {
+		t.Fatalf("create known subtitle magnet: %v", err)
 	}
 
 	selected, err := QuerySubtitleMediaWorks("javdb", 0)
