@@ -41,6 +41,8 @@ func TestUpsertDiscoveredWorkPreservesPrimaryDirAndState(t *testing.T) {
 		RawTitle:               "old title",
 		ImageURL:               "https://old.example/image.jpg",
 		ReleaseDate:            releaseDate,
+		Actors:                 model.StringArray{" Alice ", "", "Bob", "Alice"},
+		Tags:                   model.StringArray{"Drama", " ", "Drama"},
 		TranslationStatus:      "success",
 		TranslationAttempts:    3,
 		TranslationNextRetryAt: &retryAt,
@@ -64,6 +66,8 @@ func TestUpsertDiscoveredWorkPreservesPrimaryDirAndState(t *testing.T) {
 		RawTitle:    "new title",
 		ImageURL:    "https://new.example/image.jpg",
 		ReleaseDate: newReleaseDate,
+		Actors:      model.StringArray{"Bob", "Carol", "  "},
+		Tags:        model.StringArray{"Drama", "New", "New"},
 	}
 	if err := UpsertDiscoveredWork(&discovered); err != nil {
 		t.Fatalf("upsert discovered work: %v", err)
@@ -79,11 +83,183 @@ func TestUpsertDiscoveredWorkPreservesPrimaryDirAndState(t *testing.T) {
 	if stored.PrimaryDir != original.PrimaryDir {
 		t.Fatalf("primary dir = %q, want preserved %q", stored.PrimaryDir, original.PrimaryDir)
 	}
+	if want := (model.StringArray{"Alice", "Bob", "Carol"}); !reflect.DeepEqual(stored.Actors, want) {
+		t.Fatalf("actors = %#v, want stable union %#v", stored.Actors, want)
+	}
+	if want := (model.StringArray{"Drama", "New"}); !reflect.DeepEqual(stored.Tags, want) {
+		t.Fatalf("tags = %#v, want stable union %#v", stored.Tags, want)
+	}
 	if stored.TranslationStatus != original.TranslationStatus || stored.TranslationAttempts != original.TranslationAttempts || stored.TranslationNextRetryAt == nil || !stored.TranslationNextRetryAt.Equal(retryAt) || stored.TranslationLastError != original.TranslationLastError || stored.TranslationVersion != original.TranslationVersion {
 		t.Fatalf("translation state changed during rediscovery: %+v", stored)
 	}
-	if !stored.SampleImageComplete || stored.MetadataVersion != original.MetadataVersion {
+	if !stored.SampleImageComplete || stored.MetadataVersion != original.MetadataVersion+1 || stored.NfoVersion >= stored.MetadataVersion {
 		t.Fatalf("successful stage state changed during rediscovery: %+v", stored)
+	}
+}
+
+func TestUpsertDiscoveredWorkDoesNotIncrementMetadataVersionWhenNFOValuesAreUnchanged(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+
+	releaseDate := time.Date(2025, time.January, 2, 0, 0, 0, 0, time.UTC)
+	original := model.FilmWork{
+		StorageID:       1,
+		Source:          "javdb",
+		Code:            "ABP-UNCHANGED",
+		SourceRef:       "v/old",
+		SourceURL:       "https://old.example/work",
+		PrimaryDir:      "original-dir",
+		RawTitle:        "title",
+		ImageURL:        "https://example/image.jpg",
+		ReleaseDate:     releaseDate,
+		Actors:          model.StringArray{"Alice", "Bob"},
+		Tags:            model.StringArray{"Drama", "New"},
+		MetadataVersion: 7,
+		NfoVersion:      7,
+	}
+	if err := db.Create(&original).Error; err != nil {
+		t.Fatalf("create original work: %v", err)
+	}
+	discovered := model.FilmWork{
+		StorageID:   original.StorageID,
+		Source:      original.Source,
+		Code:        original.Code,
+		SourceRef:   "v/new",
+		SourceURL:   "https://new.example/work",
+		PrimaryDir:  "rediscovered-dir",
+		RawTitle:    original.RawTitle,
+		ImageURL:    original.ImageURL,
+		ReleaseDate: releaseDate,
+		Actors:      model.StringArray{" Alice ", "Bob", "Alice", ""},
+		Tags:        model.StringArray{"Drama", " New "},
+	}
+
+	if err := UpsertDiscoveredWork(&discovered); err != nil {
+		t.Fatalf("upsert unchanged discovered work: %v", err)
+	}
+
+	stored, err := GetFilmWork(original.ID)
+	if err != nil {
+		t.Fatalf("get unchanged work: %v", err)
+	}
+	if stored.SourceRef != discovered.SourceRef || stored.SourceURL != discovered.SourceURL {
+		t.Fatalf("non-NFO discovery fields = (%q, %q), want (%q, %q)", stored.SourceRef, stored.SourceURL, discovered.SourceRef, discovered.SourceURL)
+	}
+	if stored.PrimaryDir != original.PrimaryDir {
+		t.Fatalf("primary dir = %q, want preserved %q", stored.PrimaryDir, original.PrimaryDir)
+	}
+	if stored.MetadataVersion != original.MetadataVersion || stored.NfoVersion != original.NfoVersion {
+		t.Fatalf("metadata/NFO versions = %d/%d, want %d/%d", stored.MetadataVersion, stored.NfoVersion, original.MetadataVersion, original.NfoVersion)
+	}
+}
+
+func TestUpsertDiscoveredWorkDoesNotIncrementMetadataVersionForImageURLOnlyChange(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+
+	original := model.FilmWork{
+		StorageID:       1,
+		Source:          "javdb",
+		Code:            "ABP-IMAGE",
+		PrimaryDir:      "actor",
+		ImageURL:        "https://old.example/image.jpg",
+		MetadataVersion: 7,
+		NfoVersion:      7,
+	}
+	if err := db.Create(&original).Error; err != nil {
+		t.Fatalf("create original work: %v", err)
+	}
+	discovered := model.FilmWork{
+		StorageID:  original.StorageID,
+		Source:     original.Source,
+		Code:       original.Code,
+		PrimaryDir: original.PrimaryDir,
+		ImageURL:   "https://new.example/image.jpg",
+	}
+
+	if err := UpsertDiscoveredWork(&discovered); err != nil {
+		t.Fatalf("upsert image-only discovery: %v", err)
+	}
+
+	stored, err := GetFilmWork(original.ID)
+	if err != nil {
+		t.Fatalf("get image-updated work: %v", err)
+	}
+	if stored.ImageURL != discovered.ImageURL {
+		t.Fatalf("image URL = %q, want persisted %q", stored.ImageURL, discovered.ImageURL)
+	}
+	if stored.MetadataVersion != original.MetadataVersion {
+		t.Fatalf("metadata version = %d, want unchanged %d", stored.MetadataVersion, original.MetadataVersion)
+	}
+}
+
+func TestUpsertDiscoveredWorkDoesNotIncrementMetadataVersionWhenRawTitleDoesNotChangeEffectiveTitle(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+
+	original := model.FilmWork{
+		StorageID:       1,
+		Source:          "javdb",
+		Code:            "ABP-TITLE",
+		PrimaryDir:      "actor",
+		RawTitle:        "old raw title",
+		TranslatedTitle: "translated title",
+		MetadataVersion: 7,
+		NfoVersion:      7,
+	}
+	if err := db.Create(&original).Error; err != nil {
+		t.Fatalf("create original work: %v", err)
+	}
+	discovered := model.FilmWork{
+		StorageID:  original.StorageID,
+		Source:     original.Source,
+		Code:       original.Code,
+		PrimaryDir: original.PrimaryDir,
+		RawTitle:   "new raw title",
+	}
+
+	if err := UpsertDiscoveredWork(&discovered); err != nil {
+		t.Fatalf("upsert raw-title-only discovery: %v", err)
+	}
+
+	stored, err := GetFilmWork(original.ID)
+	if err != nil {
+		t.Fatalf("get raw-title-updated work: %v", err)
+	}
+	if stored.RawTitle != discovered.RawTitle {
+		t.Fatalf("raw title = %q, want persisted %q", stored.RawTitle, discovered.RawTitle)
+	}
+	if stored.MetadataVersion != original.MetadataVersion {
+		t.Fatalf("metadata version = %d, want unchanged %d", stored.MetadataVersion, original.MetadataVersion)
+	}
+}
+
+func TestUpsertDiscoveredWorkCreatesNFOStaleWork(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+
+	discovered := model.FilmWork{
+		StorageID:       1,
+		Source:          "javdb",
+		Code:            "ABP-NEW",
+		PrimaryDir:      "actor",
+		Actors:          model.StringArray{" Alice ", "", "Bob", "Alice"},
+		Tags:            model.StringArray{" Drama ", "", "Drama", "New"},
+		MetadataVersion: 7,
+		NfoVersion:      7,
+	}
+	if err := UpsertDiscoveredWork(&discovered); err != nil {
+		t.Fatalf("upsert new discovered work: %v", err)
+	}
+
+	stored, err := GetFilmWork(discovered.ID)
+	if err != nil {
+		t.Fatalf("get new work: %v", err)
+	}
+	if stored.MetadataVersion <= stored.NfoVersion {
+		t.Fatalf("metadata/NFO versions = %d/%d, want new work stale", stored.MetadataVersion, stored.NfoVersion)
+	}
+	if want := (model.StringArray{"Alice", "Bob"}); !reflect.DeepEqual(stored.Actors, want) {
+		t.Fatalf("actors = %#v, want normalized %#v", stored.Actors, want)
+	}
+	if want := (model.StringArray{"Drama", "New"}); !reflect.DeepEqual(stored.Tags, want) {
+		t.Fatalf("tags = %#v, want normalized %#v", stored.Tags, want)
 	}
 }
 
@@ -143,7 +319,7 @@ func TestUpdateMediaWorkTagsPreservesCallerTags(t *testing.T) {
 	if err := db.Model(&work).Update("tags", work.Tags).Error; err != nil {
 		t.Fatalf("seed caller tags: %v", err)
 	}
-	if err := UpdateMediaWorkTags(work.ID, model.StringArray{"high-definition", "JavDB-TOP250-2026"}, 1); err != nil {
+	if err := UpdateMediaWorkTags(work.ID, model.StringArray{" high-definition ", "JavDB-TOP250-2026", "", "high-definition"}, 1); err != nil {
 		t.Fatalf("update tags: %v", err)
 	}
 	stored, err := GetFilmWork(work.ID)
@@ -153,6 +329,58 @@ func TestUpdateMediaWorkTagsPreservesCallerTags(t *testing.T) {
 	want := model.StringArray{"JavDB-TOP250-2026", "high-definition"}
 	if !reflect.DeepEqual(stored.Tags, want) {
 		t.Fatalf("merged tags = %#v, want %#v", stored.Tags, want)
+	}
+}
+
+func TestUpdateMediaWorkTagsDoesNotChangeMetadataVersionWhenTagsUnchanged(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+	work := createMediaTestWork(t, 1, "javdb", "ABP-124", "actor")
+	work.Tags = model.StringArray{"HD", model.TagSubtitle}
+	work.MetadataVersion = 7
+	if err := db.Model(&work).Updates(map[string]interface{}{
+		"tags": work.Tags, "metadata_version": work.MetadataVersion,
+	}).Error; err != nil {
+		t.Fatalf("seed unchanged tags: %v", err)
+	}
+
+	if err := UpdateMediaWorkTags(work.ID, model.StringArray{"HD", model.TagSubtitle}, 2); err != nil {
+		t.Fatalf("update unchanged tags: %v", err)
+	}
+	stored, err := GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatalf("get unchanged tagged work: %v", err)
+	}
+	if stored.MetadataVersion != 7 {
+		t.Fatalf("metadata version = %d, want 7", stored.MetadataVersion)
+	}
+	if stored.TagVersion != 2 || stored.TagScanAt == nil {
+		t.Fatalf("tag stage was not completed: %+v", stored)
+	}
+}
+
+func TestUpdateMediaWorkActorsDoesNotChangeMetadataVersionWhenActorsUnchanged(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+	work := createMediaTestWork(t, 1, "javdb", "ABP-125", "actor")
+	work.Actors = model.StringArray{"Alice", "Bob"}
+	work.MetadataVersion = 9
+	if err := db.Model(&work).Updates(map[string]interface{}{
+		"actors": work.Actors, "metadata_version": work.MetadataVersion,
+	}).Error; err != nil {
+		t.Fatalf("seed unchanged actors: %v", err)
+	}
+
+	if err := UpdateMediaWorkActors(work.ID, model.StringArray{"Alice", "Bob"}); err != nil {
+		t.Fatalf("update unchanged actors: %v", err)
+	}
+	stored, err := GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatalf("get unchanged actors work: %v", err)
+	}
+	if stored.MetadataVersion != 9 {
+		t.Fatalf("metadata version = %d, want 9", stored.MetadataVersion)
+	}
+	if stored.ActorScanAt == nil {
+		t.Fatalf("actor stage was not completed: %+v", stored)
 	}
 }
 
@@ -432,8 +660,16 @@ func TestListFilmFilesWithWorksOrdersAndProjectsTypedRows(t *testing.T) {
 	}
 }
 
-func TestDeleteMediaFileDeletesOnlyOneFile(t *testing.T) {
+func TestDeleteMediaFileDeletesWorkFilesMagnetsAndCloudCaches(t *testing.T) {
 	setupMediaRepositoryTestDB(t)
+	if err := AutoMigrate(new(model.SourceMagnet), new(model.MagnetCache)); err != nil {
+		t.Fatalf("migrate deletion tables: %v", err)
+	}
+	for _, value := range []interface{}{&model.SourceMagnet{}, &model.MagnetCache{}} {
+		if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(value).Error; err != nil {
+			t.Fatalf("reset %T: %v", value, err)
+		}
+	}
 	work := createMediaTestWork(t, 1, "javdb", "ABP-DELETE", "actor")
 	if err := ReplaceFilmFiles(work.ID, []model.FilmFile{{PartIndex: 1, PartCount: 2}, {PartIndex: 2, PartCount: 2}}); err != nil {
 		t.Fatal(err)
@@ -442,15 +678,33 @@ func TestDeleteMediaFileDeletesOnlyOneFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := UpsertSourceMagnets(work.ID, []model.SourceMagnet{{MagnetURI: "magnet:delete", Fingerprint: "delete"}}); err != nil {
+		t.Fatalf("seed source magnet: %v", err)
+	}
+	if err := db.Create(&model.MagnetCache{DriverType: "PikPak", Name: "ABP-DELETE.mp4", Code: work.Code, FileId: "remote"}).Error; err != nil {
+		t.Fatalf("seed cloud cache: %v", err)
+	}
 	if err := DeleteMediaFile(files[0].ID); err != nil {
 		t.Fatalf("delete media file: %v", err)
 	}
-	remaining, err := ListFilmFiles(work.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(remaining) != 1 || remaining[0].ID != files[1].ID {
-		t.Fatalf("remaining files = %+v", remaining)
+	for name, value := range map[string]interface{}{
+		"work": &model.FilmWork{}, "files": &model.FilmFile{}, "magnets": &model.SourceMagnet{}, "cache": &model.MagnetCache{},
+	} {
+		var count int64
+		query := db.Model(value)
+		if name == "work" {
+			query = query.Where("id = ?", work.ID)
+		} else if name == "cache" {
+			query = query.Where("code = ?", work.Code)
+		} else {
+			query = query.Where("work_id = ?", work.ID)
+		}
+		if err := query.Count(&count).Error; err != nil {
+			t.Fatalf("count remaining %s: %v", name, err)
+		}
+		if count != 0 {
+			t.Fatalf("remaining %s count = %d, want 0", name, count)
+		}
 	}
 }
 

@@ -3,6 +3,8 @@ package db
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -14,6 +16,11 @@ func UpsertDiscoveredWork(work *model.FilmWork) error {
 		var existing model.FilmWork
 		err := tx.Where("storage_id = ? AND source = ? AND code = ?", work.StorageID, work.Source, work.Code).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			work.Actors = stableUnionStringArrays(nil, work.Actors)
+			work.Tags = stableUnionStringArrays(nil, work.Tags)
+			if work.MetadataVersion <= work.NfoVersion {
+				work.MetadataVersion = work.NfoVersion + 1
+			}
 			return tx.Create(work).Error
 		}
 		if err != nil {
@@ -22,23 +29,70 @@ func UpsertDiscoveredWork(work *model.FilmWork) error {
 		work.ID = existing.ID
 
 		updates := map[string]interface{}{"updated_at": time.Now()}
-		if work.SourceRef != "" {
+		if work.SourceRef != "" && work.SourceRef != existing.SourceRef {
 			updates["source_ref"] = work.SourceRef
 		}
-		if work.SourceURL != "" {
+		if work.SourceURL != "" && work.SourceURL != existing.SourceURL {
 			updates["source_url"] = work.SourceURL
 		}
-		if work.RawTitle != "" {
+
+		rawTitle := existing.RawTitle
+		if work.RawTitle != "" && work.RawTitle != existing.RawTitle {
 			updates["raw_title"] = work.RawTitle
+			rawTitle = work.RawTitle
 		}
-		if work.ImageURL != "" {
+		if work.ImageURL != "" && work.ImageURL != existing.ImageURL {
 			updates["image_url"] = work.ImageURL
 		}
-		if !work.ReleaseDate.IsZero() {
+		releaseDate := existing.ReleaseDate
+		if !work.ReleaseDate.IsZero() && !work.ReleaseDate.Equal(existing.ReleaseDate) {
 			updates["release_date"] = work.ReleaseDate
+			releaseDate = work.ReleaseDate
+		}
+		actors := stableUnionStringArrays(existing.Actors, work.Actors)
+		if !slices.Equal(existing.Actors, actors) {
+			updates["actors"] = actors
+		}
+		tags := stableUnionStringArrays(existing.Tags, work.Tags)
+		if !slices.Equal(existing.Tags, tags) {
+			updates["tags"] = tags
+		}
+		existingNFORelease := ""
+		if !existing.ReleaseDate.IsZero() {
+			existingNFORelease = existing.ReleaseDate.Format(time.DateOnly)
+		}
+		candidateNFORelease := ""
+		if !releaseDate.IsZero() {
+			candidateNFORelease = releaseDate.Format(time.DateOnly)
+		}
+		metadataChanged := model.BuildMediaTitle(existing.Code, existing.RawTitle, existing.TranslatedTitle) != model.BuildMediaTitle(existing.Code, rawTitle, existing.TranslatedTitle) ||
+			existingNFORelease != candidateNFORelease ||
+			!slices.Equal(existing.Actors, actors) ||
+			!slices.Equal(existing.Tags, tags)
+		if metadataChanged {
+			updates["metadata_version"] = gorm.Expr("metadata_version + 1")
 		}
 		return tx.Model(&model.FilmWork{}).Where("id = ?", existing.ID).Updates(updates).Error
 	})
+}
+
+func stableUnionStringArrays(current, incoming model.StringArray) model.StringArray {
+	seen := make(map[string]struct{}, len(current)+len(incoming))
+	result := make(model.StringArray, 0, len(current)+len(incoming))
+	for _, values := range []model.StringArray{current, incoming} {
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, exists := seen[value]; exists {
+				continue
+			}
+			seen[value] = struct{}{}
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func EnsureSingleFilmFile(workID uint) (model.FilmFile, error) {
@@ -104,6 +158,28 @@ func GetFilmFileWithWork(id uint) (model.FilmFileWithWork, error) {
 func ListFilmWorks(storageID uint, source, primaryDir string) ([]model.FilmWork, error) {
 	var works []model.FilmWork
 	err := db.Where("storage_id = ? AND source = ? AND primary_dir = ?", storageID, source, primaryDir).
+		Order("id ASC").
+		Find(&works).Error
+	return works, err
+}
+
+func ListFilmWorksByStorageSource(storageID uint, source string) ([]model.FilmWork, error) {
+	var works []model.FilmWork
+	err := db.Where("storage_id = ? AND source = ?", storageID, source).Order("id ASC").Find(&works).Error
+	return works, err
+}
+
+func QueryFilmWorksByCodePrefixes(storageID uint, source string, prefixes []string) ([]model.FilmWork, error) {
+	if len(prefixes) == 0 {
+		return []model.FilmWork{}, nil
+	}
+	prefixQuery := db.Where("code LIKE ?", prefixes[0]+"%")
+	for _, prefix := range prefixes[1:] {
+		prefixQuery = prefixQuery.Or("code LIKE ?", prefix+"%")
+	}
+	var works []model.FilmWork
+	err := db.Where("storage_id = ? AND source = ?", storageID, source).
+		Where(prefixQuery).
 		Order("id ASC").
 		Find(&works).Error
 	return works, err
@@ -301,30 +377,18 @@ func UpdateMediaWorkTags(workID uint, tags model.StringArray, tagVersion uint) e
 	if err := db.Select("tags").First(&existing, workID).Error; err != nil {
 		return err
 	}
-	tags = mergeMediaTags(existing.Tags, tags)
-	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(map[string]interface{}{
-		"tags":              tags,
+	tags = stableUnionStringArrays(existing.Tags, tags)
+	updates := map[string]interface{}{
 		"tag_scan_at":       time.Now(),
 		"tag_next_retry_at": nil,
 		"tag_last_error":    "",
 		"tag_version":       tagVersion,
-		"metadata_version":  gorm.Expr("metadata_version + 1"),
-	}).Error
-}
-
-func mergeMediaTags(existing, incoming model.StringArray) model.StringArray {
-	merged := append(model.StringArray(nil), existing...)
-	seen := make(map[string]bool, len(merged)+len(incoming))
-	for _, tag := range merged {
-		seen[tag] = true
 	}
-	for _, tag := range incoming {
-		if tag != "" && !seen[tag] {
-			merged = append(merged, tag)
-			seen[tag] = true
-		}
+	if !slices.Equal([]string(existing.Tags), []string(tags)) {
+		updates["tags"] = tags
+		updates["metadata_version"] = gorm.Expr("metadata_version + 1")
 	}
-	return merged
+	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(updates).Error
 }
 
 func MergePendingMediaWorkTags(workID uint, tags model.StringArray) error {
@@ -343,13 +407,21 @@ func UpdateMediaWorkTagRetry(workID uint, nextRetryAt time.Time, lastError strin
 }
 
 func UpdateMediaWorkActors(workID uint, actors model.StringArray) error {
-	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(map[string]interface{}{
-		"actors":              actors,
+	var existing model.FilmWork
+	if err := db.Select("actors").First(&existing, workID).Error; err != nil {
+		return err
+	}
+	actors = stableUnionStringArrays(existing.Actors, actors)
+	updates := map[string]interface{}{
 		"actor_scan_at":       time.Now(),
 		"actor_next_retry_at": nil,
 		"actor_last_error":    "",
-		"metadata_version":    gorm.Expr("metadata_version + 1"),
-	}).Error
+	}
+	if !slices.Equal([]string(existing.Actors), []string(actors)) {
+		updates["actors"] = actors
+		updates["metadata_version"] = gorm.Expr("metadata_version + 1")
+	}
+	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(updates).Error
 }
 
 func UpdateMediaWorkActorRetry(workID uint, nextRetryAt time.Time, lastError string) error {
@@ -476,6 +548,18 @@ func QueryStaleNFOMediaWorks(source string, limit int) ([]model.FilmWork, error)
 	return works, query.Find(&works).Error
 }
 
+func QueryMediaWorksForNFOSync(storageID uint, source string, force bool, limit int) ([]model.FilmWork, error) {
+	var works []model.FilmWork
+	query := db.Where("storage_id = ? AND source = ?", storageID, source).Order("id ASC")
+	if !force {
+		query = query.Where("nfo_version < metadata_version")
+	}
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	return works, query.Find(&works).Error
+}
+
 func UpdateMediaWorkNFOResult(workID, nfoVersion uint, lastError string) error {
 	updates := map[string]interface{}{"nfo_last_error": lastError}
 	if lastError == "" {
@@ -486,20 +570,7 @@ func UpdateMediaWorkNFOResult(workID, nfoVersion uint, lastError string) error {
 
 func DeleteFilmWork(workID uint) error {
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("work_id = ?", workID).Delete(&model.SourceMagnet{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("work_id = ?", workID).Delete(&model.FilmFile{}).Error; err != nil {
-			return err
-		}
-		result := tx.Where("id = ?", workID).Delete(&model.FilmWork{})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return gorm.ErrRecordNotFound
-		}
-		return nil
+		return deleteFilmWork(tx, workID)
 	})
 }
 
@@ -509,6 +580,30 @@ func DeleteMediaFile(fileID uint) error {
 		if err := tx.First(&file, fileID).Error; err != nil {
 			return err
 		}
-		return tx.Delete(&file).Error
+		return deleteFilmWork(tx, file.WorkID)
 	})
+}
+
+func deleteFilmWork(tx *gorm.DB, workID uint) error {
+	var work model.FilmWork
+	if err := tx.First(&work, workID).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("code = ?", work.Code).Delete(&model.MagnetCache{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("work_id = ?", workID).Delete(&model.SourceMagnet{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("work_id = ?", workID).Delete(&model.FilmFile{}).Error; err != nil {
+		return err
+	}
+	result := tx.Where("id = ?", workID).Delete(&model.FilmWork{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }

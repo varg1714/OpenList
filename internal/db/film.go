@@ -201,20 +201,37 @@ func QueryNoMagnetFilms(fileIds []string) []string {
 }
 
 func QueryUnMissedFilms(fileIds []string) []string {
-	return queryNotExistData(fileIds, "x_missed_films", "code")
+	if len(fileIds) == 0 {
+		return []string{}
+	}
+	var missed []string
+	if err := db.Model(&model.MissedFilm{}).Where("code IN ?", fileIds).Pluck("code", &missed).Error; err != nil {
+		utils.Log.Errorf("failed to query missed films: %s", err)
+		return []string{}
+	}
+	blocked := make(map[string]struct{}, len(missed))
+	for _, code := range missed {
+		blocked[code] = struct{}{}
+	}
+	result := make([]string, 0, len(fileIds))
+	for _, code := range fileIds {
+		if _, exists := blocked[code]; !exists {
+			result = append(result, code)
+		}
+	}
+	return result
 }
 
 func CreateMissedFilms(fileIds []string) error {
-
-	var missedFilms []model.MissedFilm
-	for _, fileId := range fileIds {
-		missedFilms = append(missedFilms, model.MissedFilm{
-			Code: fileId,
-		})
-	}
-
-	return errors.WithStack(db.CreateInBatches(&missedFilms, 100).Error)
-
+	return errors.WithStack(db.Transaction(func(tx *gorm.DB) error {
+		for _, fileID := range fileIds {
+			missed := model.MissedFilm{Code: fileID}
+			if err := tx.Where(model.MissedFilm{Code: fileID}).FirstOrCreate(&missed).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
 }
 
 func queryNotExistData(fileIds []string, dbName, columnName string) []string {
