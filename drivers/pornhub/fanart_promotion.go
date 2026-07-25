@@ -11,31 +11,30 @@ import (
 
 var promoteLandscapeFanartCandidate = virtual_file.PromoteLandscapeFanart
 
-func (d *Pornhub) finalizeFanart(ctx context.Context, film *model.Film, count int) {
-	if _, err := d.promoteLandscapeFanart(film, count); err != nil {
-		d.updateSampleImageScanAt(ctx, film, err)
+func (d *Pornhub) finalizeFanart(ctx context.Context, work *model.FilmWork, count int) {
+	if _, err := d.promoteLandscapeFanart(work, count); err != nil {
+		d.updateSampleImageScanAt(ctx, work, err)
 		return
 	}
-	if err := db.UpdateSampleImageProgress(film.ID, count, true); err != nil {
-		d.updateSampleImageScanAt(ctx, film, err)
+	if err := db.UpdateMediaWorkSampleProgress(work.ID, count, true); err != nil {
+		d.updateSampleImageScanAt(ctx, work, err)
 		return
 	}
-	film.SampleImageCount = count
-	film.SampleImageComplete = true
-	d.updateFanartAudit(film)
+	work.SampleImageCount = count
+	work.SampleImageComplete = true
 }
 
-func (d *Pornhub) promoteLandscapeFanart(film *model.Film, count int) (bool, error) {
+func (d *Pornhub) promoteLandscapeFanart(work *model.FilmWork, count int) (bool, error) {
 	if count < 2 {
 		return false, nil
 	}
 	for index := 2; index <= count; index++ {
-		if err := virtual_file.RecoverFanartSwap(DriverName, film.Actor, film.Name, 1, index); err != nil {
+		if err := virtual_file.RecoverFanartSwap(DriverName, work.PrimaryDir, work.Code, 1, index); err != nil {
 			return false, fmt.Errorf("recover fanart promotion at index %d: %w", index, err)
 		}
 	}
 	for index := 2; index <= count; index++ {
-		landscapeReady, err := promoteLandscapeFanartCandidate(DriverName, film.Actor, film.Name, index)
+		landscapeReady, err := promoteLandscapeFanartCandidate(DriverName, work.PrimaryDir, work.Code, index)
 		if err != nil {
 			return false, fmt.Errorf("promote landscape fanart at index %d: %w", index, err)
 		}

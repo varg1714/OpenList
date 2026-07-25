@@ -23,21 +23,21 @@ func (d *Pornhub) scanFanart(ctx context.Context) {
 	utils.Log.Info("start scanning fanart for pornhub films")
 	defer utils.Log.Info("finish scanning fanart for pornhub films")
 
-	films, err := db.QueryFanartFilms(DriverName, d.fanartRetryInterval(), d.FanartScanLimit, d.FanartCount)
+	works, err := db.QueryFanartMediaWorks(d.ID, DriverName, d.fanartRetryInterval(), d.FanartScanLimit, d.FanartCount)
 	if err != nil {
-		utils.Log.Warnf("failed to query sample-image films: %s", err.Error())
+		utils.Log.Warnf("failed to query fanart works: %s", err.Error())
 		return
 	}
 
-	for filmIndex := range films {
+	for workIndex := range works {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		d.scanFilmFanart(ctx, &films[filmIndex])
+		d.scanFilmFanart(ctx, &works[workIndex])
 	}
 }
 
-func (d *Pornhub) scanFilmFanart(ctx context.Context, film *model.Film) {
+func (d *Pornhub) scanFilmFanart(ctx context.Context, work *model.FilmWork) {
 	count := d.FanartCount
 	if count <= 0 {
 		return
@@ -62,13 +62,13 @@ func (d *Pornhub) scanFilmFanart(ctx context.Context, film *model.Film) {
 	}
 	// Resume: scan existing regular fanart files and advance progress.
 	// Clean background for recovered existing fanart before advancing.
-	startIndex, finalIndex, err := d.advanceExistingFanart(film, count, cleanupBackground)
+	startIndex, finalIndex, err := d.advanceExistingFanart(work, count, cleanupBackground)
 	if err != nil {
-		d.updateSampleImageScanAt(ctx, film, err)
+		d.updateSampleImageScanAt(ctx, work, err)
 		return
 	}
 	if finalIndex == count {
-		d.finalizeFanart(ctx, film, count)
+		d.finalizeFanart(ctx, work, count)
 		return
 	}
 
@@ -77,9 +77,9 @@ func (d *Pornhub) scanFilmFanart(ctx context.Context, film *model.Film) {
 	if resolve == nil {
 		resolve = d.getVideoLink
 	}
-	videoURL, err := resolve(ctx, film.Url)
+	videoURL, err := resolve(ctx, work.SourceRef)
 	if err != nil {
-		d.updateSampleImageScanAt(ctx, film, err)
+		d.updateSampleImageScanAt(ctx, work, err)
 		return
 	}
 
@@ -90,37 +90,37 @@ func (d *Pornhub) scanFilmFanart(ctx context.Context, film *model.Film) {
 	}
 	duration, err := media.ProbeDuration(ctx, videoURL)
 	if err != nil {
-		d.updateSampleImageScanAt(ctx, film, err)
+		d.updateSampleImageScanAt(ctx, work, err)
 		return
 	}
 
 	// Extract evenly spaced frames strictly inside duration.
 	for index := startIndex; index <= count; index++ {
-		path, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		path, err := virtual_file.FanartPath(DriverName, work.PrimaryDir, work.Code, index)
 		if err != nil {
-			d.updateSampleImageScanAt(ctx, film, err)
+			d.updateSampleImageScanAt(ctx, work, err)
 			return
 		}
 		info, statErr := os.Lstat(path)
 		if statErr == nil && info.Mode().IsRegular() {
-			if err := cleanupBackground(DriverName, film.Actor, film.Name); err != nil {
-				d.updateSampleImageScanAt(ctx, film, err)
+			if err := cleanupBackground(DriverName, work.PrimaryDir, work.Code); err != nil {
+				d.updateSampleImageScanAt(ctx, work, err)
 				return
 			}
 			if index == count {
-				d.finalizeFanart(ctx, film, count)
+				d.finalizeFanart(ctx, work, count)
 				return
 			}
-			if err := db.UpdateSampleImageProgress(film.ID, index, false); err != nil {
-				d.updateSampleImageScanAt(ctx, film, err)
+			if err := db.UpdateMediaWorkSampleProgress(work.ID, index, false); err != nil {
+				d.updateSampleImageScanAt(ctx, work, err)
 				return
 			}
-			film.SampleImageCount = index
-			film.SampleImageComplete = false
+			work.SampleImageCount = index
+			work.SampleImageComplete = false
 			continue
 		}
 		if statErr != nil && !os.IsNotExist(statErr) {
-			d.updateSampleImageScanAt(ctx, film, statErr)
+			d.updateSampleImageScanAt(ctx, work, statErr)
 			return
 		}
 
@@ -128,50 +128,50 @@ func (d *Pornhub) scanFilmFanart(ctx context.Context, film *model.Film) {
 
 		frameData, err := media.ExtractFrame(ctx, videoURL, position)
 		if err != nil {
-			d.updateSampleImageScanAt(ctx, film, err)
+			d.updateSampleImageScanAt(ctx, work, err)
 			return
 		}
 
 		_, err = virtual_file.PublishFanart(virtual_file.FanartPublishRequest{
 			Source:   DriverName,
-			Dir:      film.Actor,
-			FilmName: film.Name,
+			Dir:      work.PrimaryDir,
+			FilmName: work.Code,
 			Index:    index,
 			Content:  frameData,
 		})
 		if err != nil {
-			d.updateSampleImageScanAt(ctx, film, err)
+			d.updateSampleImageScanAt(ctx, work, err)
 			return
 		}
 
 		// Cleanup failure prevents progress advancement so the film is retried.
-		if err := cleanupBackground(DriverName, film.Actor, film.Name); err != nil {
-			utils.Log.Warnf("failed to remove background for film %s: %s", film.Name, err.Error())
-			d.updateSampleImageScanAt(ctx, film, err)
+		if err := cleanupBackground(DriverName, work.PrimaryDir, work.Code); err != nil {
+			utils.Log.Warnf("failed to remove background for work %s: %s", work.Code, err.Error())
+			d.updateSampleImageScanAt(ctx, work, err)
 			return
 		}
 
 		if index == count {
-			d.finalizeFanart(ctx, film, count)
+			d.finalizeFanart(ctx, work, count)
 			return
 		}
-		if err := db.UpdateSampleImageProgress(film.ID, index, false); err != nil {
-			d.updateSampleImageScanAt(ctx, film, err)
+		if err := db.UpdateMediaWorkSampleProgress(work.ID, index, false); err != nil {
+			d.updateSampleImageScanAt(ctx, work, err)
 			return
 		}
-		film.SampleImageCount = index
-		film.SampleImageComplete = false
+		work.SampleImageCount = index
+		work.SampleImageComplete = false
 	}
 }
 
 // advanceExistingFanart scans existing regular fanart files and updates DB progress.
 // Removes background for recovered fanart before advancing. Returns the next index
 // that needs extraction and the final existing index.
-func (d *Pornhub) advanceExistingFanart(film *model.Film, count int, removeBg func(string, string, string) error) (int, int, error) {
+func (d *Pornhub) advanceExistingFanart(work *model.FilmWork, count int, removeBg func(string, string, string) error) (int, int, error) {
 	startIndex := 1
 	finalIndex := 0
 	for index := startIndex; index <= count; index++ {
-		path, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		path, err := virtual_file.FanartPath(DriverName, work.PrimaryDir, work.Code, index)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -183,33 +183,27 @@ func (d *Pornhub) advanceExistingFanart(film *model.Film, count int, removeBg fu
 		if !exists {
 			return index, finalIndex, nil
 		}
-		if err := removeBg(DriverName, film.Actor, film.Name); err != nil {
+		if err := removeBg(DriverName, work.PrimaryDir, work.Code); err != nil {
 			return 0, 0, err
 		}
 		finalIndex = index
 		if index < count {
-			if err := db.UpdateSampleImageProgress(film.ID, index, false); err != nil {
+			if err := db.UpdateMediaWorkSampleProgress(work.ID, index, false); err != nil {
 				return 0, 0, err
 			}
-			film.SampleImageCount = index
-			film.SampleImageComplete = false
+			work.SampleImageCount = index
+			work.SampleImageComplete = false
 		}
 	}
 	return count + 1, finalIndex, nil
 }
 
-func (d *Pornhub) updateSampleImageScanAt(ctx context.Context, film *model.Film, scanErr error) {
-	utils.Log.Warnf("failed to scan fanart for film %s: %s", film.Name, scanErr.Error())
+func (d *Pornhub) updateSampleImageScanAt(ctx context.Context, work *model.FilmWork, scanErr error) {
+	utils.Log.Warnf("failed to scan fanart for work %s: %s", work.Code, scanErr.Error())
 	if errors.Is(scanErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		return
 	}
-	if err := db.UpdateSampleImageScanAt(film.ID); err != nil {
-		utils.Log.Warnf("failed to update sample-image scan time for film %s: %s", film.Name, err.Error())
-	}
-}
-
-func (d *Pornhub) updateFanartAudit(film *model.Film) {
-	if err := db.UpdateSampleImageScanAt(film.ID); err != nil {
-		utils.Log.Warnf("failed to record fanart audit for film %s: %s", film.Name, err.Error())
+	if err := db.UpdateMediaWorkSampleScanAt(work.ID); err != nil {
+		utils.Log.Warnf("failed to update sample-image scan time for work %s: %s", work.Code, err.Error())
 	}
 }
