@@ -78,40 +78,47 @@ func setupPornhubFanartTest(t *testing.T) string {
 		flags.DataDir = previousDataDir
 		conf.Conf = previousConf
 	})
-	if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.Film{}).Error; err != nil {
-		t.Fatalf("reset films: %v", err)
+	if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.FilmWork{}).Error; err != nil {
+		t.Fatalf("reset film works: %v", err)
 	}
 	return dataDir
 }
 
-func createFanartFilm(t *testing.T, name string, url string, count int, scanAt time.Time) model.Film {
+func createFanartWork(t *testing.T, code string, sourceRef string, count int, scanAt time.Time) model.FilmWork {
 	t.Helper()
-	film := model.Film{
-		Url:               url,
-		Name:              name + ".mp4",
+	var scanAtPointer *time.Time
+	if !scanAt.IsZero() {
+		scanAtPointer = &scanAt
+	}
+	work := model.FilmWork{
+		StorageID:         1,
 		Source:            DriverName,
-		Actor:             "actor",
-		Date:              time.Now(),
+		Code:              code,
+		SourceRef:         sourceRef,
+		SourceURL:         "https://www.pornhub.com/view_video.php?viewkey=" + sourceRef,
+		PrimaryDir:        "actor",
+		ReleaseDate:       time.Now(),
 		SampleImageCount:  count,
-		SampleImageScanAt: scanAt,
+		SampleImageScanAt: scanAtPointer,
 	}
-	if err := db.GetDb().Create(&film).Error; err != nil {
-		t.Fatalf("create film: %v", err)
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatalf("create work: %v", err)
 	}
-	return film
+	return work
 }
 
-func loadFanartFilm(t *testing.T, filmID uint) model.Film {
+func loadFanartWork(t *testing.T, workID uint) model.FilmWork {
 	t.Helper()
-	var film model.Film
-	if err := db.GetDb().First(&film, filmID).Error; err != nil {
-		t.Fatalf("load film: %v", err)
+	work, err := db.GetFilmWork(workID)
+	if err != nil {
+		t.Fatalf("load work: %v", err)
 	}
-	return film
+	return work
 }
 
 func newFanartDriver(media fanartMediaOps, getVideo func(context.Context, string) (string, error)) *Pornhub {
 	return &Pornhub{
+		Storage: model.Storage{ID: 1},
 		Addition: Addition{
 			FanartCount:     3,
 			FanartScanLimit: 10,
