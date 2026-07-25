@@ -42,9 +42,9 @@ func TestFC2ScheduledArtifactScanPublishesPersistedImage(t *testing.T) {
 	oldCache := cacheFC2MediaImage
 	t.Cleanup(func() { cacheFC2MediaImage = oldCache })
 	var captured virtual_file.MediaInfo
-	cacheFC2MediaImage = func(info virtual_file.MediaInfo) int {
+	cacheFC2MediaImage = func(info virtual_file.MediaInfo) (int, error) {
 		captured = info
-		return virtual_file.CreatedSuccess
+		return virtual_file.CreatedSuccess, nil
 	}
 
 	err := (&FC2{Storage: model.Storage{ID: 84}}).scanMediaArtifacts()
@@ -53,4 +53,8 @@ func TestFC2ScheduledArtifactScanPublishesPersistedImage(t *testing.T) {
 	require.NotNil(t, captured.Identity)
 	require.Equal(t, "FC2-PPV-884", captured.Identity.Code)
 	require.Equal(t, work.ImageURL, captured.ImgUrl)
+	stored, getErr := db.GetFilmWork(work.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, model.DMMPosterStatusSuccess, stored.DMMPosterStatus)
+	require.NotNil(t, stored.DMMPosterScanAt)
 }
