@@ -15,10 +15,11 @@ import (
 type artifactOperationKind string
 
 const (
-	artifactMove      artifactOperationKind = "move"
-	artifactSymlink   artifactOperationKind = "symlink"
-	artifactDelete    artifactOperationKind = "delete"
-	artifactRemoveDir artifactOperationKind = "remove_directory"
+	artifactMove       artifactOperationKind = "move"
+	artifactSymlink    artifactOperationKind = "symlink"
+	artifactDelete     artifactOperationKind = "delete"
+	artifactRemoveDir  artifactOperationKind = "remove_directory"
+	artifactRemoveTree artifactOperationKind = "remove_tree"
 )
 
 type artifactOperation struct {
@@ -60,6 +61,7 @@ type artifactPlanBuilder struct {
 	required      map[string][]artifactCandidate
 	cleanup       []cleanupCandidate
 	roots         map[string]struct{}
+	parents       map[string]struct{}
 	targetRoots   map[string]struct{}
 	recognized    map[string]struct{}
 	candidateSeen map[string]struct{}
@@ -123,7 +125,7 @@ func populateArtifactReport(report *MigrationReport, plan *artifactPlan) {
 			report.ArtifactMovesPlanned++
 		case artifactDelete:
 			report.ArtifactDeletesPlanned++
-		case artifactRemoveDir:
+		case artifactRemoveDir, artifactRemoveTree:
 			report.ArtifactDirectoriesPlanned++
 		}
 	}
@@ -133,14 +135,54 @@ func populateArtifactReport(report *MigrationReport, plan *artifactPlan) {
 func collectArtifactPlan(plan *migrationPlan, dataDir string) (*artifactPlan, error) {
 	builder := &artifactPlanBuilder{
 		dataDir: dataDir, required: make(map[string][]artifactCandidate), roots: make(map[string]struct{}),
-		targetRoots: make(map[string]struct{}), recognized: make(map[string]struct{}), candidateSeen: make(map[string]struct{}),
+		parents: make(map[string]struct{}), targetRoots: make(map[string]struct{}), recognized: make(map[string]struct{}), candidateSeen: make(map[string]struct{}),
+	}
+	for _, root := range plan.artifactRoots {
+		parent, err := safeArtifactPath(dataDir, "emby", root.source, root.primaryDir)
+		if err != nil {
+			return nil, err
+		}
+		target, err := safeArtifactPath(parent, root.code)
+		if err != nil {
+			return nil, err
+		}
+		builder.parents[parent] = struct{}{}
+		builder.targetRoots[target] = struct{}{}
 	}
 	for _, work := range plan.works {
 		if err := builder.collectWork(work); err != nil {
 			return nil, err
 		}
 	}
+	if err := builder.collectOrphanRoots(); err != nil {
+		return nil, err
+	}
 	return builder.build()
+}
+
+func (builder *artifactPlanBuilder) collectOrphanRoots() error {
+	for parent := range builder.parents {
+		entries, err := os.ReadDir(parent)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return &ArtifactMigrationError{Path: parent, Reason: err.Error()}
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			root, err := safeArtifactPath(parent, entry.Name())
+			if err != nil {
+				return err
+			}
+			if _, target := builder.targetRoots[root]; !target {
+				builder.roots[root] = struct{}{}
+			}
+		}
+	}
+	return nil
 }
 
 func (builder *artifactPlanBuilder) collectWork(work *plannedWork) error {
@@ -426,37 +468,21 @@ func (builder *artifactPlanBuilder) build() (*artifactPlan, error) {
 		}
 		result.Operations = append(result.Operations, artifactOperation{Kind: artifactDelete, SourcePath: cleanup.source.sourcePath, VerifyPath: cleanup.verify, SHA256: hash, State: "pending"})
 	}
-	removalSources := make(map[string]struct{})
-	for _, operation := range result.Operations {
-		if operation.Kind == artifactMove || operation.Kind == artifactSymlink || operation.Kind == artifactDelete {
-			removalSources[operation.SourcePath] = struct{}{}
-		}
-	}
-
 	for root := range builder.roots {
 		if _, target := builder.targetRoots[root]; target {
 			continue
 		}
-		entries, err := os.ReadDir(root)
+		info, err := os.Lstat(root)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
 			return nil, &ArtifactMigrationError{Path: root, Reason: err.Error()}
 		}
-		removable := true
-		for _, entry := range entries {
-			if removableArtifactMetadata(entry) {
-				continue
-			}
-			if _, removed := removalSources[filepath.Join(root, entry.Name())]; !removed {
-				removable = false
-				break
-			}
+		if !info.IsDir() {
+			return nil, &ArtifactMigrationError{Path: root, Reason: "artifact root is not a directory"}
 		}
-		if removable {
-			result.Operations = append(result.Operations, artifactOperation{Kind: artifactRemoveDir, SourcePath: root, State: "pending"})
-		}
+		result.Operations = append(result.Operations, artifactOperation{Kind: artifactRemoveTree, SourcePath: root, State: "pending"})
 	}
 
 	slices.SortStableFunc(result.Operations, compareArtifactOperations)

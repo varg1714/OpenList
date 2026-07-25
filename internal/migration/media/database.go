@@ -120,10 +120,17 @@ type MigrationReport struct {
 }
 
 type migrationPlan struct {
-	works        []*plannedWork
-	magnets      []*plannedMagnet
-	cacheAliases []plannedCacheAlias
-	report       MigrationReport
+	works         []*plannedWork
+	magnets       []*plannedMagnet
+	cacheAliases  []plannedCacheAlias
+	artifactRoots []plannedArtifactRoot
+	report        MigrationReport
+}
+
+type plannedArtifactRoot struct {
+	source     string
+	primaryDir string
+	code       string
 }
 
 type plannedWork struct {
@@ -349,6 +356,7 @@ func validateArtifactRootOwnership(tx *gorm.DB, plan *migrationPlan) error {
 		if storageByRoot[key] == nil {
 			storageByRoot[key] = make(map[uint]struct{})
 			ownerByRoot[key] = owner
+			plan.artifactRoots = append(plan.artifactRoots, plannedArtifactRoot{source: owner.source, primaryDir: owner.primaryDir, code: owner.code})
 		}
 		storageByRoot[key][owner.storageID] = struct{}{}
 	}

@@ -406,7 +406,7 @@ func TestMigrateLegacyMediaDryRunDoesNotCopyOrWriteJournal(t *testing.T) {
 	}
 }
 
-func TestMigrateLegacyMediaLeavesNonEmptyLegacyDirectory(t *testing.T) {
+func TestMigrateLegacyMediaRemovesNonEmptyLegacyDirectory(t *testing.T) {
 	database := newMigrationTestDB(t)
 	dataDir := t.TempDir()
 	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
@@ -420,16 +420,16 @@ func TestMigrateLegacyMediaLeavesNonEmptyLegacyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate with nonempty legacy root: %v", err)
 	}
-	if report.ArtifactDirectoriesPlanned != 0 || report.ArtifactDirectoriesRemoved != 0 {
+	if report.ArtifactDirectoriesPlanned != 1 || report.ArtifactDirectoriesRemoved != 1 {
 		t.Fatalf("nonempty directory report = %+v", report)
 	}
-	assertArtifactContent(t, filepath.Join(legacyRoot, "keep.txt"), "operator file")
-	if _, err := os.Stat(filepath.Join(legacyRoot, "poster.jpg")); !os.IsNotExist(err) {
-		t.Fatalf("selected source was not moved: %v", err)
+	if _, err := os.Stat(legacyRoot); !os.IsNotExist(err) {
+		t.Fatalf("nonempty legacy root remains: %v", err)
 	}
+	assertArtifactContent(t, filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123", "poster.jpg"), "poster")
 }
 
-func TestMigrateLegacyMediaDoesNotPlanUnverifiedCleanupOrDirectoryRemoval(t *testing.T) {
+func TestMigrateLegacyMediaDryRunPlansUnverifiedLegacyDirectoryRemoval(t *testing.T) {
 	database := newMigrationTestDB(t)
 	dataDir := t.TempDir()
 	createStorages(t, database, model.Storage{ID: 18, Driver: "FC2", MountPath: "/fc2"})
@@ -447,7 +447,7 @@ func TestMigrateLegacyMediaDoesNotPlanUnverifiedCleanupOrDirectoryRemoval(t *tes
 	if err != nil {
 		t.Fatalf("dry-run unverified cleanup: %v", err)
 	}
-	if report.ArtifactDeletesPlanned != 0 || report.ArtifactDirectoriesPlanned != 0 {
+	if report.ArtifactDeletesPlanned != 0 || report.ArtifactDirectoriesPlanned != 1 {
 		t.Fatalf("unverified cleanup report = %+v", report)
 	}
 	assertArtifactContent(t, filepath.Join(legacyRoot, "FC2-PPV-100 title-cd2.nfo"), "unverified cd2 nfo")
@@ -797,7 +797,7 @@ func TestPreflightRejectsInvalidSymlinkDependencies(t *testing.T) {
 	}
 }
 
-func TestMigrateLegacyMediaStorageScopedRootLeavesUnrecognizedCodeFiles(t *testing.T) {
+func TestMigrateLegacyMediaStorageScopedRootRemovesUnrecognizedCodeFiles(t *testing.T) {
 	database := newMigrationTestDB(t)
 	dataDir := t.TempDir()
 	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
@@ -816,13 +816,14 @@ func TestMigrateLegacyMediaStorageScopedRootLeavesUnrecognizedCodeFiles(t *testi
 	if err != nil {
 		t.Fatalf("migrate storage-scoped artifacts: %v", err)
 	}
-	if report.ArtifactMovesPlanned != 1 || report.ArtifactsMoved != 1 || report.ArtifactDirectoriesPlanned != 0 || report.ArtifactDirectoriesRemoved != 0 {
+	if report.ArtifactMovesPlanned != 1 || report.ArtifactsMoved != 1 || report.ArtifactDirectoriesPlanned != 1 || report.ArtifactDirectoriesRemoved != 1 {
 		t.Fatalf("storage-scoped report = %+v", report)
 	}
 	targetRoot := filepath.Join(dataDir, "emby", "javdb", film.Actor, "ABP-123")
 	assertArtifactContent(t, filepath.Join(targetRoot, "ABP-123.1.srt"), "subtitle")
-	assertArtifactContent(t, filepath.Join(storageRoot, "ABP-123.notes"), "operator notes")
-	assertArtifactContent(t, filepath.Join(storageRoot, "ABP-123-cd-backup"), "operator backup")
+	if _, err := os.Stat(storageRoot); !os.IsNotExist(err) {
+		t.Fatalf("storage-scoped root remains: %v", err)
+	}
 }
 
 func TestMigrateLegacyMediaUsesExplicitStorageMappingWhenSourceIsAmbiguous(t *testing.T) {

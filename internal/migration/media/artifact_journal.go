@@ -340,7 +340,10 @@ func preflightJournalOperations(plan *artifactPlan, dataDir string) error {
 			if !exists && moveTargets[operation.VerifyPath] != operation.SHA256 {
 				return &ArtifactMigrationError{Path: operation.VerifyPath, Reason: "cleanup verification target is unavailable"}
 			}
-		case artifactRemoveDir:
+		case artifactRemoveDir, artifactRemoveTree:
+			if err := rejectSymlinkAncestors(dataDir, operation.SourcePath); err != nil {
+				return err
+			}
 		default:
 			return &ArtifactMigrationError{Path: operation.SourcePath, Reason: fmt.Sprintf("unknown journal operation kind %q", operation.Kind)}
 		}
@@ -400,7 +403,7 @@ func migrateArtifacts(plan *artifactPlan, options MigrationOptions, report *Migr
 			if changed {
 				report.ArtifactsDeleted++
 			}
-		case artifactRemoveDir:
+		case artifactRemoveDir, artifactRemoveTree:
 			if changed {
 				report.ArtifactDirectoriesRemoved++
 			}
@@ -419,6 +422,8 @@ func executeArtifactOperation(operation *artifactOperation, progress *artifactPr
 		return executeArtifactDelete(operation, progress)
 	case artifactRemoveDir:
 		return executeDirectoryRemoval(operation, progress)
+	case artifactRemoveTree:
+		return executeDirectoryTreeRemoval(operation, progress)
 	default:
 		return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: fmt.Sprintf("unknown operation kind %q", operation.Kind)}
 	}
@@ -589,6 +594,26 @@ func executeDirectoryRemoval(operation *artifactOperation, progress *artifactPro
 		}
 	}
 	if err := os.Remove(operation.SourcePath); err != nil {
+		return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: err.Error()}
+	}
+	if err := progress.record(operation, "done"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func executeDirectoryTreeRemoval(operation *artifactOperation, progress *artifactProgressLog) (bool, error) {
+	info, err := os.Lstat(operation.SourcePath)
+	if os.IsNotExist(err) {
+		return false, progress.record(operation, "done")
+	}
+	if err != nil {
+		return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: err.Error()}
+	}
+	if !info.IsDir() {
+		return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: "artifact root is not a directory"}
+	}
+	if err := os.RemoveAll(operation.SourcePath); err != nil {
 		return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: err.Error()}
 	}
 	if err := progress.record(operation, "done"); err != nil {

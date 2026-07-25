@@ -29,8 +29,9 @@ func TestMigrateLegacyMediaUsesActualArtifactNamesWhenDatabaseNameIsTooLong(t *t
 	actualName := "SSNI-772 truncated.title"
 	legacyRoot := filepath.Join(dataDir, "emby", "javdb", "miru", actualName)
 	writeArtifactFixture(t, legacyRoot, map[string]string{
-		actualName + ".jpg": "legacy poster",
-		actualName + ".nfo": "legacy nfo",
+		actualName + ".jpg":  "legacy poster",
+		actualName + ".nfo":  "legacy nfo",
+		actualName + ".strm": "legacy stream",
 	})
 
 	// When
@@ -208,7 +209,7 @@ func TestMigrateLegacyMediaReplansArtifactsAfterCompletedJournal(t *testing.T) {
 	}
 }
 
-func TestMigrateLegacyMediaLeavesCodePrefixedDirectoryWithoutDatabaseWork(t *testing.T) {
+func TestMigrateLegacyMediaRemovesCodePrefixedDirectoryWithoutDatabaseWork(t *testing.T) {
 	// Given
 	database := newMigrationTestDB(t)
 	dataDir := t.TempDir()
@@ -235,10 +236,12 @@ func TestMigrateLegacyMediaLeavesCodePrefixedDirectoryWithoutDatabaseWork(t *tes
 	if err != nil {
 		t.Fatalf("migrate with unmatched directory: %v", err)
 	}
-	if report.ArtifactMovesPlanned != 0 || report.ArtifactsMoved != 0 {
+	if report.ArtifactMovesPlanned != 0 || report.ArtifactsMoved != 0 || report.ArtifactDirectoriesPlanned != 1 || report.ArtifactDirectoriesRemoved != 1 {
 		t.Fatalf("orphan artifact report = %+v", report)
 	}
-	assertArtifactContent(t, orphanNFO, "orphan nfo")
+	if _, err := os.Stat(orphanRoot); !os.IsNotExist(err) {
+		t.Fatalf("orphan artifact root remains: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(dataDir, "emby", "javdb", "miru", "SSNI-773")); !os.IsNotExist(err) {
 		t.Fatalf("orphan code directory was created: %v", err)
 	}
