@@ -2,13 +2,13 @@ package pornhub
 
 import (
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
-	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/gocolly/colly/v2"
 	"time"
 )
+
+var waitPornhubTagScan = time.Sleep
 
 func (d *Pornhub) reMatchTags() {
 
@@ -67,15 +67,7 @@ func (d *Pornhub) reMatchTags() {
 			continue
 		}
 
-		identity := virtual_file.MediaIdentity{StorageID: film.StorageID, Source: film.Source, PrimaryDir: film.PrimaryDir, Code: film.Code}
-		if err := virtual_file.UpdateMediaNfo(virtual_file.MediaInfo{
-			Identity: &identity, Title: model.BuildMediaTitle(film.Code, film.RawTitle, film.TranslatedTitle),
-			Actors: []string(film.Actors), Release: film.ReleaseDate, Tags: []string(film.Tags),
-		}); err != nil {
-			utils.Log.Warnf("failed to update NFO for %s: %s", film.Code, err)
-		}
-
-		time.Sleep(3 * time.Second)
+		waitPornhubTagScan(3 * time.Second)
 	}
 
 }
