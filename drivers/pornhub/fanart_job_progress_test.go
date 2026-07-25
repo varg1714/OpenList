@@ -19,16 +19,16 @@ func TestScanFilmFanartExtractsEvenlySpacedFrames(t *testing.T) {
 		return "https://example.test/video/" + key, nil
 	})
 
-	film := createFanartFilm(t, "extract-test", "viewkey123", 0, time.Time{})
+	film := createFanartWork(t, "extract-test", "viewkey123", 0, time.Time{})
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
 
 	for index := 1; index <= 3; index++ {
-		path, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,19 +51,19 @@ func TestScanFilmFanartRecreatesMissingPersistedFrame(t *testing.T) {
 		return "https://example.test/video/" + key, nil
 	})
 
-	film := createFanartFilm(t, "resume-test", "vk1", 1, time.Time{})
+	film := createFanartWork(t, "resume-test", "vk1", 1, time.Time{})
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
 
-	path1, _ := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+	path1, _ := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 1)
 	if _, err := os.Lstat(path1); err != nil {
 		t.Errorf("missing persisted fanart1 should be recreated: %v", err)
 	}
-	path2, _ := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 2)
+	path2, _ := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 2)
 	if _, err := os.Lstat(path2); err != nil {
 		t.Errorf("fanart2 should exist: %v", err)
 	}
@@ -76,13 +76,13 @@ func TestScanFilmFanartContinuesWhenConfiguredCountIncreases(t *testing.T) {
 	})
 	driver.FanartCount = 5
 
-	film := createFanartFilm(t, "count-increase", "view-increase", 3, time.Time{})
+	film := createFanartWork(t, "count-increase", "view-increase", 3, time.Time{})
 	film.SampleImageComplete = true
 	if err := db.GetDb().Model(&film).Update("sample_image_complete", true).Error; err != nil {
 		t.Fatal(err)
 	}
 	for index := 1; index <= 3; index++ {
-		path, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,12 +96,12 @@ func TestScanFilmFanartContinuesWhenConfiguredCountIncreases(t *testing.T) {
 
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 5 || !stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (5, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
 	for index := 4; index <= 5; index++ {
-		path, _ := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		path, _ := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
 		if _, err := os.Lstat(path); err != nil {
 			t.Fatalf("fanart%d not created after count increase: %v", index, err)
 		}
@@ -113,13 +113,13 @@ func TestScanFilmFanartRepairsCompletedFilmMissingFrame(t *testing.T) {
 	driver := newFanartDriver(&mockFanartMedia{duration: 120}, func(_ context.Context, key string) (string, error) {
 		return "https://example.test/video/" + key, nil
 	})
-	film := createFanartFilm(t, "completed-missing", "view-missing", 3, time.Time{})
+	film := createFanartWork(t, "completed-missing", "view-missing", 3, time.Time{})
 	film.SampleImageComplete = true
 	if err := db.GetDb().Model(&film).Update("sample_image_complete", true).Error; err != nil {
 		t.Fatal(err)
 	}
 	for _, index := range []int{1, 3} {
-		path, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -133,11 +133,11 @@ func TestScanFilmFanartRepairsCompletedFilmMissingFrame(t *testing.T) {
 
 	driver.scanFilmFanart(context.Background(), &film)
 
-	path, _ := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 2)
+	path, _ := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 2)
 	if _, err := os.Lstat(path); err != nil {
 		t.Fatalf("missing completed fanart was not repaired: %v", err)
 	}
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
@@ -150,8 +150,8 @@ func TestScanFilmFanartAdvancesExistingFanartFiles(t *testing.T) {
 		return "https://example.test/video/" + key, nil
 	})
 
-	film := createFanartFilm(t, "existing-test", "vk2", 0, time.Time{})
-	path1, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+	film := createFanartWork(t, "existing-test", "vk2", 0, time.Time{})
+	path1, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestScanFilmFanartAdvancesExistingFanartFiles(t *testing.T) {
 
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
@@ -186,8 +186,8 @@ func TestScanFilmFanartExistingFanartTriggersBackgroundCleanup(t *testing.T) {
 		return nil
 	}
 
-	film := createFanartFilm(t, "existing-cleanup", "vkc", 0, time.Time{})
-	path1, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+	film := createFanartWork(t, "existing-cleanup", "vkc", 0, time.Time{})
+	path1, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestScanFilmFanartPersistedProgressTriggersBackgroundCleanup(t *testing.T) 
 		return nil
 	}
 
-	film := createFanartFilm(t, "persisted-cleanup", "vkp", 1, time.Time{})
+	film := createFanartWork(t, "persisted-cleanup", "vkp", 1, time.Time{})
 	driver.scanFilmFanart(context.Background(), &film)
 
 	if cleanupCalls != 1 {

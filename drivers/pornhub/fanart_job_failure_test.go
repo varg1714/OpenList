@@ -23,20 +23,20 @@ func TestScanFilmFanartCleanupFailureDoesNotAdvanceProgress(t *testing.T) {
 		return fmt.Errorf("cleanup denied")
 	}
 
-	film := createFanartFilm(t, "cleanup-fail", "vkclean", 0, time.Time{})
+	film := createFanartWork(t, "cleanup-fail", "vkclean", 0, time.Time{})
 	started := time.Now()
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 0 || stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (0, false) - cleanup failure must prevent progress", stored.SampleImageCount, stored.SampleImageComplete)
 	}
-	if stored.SampleImageScanAt.Before(started) {
-		t.Errorf("scan time = %s, want at or after %s", stored.SampleImageScanAt, started)
+	if stored.SampleImageScanAt == nil || stored.SampleImageScanAt.Before(started) {
+		t.Errorf("scan time = %v, want at or after %s", stored.SampleImageScanAt, started)
 	}
 
 	// Fanart should still be published (the extract succeeded).
-	path1, _ := virtual_file.FanartPath(DriverName, film.Actor, film.Name, 1)
+	path1, _ := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 1)
 	if _, err := os.Lstat(path1); os.IsNotExist(err) {
 		t.Error("fanart1 should exist even when cleanup fails")
 	}
@@ -49,16 +49,16 @@ func TestScanFilmFanartTransientProbeFailureUpdatesScanTime(t *testing.T) {
 		return "https://example.test/video/" + key, nil
 	})
 
-	film := createFanartFilm(t, "probe-fail", "vk3", 0, time.Time{})
+	film := createFanartWork(t, "probe-fail", "vk3", 0, time.Time{})
 	started := time.Now()
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 0 || stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (0, false)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
-	if stored.SampleImageScanAt.Before(started) {
-		t.Errorf("scan time = %s, want at or after %s", stored.SampleImageScanAt, started)
+	if stored.SampleImageScanAt == nil || stored.SampleImageScanAt.Before(started) {
+		t.Errorf("scan time = %v, want at or after %s", stored.SampleImageScanAt, started)
 	}
 }
 
@@ -74,16 +74,16 @@ func TestScanFilmFanartTransientExtractFailureUpdatesScanTime(t *testing.T) {
 		return "https://example.test/video/" + key, nil
 	})
 
-	film := createFanartFilm(t, "extract-fail", "vk4", 0, time.Time{})
+	film := createFanartWork(t, "extract-fail", "vk4", 0, time.Time{})
 	started := time.Now()
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if stored.SampleImageCount != 0 || stored.SampleImageComplete {
 		t.Fatalf("progress = (%d, %t), want (0, false)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
-	if stored.SampleImageScanAt.Before(started) {
-		t.Errorf("scan time = %s, want at or after %s", stored.SampleImageScanAt, started)
+	if stored.SampleImageScanAt == nil || stored.SampleImageScanAt.Before(started) {
+		t.Errorf("scan time = %v, want at or after %s", stored.SampleImageScanAt, started)
 	}
 }
 
@@ -94,13 +94,13 @@ func TestScanFilmFanartAuditsCompletedFilmWithoutResolvingVideo(t *testing.T) {
 		return "", errors.New("completed audit should not resolve video")
 	})
 
-	film := createFanartFilm(t, "completed", "vk5", 3, time.Time{})
+	film := createFanartWork(t, "completed", "vk5", 3, time.Time{})
 	film.SampleImageComplete = true
 	if err := db.GetDb().Model(&film).Update("sample_image_complete", true).Error; err != nil {
 		t.Fatal(err)
 	}
 	for index := 1; index <= 3; index++ {
-		path, err := virtual_file.FanartPath(DriverName, film.Actor, film.Name, index)
+		path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -114,11 +114,11 @@ func TestScanFilmFanartAuditsCompletedFilmWithoutResolvingVideo(t *testing.T) {
 
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
+	stored := loadFanartWork(t, film.ID)
 	if !stored.SampleImageComplete {
 		t.Error("completed film should remain complete")
 	}
-	if stored.SampleImageScanAt.IsZero() {
+	if stored.SampleImageScanAt == nil {
 		t.Error("completed disk audit did not update scan time")
 	}
 }
@@ -128,13 +128,13 @@ func TestScanFilmFanartCancellationDoesNotDelayRetry(t *testing.T) {
 	driver := newFanartDriver(&mockFanartMedia{}, func(_ context.Context, _ string) (string, error) {
 		return "", context.Canceled
 	})
-	film := createFanartFilm(t, "cancel-retry", "vk-cancel", 0, time.Time{})
+	film := createFanartWork(t, "cancel-retry", "vk-cancel", 0, time.Time{})
 
 	driver.scanFilmFanart(context.Background(), &film)
 
-	stored := loadFanartFilm(t, film.ID)
-	if !stored.SampleImageScanAt.IsZero() {
-		t.Fatalf("cancelled scan time = %s, want zero", stored.SampleImageScanAt)
+	stored := loadFanartWork(t, film.ID)
+	if stored.SampleImageScanAt != nil {
+		t.Fatalf("cancelled scan time = %v, want nil", stored.SampleImageScanAt)
 	}
 }
 
@@ -145,8 +145,8 @@ func TestScanFilmFanartRemovesBackgroundThenPromotesLegacyPoster(t *testing.T) {
 		return "https://example.test/video/" + key, nil
 	})
 
-	film := createFanartFilm(t, "bg-test", "vk6", 0, time.Time{})
-	paths, err := virtual_file.PosterPaths(DriverName, film.Actor, film.Name)
+	film := createFanartWork(t, "bg-test", "vk6", 0, time.Time{})
+	paths, err := virtual_file.PosterPaths(DriverName, film.PrimaryDir, film.Code)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestScanFilmFanartRemovesBackgroundThenPromotesLegacyPoster(t *testing.T) {
 		t.Fatalf("legacy poster not renamed: %v", err)
 	}
 
-	fanartPath := filepath.Join(dataDir, "emby", DriverName, film.Actor, virtual_file.GetRealName(virtual_file.AppendImageName(film.Name)), "fanart1.jpg")
+	fanartPath := filepath.Join(dataDir, "emby", DriverName, film.PrimaryDir, virtual_file.GetRealName(virtual_file.AppendImageName(film.Code)), "fanart1.jpg")
 	if _, err := os.Lstat(fanartPath); err != nil {
 		t.Fatalf("fanart1 not published: %v", err)
 	}
