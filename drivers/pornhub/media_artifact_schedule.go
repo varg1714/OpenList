@@ -2,6 +2,7 @@ package pornhub
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -9,24 +10,23 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
-var cachePornhubMediaImage = virtual_file.CacheImage
+var cachePornhubMediaImage = virtual_file.CacheImageWithError
+
+const posterRetryInterval = 72 * time.Hour
 
 func (d *Pornhub) scanMediaArtifacts() error {
 	utils.Log.Info("start scanning Pornhub media artifacts")
 	defer utils.Log.Info("finish scanning Pornhub media artifacts")
 
-	works, err := db.ListFilmWorksByStorageSource(d.ID, DriverName)
+	works, err := db.QueryPendingMediaPosterWorks(d.ID, DriverName, posterRetryInterval)
 	if err != nil {
 		return fmt.Errorf("list Pornhub works for artifact scan: %w", err)
 	}
 	utils.Log.Infof("found %d Pornhub artifact works, ids: %v", len(works), filmWorkIDs(works))
 	for index := range works {
 		work := works[index]
-		if work.ImageURL == "" {
-			continue
-		}
 		identity := pornhubMediaIdentity(&work)
-		cachePornhubMediaImage(virtual_file.MediaInfo{
+		result, cacheErr := cachePornhubMediaImage(virtual_file.MediaInfo{
 			Identity:      &identity,
 			Title:         model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
 			ImgUrl:        work.ImageURL,
@@ -35,6 +35,20 @@ func (d *Pornhub) scanMediaArtifacts() error {
 			Actors:        []string(work.Actors),
 			Tags:          []string(work.Tags),
 		})
+		status := model.DMMPosterStatusSuccess
+		if result != virtual_file.Exist && result != virtual_file.CreatedSuccess {
+			status = model.DMMPosterStatusTransientError
+			if cacheErr == nil {
+				cacheErr = fmt.Errorf("unexpected poster cache result %d", result)
+			}
+		}
+		if cacheErr != nil {
+			status = model.DMMPosterStatusTransientError
+			utils.Log.Warnf("failed to cache Pornhub poster for %s: %s", work.Code, cacheErr)
+		}
+		if err := db.UpdateMediaWorkDMMPosterStatus(work.ID, status); err != nil {
+			return fmt.Errorf("update Pornhub poster status for %s: %w", work.Code, err)
+		}
 	}
 	return nil
 }

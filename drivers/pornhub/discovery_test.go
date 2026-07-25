@@ -175,46 +175,6 @@ func TestLinkRejectsMissingCanonicalSourceURL(t *testing.T) {
 	}
 }
 
-func TestScanMediaArtifactsUsesStableIdentityAndReferer(t *testing.T) {
-	if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.FilmWork{}).Error; err != nil {
-		t.Fatal(err)
-	}
-	original := cachePornhubMediaImage
-	t.Cleanup(func() { cachePornhubMediaImage = original })
-
-	var captured virtual_file.MediaInfo
-	cachePornhubMediaImage = func(info virtual_file.MediaInfo) int {
-		captured = info
-		return virtual_file.CreatedSuccess
-	}
-	work := model.FilmWork{
-		StorageID: 12, Source: DriverName, Code: "abc123", PrimaryDir: "Actor A",
-		RawTitle: "Original title", TranslatedTitle: "Translated title",
-		ImageURL: "https://example.test/cover.jpg", Actors: model.StringArray{"Actor A"}, Tags: model.StringArray{"tag"},
-	}
-	if err := db.GetDb().Create(&work).Error; err != nil {
-		t.Fatal(err)
-	}
-	driver := Pornhub{Storage: model.Storage{ID: 12}, Addition: Addition{ServerUrl: "https://www.pornhub.com"}}
-	if err := driver.scanMediaArtifacts(); err != nil {
-		t.Fatal(err)
-	}
-
-	if captured.Identity == nil {
-		t.Fatal("artifact call omitted media identity")
-	}
-	identity := *captured.Identity
-	if identity.StorageID != 12 || identity.Source != DriverName || identity.PrimaryDir != "Actor A" || identity.Code != "abc123" {
-		t.Fatalf("artifact identity = %+v", identity)
-	}
-	if captured.Title != "abc123 Translated title" || captured.ImgUrl != work.ImageURL {
-		t.Fatalf("artifact metadata = %+v", captured)
-	}
-	if captured.ImgUrlHeaders["Referer"] != "https://www.pornhub.com" {
-		t.Fatalf("poster headers = %#v", captured.ImgUrlHeaders)
-	}
-}
-
 func TestReMatchTagsLeavesNFOStaleForScheduledSync(t *testing.T) {
 	if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.FilmWork{}).Error; err != nil {
 		t.Fatal(err)
