@@ -53,8 +53,11 @@ func (d *FC2) Init(ctx context.Context) error {
 	d.cron = cron.NewCron(duration)
 	d.cron.Do(func() {
 		d.rematchMediaReleaseTime()
-		if d.RefreshNfo {
-			d.refreshMediaNFOs()
+		if err := d.scanMediaArtifacts(); err != nil {
+			utils.Log.Warnf("failed to synchronize FC2 artifacts: %s", err)
+		}
+		if err := d.syncConfiguredNFOs(); err != nil {
+			utils.Log.Warnf("failed to synchronize FC2 NFOs: %s", err)
 		}
 		d.scanMediaSampleImages()
 	})
@@ -186,21 +189,32 @@ func (d *FC2) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*m
 
 func (d *FC2) Remove(ctx context.Context, obj model.Obj) error {
 	if group, ok := obj.(*model.EmbyFileDirWrapper); ok && len(group.EmbyFiles) > 0 {
-		return virtual_file.DeleteMediaWork(group.EmbyFiles[0].WorkID)
+		return d.removeMediaWork(group.EmbyFiles[0].WorkID)
 	}
 	if mediaFile, ok := obj.(*model.EmbyFileObj); ok && mediaFile.WorkID != 0 {
-		return virtual_file.DeleteMediaFile(mediaFile.FilmFileID)
+		return d.removeMediaWork(mediaFile.WorkID)
 	}
 	works, err := db.ListFilmWorks(d.ID, "fc2", obj.GetName())
 	if err != nil {
 		return err
 	}
 	for _, work := range works {
-		if err := virtual_file.DeleteMediaWork(work.ID); err != nil {
+		if err := d.removeMediaWork(work.ID); err != nil {
 			return err
 		}
 	}
 	return db.DeleteActor(strconv.Itoa(int(d.ID)), obj.GetName())
+}
+
+func (d *FC2) removeMediaWork(workID uint) error {
+	work, err := db.GetFilmWork(workID)
+	if err != nil {
+		return err
+	}
+	if err := db.CreateMissedFilms([]string{work.Code}); err != nil {
+		return fmt.Errorf("persist FC2 tombstone for %s: %w", work.Code, err)
+	}
+	return virtual_file.DeleteMediaWork(workID)
 }
 
 func (d *FC2) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {

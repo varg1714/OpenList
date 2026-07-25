@@ -148,33 +148,6 @@ func (d *FC2) scanMediaSampleImages() {
 	}
 }
 
-func (d *FC2) refreshMediaNFOs() {
-	works, err := db.QueryStaleNFOMediaWorks("fc2", 100)
-	if err != nil {
-		utils.Log.Warnf("failed to query stale FC2 NFO works: %s", err)
-		return
-	}
-	for index := range works {
-		work := works[index]
-		identity := fc2MediaIdentity(work)
-		err := virtual_file.UpdateMediaNfo(virtual_file.MediaInfo{
-			Identity: &identity, Title: model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
-			Synopsis: work.Synopsis, Release: work.ReleaseDate, Actors: []string(work.Actors), Tags: []string(work.Tags),
-		})
-		lastError := ""
-		if err != nil {
-			lastError = err.Error()
-			if updateErr := db.UpdateMediaWorkNFOResult(work.ID, work.NfoVersion, lastError); updateErr != nil {
-				utils.Log.Warnf("failed to update FC2 NFO error for %s: %s", work.Code, updateErr)
-			}
-			continue
-		}
-		if updateErr := db.UpdateMediaWorkNFOResult(work.ID, work.MetadataVersion, ""); updateErr != nil {
-			utils.Log.Warnf("failed to update FC2 NFO stage for %s: %s", work.Code, updateErr)
-		}
-	}
-}
-
 func fc2MediaIdentity(work model.FilmWork) virtual_file.MediaIdentity {
 	return virtual_file.MediaIdentity{StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code}
 }

@@ -19,7 +19,8 @@ type Addition struct {
 	ReleaseScanTime       uint64 `json:"ReleaseScanTime" required:"true" type:"number" `
 	ScanTimeLimit         uint64 `json:"ScanTimeLimit" required:"true" type:"number" `
 	BatchScanSize         int    `json:"batch_scan_size" required:"true" type:"number" default:"20"`
-	RefreshNfo            bool   `json:"refresh_nfo"`
+	RefreshNfo            bool   `json:"refresh_nfo" help:"Force rewriting every normalized NFO during scheduled maintenance."`
+	SyncNfo               bool   `json:"sync_nfo" required:"false" help:"Write only normalized NFO records whose metadata changed."`
 	ScraperApi            string `json:"scraper_api" required:"false"`
 	MissAvMaxPage         int    `json:"miss_av_max_page" required:"true" type:"number" `
 	EmbyServers           string `json:"emby_servers" required:"false" type:"text"`
