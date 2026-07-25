@@ -85,17 +85,19 @@ func (d *FC2) syncMissAvFilms(films []model.EmbyFileObj) error {
 	for _, film := range films {
 		code, err := model.NormalizeMediaCode("fc2", film.Name)
 		if err != nil {
-			return err
+			utils.Log.Warnf("skip invalid MissAV film %q: %s", film.Name, err)
+			continue
 		}
 		work, err := db.GetFilmWorkByIdentity(d.ID, "fc2", code)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if _, err := d.addStar(code, film.Tags); err != nil {
-				return err
+				utils.Log.Warnf("failed to add MissAV film %s: %s", code, err)
 			}
 			continue
 		}
 		if err != nil {
-			return err
+			utils.Log.Warnf("failed to query MissAV film %s: %s", code, err)
+			continue
 		}
 		merged := append(model.StringArray(nil), work.Tags...)
 		seen := make(map[string]bool, len(merged))
@@ -110,7 +112,7 @@ func (d *FC2) syncMissAvFilms(films []model.EmbyFileObj) error {
 		}
 		if len(merged) != len(work.Tags) {
 			if err := db.UpdateMediaWorkTags(work.ID, merged, work.TagVersion+1); err != nil {
-				return err
+				utils.Log.Warnf("failed to update MissAV film %s: %s", code, err)
 			}
 		}
 	}
