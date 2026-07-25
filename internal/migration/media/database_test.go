@@ -82,7 +82,7 @@ func TestMigrateLegacyMediaMapsSourcesFilesAndCaches(t *testing.T) {
 		t.Fatalf("validate migrated identity: %v", err)
 	}
 	assertCount(t, database, &model.Film{}, 5)
-	assertCount(t, database, &model.MagnetCache{}, 7)
+	assertCount(t, database, &model.MagnetCache{}, 11)
 }
 
 func TestMarkVerifiedNFOStateUpdatesMigratedWorkAfterArtifactMove(t *testing.T) {
@@ -139,6 +139,420 @@ func TestMigrateLegacyMediaRerunIsIdempotent(t *testing.T) {
 	if javdb.TranslatedTitle != "Translated title" {
 		t.Fatalf("rerun translated title = %q, want title without code prefix", javdb.TranslatedTitle)
 	}
+}
+
+func TestMigrateLegacyMediaKeepsFirstDirectoryAndStableMergesMetadata(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	films := []model.Film{
+		{
+			ID: 42, Source: "javdb", Actor: "Later Directory", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/later",
+			Actors: model.StringArray{"Shared", "Later Cast"}, Tags: model.StringArray{"shared-tag", "later-tag"},
+		},
+		{
+			ID: 7, Source: "javdb", Actor: "First Directory", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/first",
+			Actors: model.StringArray{"First Cast", "Shared"}, Tags: model.StringArray{"first-tag", "shared-tag"},
+		},
+	}
+	if err := database.Create(&films).Error; err != nil {
+		t.Fatalf("seed shared-directory films: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMedia(context.Background(), database)
+
+	// Then
+	if err != nil {
+		t.Fatalf("migrate shared-directory films: %v", err)
+	}
+	work := getWork(t, database, 1, "javdb", "ABP-123")
+	if work.PrimaryDir != "First Directory" || work.SourceURL != "https://javdb.test/v/first" {
+		t.Fatalf("first legacy projection = directory %q, URL %q", work.PrimaryDir, work.SourceURL)
+	}
+	wantActors := model.StringArray{"First Cast", "Shared", "Later Cast", "Later Directory"}
+	wantTags := model.StringArray{"first-tag", "shared-tag", "later-tag"}
+	if !reflect.DeepEqual(work.Actors, wantActors) || !reflect.DeepEqual(work.Tags, wantTags) {
+		t.Fatalf("merged metadata = actors %#v, tags %#v; want actors %#v, tags %#v", work.Actors, work.Tags, wantActors, wantTags)
+	}
+}
+
+func TestMigrateLegacyMediaRejectsDistinctPlainSourcePathsBeforeWrites(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	films := []model.Film{
+		{Source: "javdb", Actor: "Actor A", Name: "ABP-123 first.mp4", Url: "https://javdb.test/v/abp-123"},
+		{Source: "javdb", Actor: "Actor A", Name: "ABP-123 second.mp4", Url: "https://javdb.test/v/abp-123"},
+	}
+	if err := database.Create(&films).Error; err != nil {
+		t.Fatalf("seed distinct plain source paths: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMedia(context.Background(), database)
+
+	// Then
+	if !errors.Is(err, ErrIdentityCollision) {
+		t.Fatalf("plain source path collision = %v, want ErrIdentityCollision", err)
+	}
+	assertCount(t, database, &model.FilmWork{}, 0)
+	assertCount(t, database, &model.FilmFile{}, 0)
+}
+
+func TestMigrateLegacyMediaAcceptsIdenticalPlainSourcePathsAcrossDirectories(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	films := []model.Film{
+		{Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123"},
+		{Source: "javdb", Actor: "Actor B", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123"},
+	}
+	if err := database.Create(&films).Error; err != nil {
+		t.Fatalf("seed identical plain source paths: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMedia(context.Background(), database)
+
+	// Then
+	if err != nil {
+		t.Fatalf("migrate identical plain source paths: %v", err)
+	}
+	work := getWork(t, database, 1, "javdb", "ABP-123")
+	files := listFiles(t, database, work.ID)
+	if len(files) != 1 || files[0].SourcePath != films[0].Name {
+		t.Fatalf("merged identical file rows = %+v", files)
+	}
+}
+
+func TestMigrateLegacyMediaPreservesLegacyFileProjection(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	createdAt := time.Date(2023, time.December, 4, 5, 6, 7, 0, time.UTC)
+	film := model.Film{
+		ID: 701, Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4",
+		Url: "https://javdb.test/v/abp-123", CreatedAt: createdAt,
+	}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed legacy file projection: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMedia(context.Background(), database)
+
+	// Then
+	if err != nil {
+		t.Fatalf("migrate legacy file projection: %v", err)
+	}
+	work := getWork(t, database, 1, "javdb", "ABP-123")
+	files := listFiles(t, database, work.ID)
+	if len(files) != 1 {
+		t.Fatalf("migrated files = %+v", files)
+	}
+	file := files[0]
+	if file.ID != film.ID || file.SourcePath != film.Name || file.SourceSize != 1417381701 {
+		t.Fatalf("legacy file projection = %+v", file)
+	}
+	if !file.CreatedAt.Equal(createdAt) || !file.UpdatedAt.Equal(createdAt) {
+		t.Fatalf("legacy file times = created %v, updated %v; want %v", file.CreatedAt, file.UpdatedAt, createdAt)
+	}
+}
+
+func TestMigrateLegacyMediaPreassignsSyntheticFileIDsAroundExplicitLegacyIDs(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	existingWork := model.FilmWork{StorageID: 99, Source: "pornhub", Code: "existing", SourceRef: "existing", PrimaryDir: "Existing"}
+	if err := database.Create(&existingWork).Error; err != nil {
+		t.Fatalf("seed existing normalized work: %v", err)
+	}
+	if err := database.Create(&model.FilmFile{ID: 11, WorkID: existingWork.ID, PartIndex: 1, PartCount: 1}).Error; err != nil {
+		t.Fatalf("seed existing normalized file: %v", err)
+	}
+	films := []model.Film{
+		{ID: 1, Source: "javdb", Actor: "Actor A", Name: "AAA-001 title.mp4", Url: "https://javdb.test/v/aaa-001"},
+		{ID: 2, Source: "javdb", Actor: "Actor B", Name: "AAA-001 title.mp4", Url: "https://javdb.test/v/aaa-001"},
+		{ID: 12, Source: "javdb", Actor: "Actor Z", Name: "ZZZ-012 title.mp4", Url: "https://javdb.test/v/zzz-012"},
+	}
+	if err := database.Create(&films).Error; err != nil {
+		t.Fatalf("seed synthetic and explicit legacy files: %v", err)
+	}
+	dataDir := t.TempDir()
+	dryRun := MigrationOptions{Mode: MigrationDryRun, DataDir: dataDir}
+	apply := MigrationOptions{Mode: MigrationApply, DataDir: dataDir}
+
+	// When
+	_, dryRunErr := MigrateLegacyMediaWithOptions(context.Background(), database, dryRun)
+	_, applyErr := MigrateLegacyMediaWithOptions(context.Background(), database, apply)
+
+	// Then
+	if dryRunErr != nil || applyErr != nil {
+		t.Fatalf("synthetic ID migration errors = dry-run %v, apply %v", dryRunErr, applyErr)
+	}
+	syntheticWork := getWork(t, database, 1, "javdb", "AAA-001")
+	explicitWork := getWork(t, database, 1, "javdb", "ZZZ-012")
+	syntheticFiles := listFiles(t, database, syntheticWork.ID)
+	explicitFiles := listFiles(t, database, explicitWork.ID)
+	if len(syntheticFiles) != 1 || syntheticFiles[0].ID != 13 {
+		t.Fatalf("synthetic file IDs = %+v, want deterministic ID 13", syntheticFiles)
+	}
+	if len(explicitFiles) != 1 || explicitFiles[0].ID != films[2].ID {
+		t.Fatalf("explicit file IDs = %+v, want legacy ID %d", explicitFiles, films[2].ID)
+	}
+
+	// When
+	_, rerunErr := MigrateLegacyMediaWithOptions(context.Background(), database, apply)
+
+	// Then
+	if rerunErr != nil {
+		t.Fatalf("rerun synthetic ID migration: %v", rerunErr)
+	}
+	if got := listFiles(t, database, syntheticWork.ID); len(got) != 1 || got[0].ID != syntheticFiles[0].ID {
+		t.Fatalf("rerun synthetic file IDs = %+v, want ID %d", got, syntheticFiles[0].ID)
+	}
+}
+
+func TestMigrateLegacyMediaStableUnionsExistingWorkMetadata(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	film := model.Film{
+		ID: 31, Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123",
+		Actors: model.StringArray{"Shared Actor", "Planned Actor", "Planned Actor"},
+		Tags:   model.StringArray{"shared-tag", "planned-tag", "planned-tag"},
+	}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed legacy metadata: %v", err)
+	}
+	existing := model.FilmWork{
+		StorageID: 1, Source: "javdb", Code: "ABP-123", SourceRef: film.Url, SourceURL: film.Url, PrimaryDir: film.Actor,
+		Actors: model.StringArray{"Existing Actor", "Shared Actor", "Existing Actor"},
+		Tags:   model.StringArray{"existing-tag", "shared-tag", "existing-tag"},
+	}
+	if err := database.Create(&existing).Error; err != nil {
+		t.Fatalf("seed partial normalized work: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMedia(context.Background(), database)
+
+	// Then
+	if err != nil {
+		t.Fatalf("migrate partial normalized work: %v", err)
+	}
+	stored := getWork(t, database, 1, "javdb", "ABP-123")
+	wantActors := model.StringArray{"Existing Actor", "Shared Actor", "Planned Actor"}
+	wantTags := model.StringArray{"existing-tag", "shared-tag", "planned-tag"}
+	if !reflect.DeepEqual(stored.Actors, wantActors) || !reflect.DeepEqual(stored.Tags, wantTags) {
+		t.Fatalf("existing-first metadata = actors %#v, tags %#v; want actors %#v, tags %#v", stored.Actors, stored.Tags, wantActors, wantTags)
+	}
+}
+
+func TestValidateLegacyMediaMigrationRejectsMissingPlannedMetadata(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	createdAt := time.Date(2024, time.February, 3, 4, 5, 6, 0, time.UTC)
+	film := model.Film{
+		ID: 41, Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123",
+		CreatedAt: createdAt, Actors: model.StringArray{"Planned Actor"}, Tags: model.StringArray{"planned-tag"},
+	}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed legacy metadata: %v", err)
+	}
+	existing := model.FilmWork{
+		StorageID: 1, Source: "javdb", Code: "ABP-123", SourceRef: film.Url, SourceURL: film.Url, PrimaryDir: film.Actor,
+		Actors: model.StringArray{"Existing Actor"}, Tags: model.StringArray{"existing-tag"},
+	}
+	if err := database.Create(&existing).Error; err != nil {
+		t.Fatalf("seed normalized work without planned metadata: %v", err)
+	}
+	file := model.FilmFile{
+		ID: film.ID, WorkID: existing.ID, PartIndex: 1, PartCount: 1, SourcePath: film.Name,
+		SourceSize: 1417381701, CreatedAt: createdAt, UpdatedAt: createdAt,
+	}
+	if err := database.Create(&file).Error; err != nil {
+		t.Fatalf("seed normalized file: %v", err)
+	}
+
+	// When
+	_, err := ValidateLegacyMediaMigration(context.Background(), database)
+
+	// Then
+	if !errors.Is(err, ErrIncompleteMigration) {
+		t.Fatalf("missing planned metadata validation = %v, want ErrIncompleteMigration", err)
+	}
+}
+
+func TestMigrateLegacyMediaDryRunRejectsLegacyFileIDCollision(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	film := model.Film{ID: 91, Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123"}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed legacy film: %v", err)
+	}
+	existingWork := model.FilmWork{StorageID: 99, Source: "pornhub", Code: "other", SourceRef: "other", PrimaryDir: "Other"}
+	if err := database.Create(&existingWork).Error; err != nil {
+		t.Fatalf("seed existing normalized work: %v", err)
+	}
+	existingFile := model.FilmFile{ID: film.ID, WorkID: existingWork.ID, PartIndex: 1, PartCount: 1, SourcePath: "other.mp4"}
+	if err := database.Create(&existingFile).Error; err != nil {
+		t.Fatalf("seed colliding normalized file: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{Mode: MigrationDryRun, DataDir: t.TempDir()})
+
+	// Then
+	if !errors.Is(err, ErrIdentityCollision) {
+		t.Fatalf("legacy file ID collision = %v, want ErrIdentityCollision", err)
+	}
+	assertCount(t, database, &model.FilmWork{}, 1)
+	assertCount(t, database, &model.FilmFile{}, 1)
+}
+
+func TestMigrateLegacyMediaDryRunRejectsIncompatibleNormalizedRows(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	film := model.Film{ID: 92, Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123"}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed legacy film: %v", err)
+	}
+	existing := model.FilmWork{
+		StorageID: 1, Source: "javdb", Code: "ABP-123", SourceRef: film.Url,
+		SourceURL: film.Url, PrimaryDir: "Different Directory",
+	}
+	if err := database.Create(&existing).Error; err != nil {
+		t.Fatalf("seed incompatible normalized work: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{Mode: MigrationDryRun, DataDir: t.TempDir()})
+
+	// Then
+	if !errors.Is(err, ErrIdentityCollision) {
+		t.Fatalf("normalized row collision = %v, want ErrIdentityCollision", err)
+	}
+	assertCount(t, database, &model.FilmFile{}, 0)
+}
+
+func TestMigrateLegacyMediaCreatesCanonicalCloudCacheAliases(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	film := model.Film{Source: "javdb", Actor: "Actor A", Name: "ABP-123 legacy title.mp4", Url: "https://javdb.test/v/abp-123"}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed legacy film: %v", err)
+	}
+	scanAt := time.Date(2024, time.January, 2, 3, 4, 5, 0, time.UTC)
+	originals := []model.MagnetCache{
+		{
+			DriverType: "115 Cloud", Magnet: "magnet:?xt=urn:btih:115", FileId: "remote-115", Name: film.Name, Code: "ABP-123",
+			Option: map[string]string{"pickCode": "pick-115", "opaque": "keep"}, Subtitle: true, ScanAt: scanAt,
+			ScanCount: 7, SubtitleUrls: model.StringArray{"https://subtitle.test/one", "https://subtitle.test/two"},
+		},
+		{
+			DriverType: "PikPak", Magnet: "magnet:?xt=urn:btih:pikpak", FileId: "remote-pikpak", Name: film.Name, Code: "ABP-123",
+			Option: map[string]string{"opaque": "pikpak"}, Subtitle: true, ScanAt: scanAt.Add(time.Hour),
+			ScanCount: 9, SubtitleUrls: model.StringArray{"https://subtitle.test/pikpak"},
+		},
+	}
+	if err := database.Create(&originals).Error; err != nil {
+		t.Fatalf("seed cloud caches: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMedia(context.Background(), database)
+
+	// Then
+	if err != nil {
+		t.Fatalf("migrate cloud caches: %v", err)
+	}
+	for _, original := range originals {
+		var alias model.MagnetCache
+		if err := database.Where("driver_type = ? AND name = ?", original.DriverType, "ABP-123.mp4").First(&alias).Error; err != nil {
+			t.Fatalf("lookup %s canonical alias: %v", original.DriverType, err)
+		}
+		if alias.ID == original.ID || alias.DriverType != original.DriverType || alias.Magnet != original.Magnet || alias.FileId != original.FileId || alias.Code != original.Code {
+			t.Fatalf("%s canonical alias identity = %+v", original.DriverType, alias)
+		}
+		if !reflect.DeepEqual(alias.Option, original.Option) || !reflect.DeepEqual(alias.SubtitleUrls, original.SubtitleUrls) || alias.Subtitle != original.Subtitle || alias.ScanCount != original.ScanCount || !alias.ScanAt.Equal(original.ScanAt) {
+			t.Fatalf("%s canonical alias fields = %+v; want %+v", original.DriverType, alias, original)
+		}
+		var preserved model.MagnetCache
+		if err := database.First(&preserved, original.ID).Error; err != nil || preserved.Name != film.Name {
+			t.Fatalf("preserved %s legacy cache = %+v, error %v", original.DriverType, preserved, err)
+		}
+	}
+	assertCount(t, database, &model.MagnetCache{}, 4)
+}
+
+func TestMigrateLegacyMediaCloudCacheAliasRerunIsIdempotent(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	film := model.Film{Source: "javdb", Actor: "Actor A", Name: "ABP-123 title.mp4", Url: "https://javdb.test/v/abp-123"}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed legacy film: %v", err)
+	}
+	cache := model.MagnetCache{
+		DriverType: "115 Cloud", Magnet: "magnet:?xt=urn:btih:115", FileId: "remote-115", Name: film.Name,
+		Code: "ABP-123", Option: map[string]string{"pickCode": "pick-115"},
+	}
+	if err := database.Create(&cache).Error; err != nil {
+		t.Fatalf("seed cloud cache: %v", err)
+	}
+
+	// When
+	_, firstErr := MigrateLegacyMedia(context.Background(), database)
+	_, secondErr := MigrateLegacyMedia(context.Background(), database)
+
+	// Then
+	if firstErr != nil || secondErr != nil {
+		t.Fatalf("cloud cache alias rerun errors = first %v, second %v", firstErr, secondErr)
+	}
+	var aliases int64
+	if err := database.Model(&model.MagnetCache{}).
+		Where("driver_type = ? AND name = ?", "115 Cloud", "ABP-123.mp4").Count(&aliases).Error; err != nil {
+		t.Fatalf("count canonical aliases: %v", err)
+	}
+	if aliases != 1 {
+		t.Fatalf("canonical alias count = %d, want 1", aliases)
+	}
+	assertCount(t, database, &model.MagnetCache{}, 2)
+}
+
+func TestMigrateLegacyMediaRejectsConflictingCloudCacheAliasBeforeWrites(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	createStorages(t, database, model.Storage{ID: 1, Driver: "Javdb", MountPath: "/javdb"})
+	film := model.Film{Source: "javdb", Actor: "Actor A", Name: "ABP-123 legacy title.mp4", Url: "https://javdb.test/v/abp-123"}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed legacy film: %v", err)
+	}
+	caches := []model.MagnetCache{
+		{DriverType: "115 Cloud", Magnet: "magnet:?xt=urn:btih:115", FileId: "remote-original", Name: film.Name, Code: "ABP-123", Option: map[string]string{"pickCode": "pick-original"}},
+		{DriverType: "115 Cloud", Magnet: "magnet:?xt=urn:btih:115", FileId: "remote-conflict", Name: "ABP-123.mp4", Code: "ABP-123", Option: map[string]string{"pickCode": "pick-conflict"}},
+	}
+	if err := database.Create(&caches).Error; err != nil {
+		t.Fatalf("seed conflicting cloud caches: %v", err)
+	}
+
+	// When
+	_, err := MigrateLegacyMedia(context.Background(), database)
+
+	// Then
+	if !errors.Is(err, ErrIdentityCollision) {
+		t.Fatalf("cloud cache alias conflict = %v, want ErrIdentityCollision", err)
+	}
+	assertCount(t, database, &model.FilmWork{}, 0)
+	assertCount(t, database, &model.FilmFile{}, 0)
+	assertCount(t, database, &model.SourceMagnet{}, 0)
+	assertCount(t, database, &model.MagnetCache{}, 2)
 }
 
 func TestMigrateLegacyMediaRejectsIdentityCollisionAndRollsBack(t *testing.T) {

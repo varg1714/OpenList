@@ -120,9 +120,10 @@ type MigrationReport struct {
 }
 
 type migrationPlan struct {
-	works   []*plannedWork
-	magnets []*plannedMagnet
-	report  MigrationReport
+	works        []*plannedWork
+	magnets      []*plannedMagnet
+	cacheAliases []plannedCacheAlias
+	report       MigrationReport
 }
 
 type plannedWork struct {
@@ -143,6 +144,10 @@ type plannedFile struct {
 	partIndex  int
 	partCount  int
 	sourcePath string
+	sourceSize int64
+	createdAt  time.Time
+	updatedAt  time.Time
+	legacyID   uint
 	fileID     uint
 }
 
@@ -277,7 +282,7 @@ func buildMigrationPlan(tx *gorm.DB, options MigrationOptions) (*migrationPlan, 
 					StorageID: storageID, Source: source, Code: parsed.code,
 					SourceRef: sourceRef(source, parsed.code, film.Url), SourceURL: strings.TrimSpace(film.Url), PrimaryDir: primaryDir,
 					RawTitle: parsed.rawTitle, TranslatedTitle: normalizeLegacyTranslatedTitle(source, parsed.code, film.Title), Synopsis: film.Synopsis, ImageURL: film.Image,
-					ReleaseDate: film.Date, Actors: cloneArray(film.Actors), Tags: cloneArray(film.Tags),
+					ReleaseDate: film.Date, Actors: unionArrays(nil, film.Actors), Tags: unionArrays(nil, film.Tags),
 					SynopsisExcluded: film.SynopsisExcluded, SampleImageCount: film.SampleImageCount,
 					SampleImageComplete: film.SampleImageComplete, DMMPosterStatus: film.DMMPosterStatus,
 					MetadataVersion: 1, CreatedAt: film.CreatedAt,
@@ -305,6 +310,9 @@ func buildMigrationPlan(tx *gorm.DB, options MigrationOptions) (*migrationPlan, 
 		return strings.Compare(a.identity.String(), b.identity.String())
 	})
 	if err := buildCachePlan(plan, caches); err != nil {
+		return nil, err
+	}
+	if err := validateNormalizedCompatibility(tx, plan); err != nil {
 		return nil, err
 	}
 	if err := validateArtifactRootOwnership(tx, plan); err != nil {
@@ -526,15 +534,7 @@ func normalizeLegacyTranslatedTitle(source, code, value string) string {
 }
 
 func mergeLegacyFilm(work *plannedWork, film model.Film, parsed parsedLegacyFilm, primaryDir string) error {
-	if work.work.PrimaryDir != primaryDir {
-		ids := append(append([]uint(nil), work.filmIDs...), film.ID)
-		return &IdentityCollisionError{Identity: work.identity, LegacyFilmIDs: ids, Reason: fmt.Sprintf("primary directories differ: %q and %q", work.work.PrimaryDir, primaryDir)}
-	}
 	legacyURL := strings.TrimSpace(film.Url)
-	if work.work.SourceURL != "" && legacyURL != "" && work.work.SourceURL != legacyURL {
-		ids := append(append([]uint(nil), work.filmIDs...), film.ID)
-		return &IdentityCollisionError{Identity: work.identity, LegacyFilmIDs: ids, Reason: fmt.Sprintf("source URLs differ: %q and %q", work.work.SourceURL, legacyURL)}
-	}
 	fillString(&work.work.SourceURL, legacyURL)
 	fillString(&work.work.SourceRef, sourceRef(work.identity.Source, work.identity.Code, legacyURL))
 	fillString(&work.work.RawTitle, parsed.rawTitle)
@@ -545,6 +545,9 @@ func mergeLegacyFilm(work *plannedWork, film model.Film, parsed parsedLegacyFilm
 		work.work.ReleaseDate = film.Date
 	}
 	work.work.Actors = unionArrays(work.work.Actors, film.Actors)
+	if primaryDir != work.work.PrimaryDir {
+		work.work.Actors = unionArrays(work.work.Actors, model.StringArray{primaryDir})
+	}
 	work.work.Tags = unionArrays(work.work.Tags, film.Tags)
 	work.work.SynopsisExcluded = work.work.SynopsisExcluded || film.SynopsisExcluded
 	if film.SampleImageCount > work.work.SampleImageCount {
@@ -626,8 +629,21 @@ func buildFileTopology(work *plannedWork, films []model.Film, parsed map[uint]pa
 		hasMultipart = hasMultipart || parsed[id].multipart
 	}
 	if !hasMultipart {
-		first := parsed[work.filmIDs[0]]
-		work.files = []plannedFile{{partIndex: 1, partCount: 1, sourcePath: first.sourcePath}}
+		firstID := work.filmIDs[0]
+		first := parsed[firstID]
+		for _, id := range work.filmIDs[1:] {
+			if parsed[id].sourcePath != first.sourcePath {
+				return &IdentityCollisionError{Identity: work.identity, LegacyFilmIDs: append([]uint(nil), work.filmIDs...), Reason: "plain work has multiple source paths"}
+			}
+		}
+		legacyID := firstID
+		if len(work.filmIDs) > 1 {
+			legacyID = 0
+		}
+		work.files = []plannedFile{{
+			partIndex: 1, partCount: 1, sourcePath: first.sourcePath, sourceSize: legacyListingFileSize,
+			createdAt: rows[firstID].CreatedAt, updatedAt: rows[firstID].CreatedAt, legacyID: legacyID,
+		}}
 		return nil
 	}
 	parts := make(map[int]plannedFile)
@@ -636,10 +652,18 @@ func buildFileTopology(work *plannedWork, films []model.Film, parsed map[uint]pa
 		if !item.multipart {
 			return &UnresolvedIdentityError{Entity: "film", LegacyIDs: append([]uint(nil), work.filmIDs...), Reason: "multipart work contains a filename without a -cdN part"}
 		}
-		if existing, ok := parts[item.partIndex]; ok && existing.sourcePath != item.sourcePath {
-			return &IdentityCollisionError{Identity: work.identity, LegacyFilmIDs: append([]uint(nil), work.filmIDs...), Reason: fmt.Sprintf("part %d has multiple source paths", item.partIndex)}
+		if existing, ok := parts[item.partIndex]; ok {
+			if existing.sourcePath != item.sourcePath {
+				return &IdentityCollisionError{Identity: work.identity, LegacyFilmIDs: append([]uint(nil), work.filmIDs...), Reason: fmt.Sprintf("part %d has multiple source paths", item.partIndex)}
+			}
+			existing.legacyID = 0
+			parts[item.partIndex] = existing
+			continue
 		}
-		parts[item.partIndex] = plannedFile{partIndex: item.partIndex, sourcePath: rows[id].Name}
+		parts[item.partIndex] = plannedFile{
+			partIndex: item.partIndex, sourcePath: rows[id].Name, sourceSize: legacyListingFileSize,
+			createdAt: rows[id].CreatedAt, updatedAt: rows[id].CreatedAt, legacyID: id,
+		}
 	}
 	partCount := len(parts)
 	for index := 1; index <= partCount; index++ {
@@ -661,18 +685,27 @@ func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache) error {
 	}
 
 	magnetByKey := make(map[string]*plannedMagnet)
+	aliasCandidates := make([]plannedCacheAlias, 0)
 	for index := range caches {
 		cache := caches[index]
-		if strings.TrimSpace(cache.Magnet) == "" {
-			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
-			continue
-		}
 		work, err := resolveCacheWork(cache, workBySourceCode)
 		if err != nil {
 			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
 			continue
 		}
-		if _, err := cachePartIndex(cache, work); err != nil {
+		partIndex, err := cachePartIndex(cache, work)
+		if err != nil {
+			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
+			continue
+		}
+		if isCloudCacheWithRemoteHandle(cache) {
+			name, err := model.BuildMediaFileName(work.identity.Code, partIndex, len(work.files))
+			if err != nil {
+				return fmt.Errorf("build canonical cache alias for %s: %w", work.identity, err)
+			}
+			aliasCandidates = append(aliasCandidates, plannedCacheAlias{work: work, row: cache, name: name})
+		}
+		if strings.TrimSpace(cache.Magnet) == "" {
 			plan.report.SkippedMagnetCaches = append(plan.report.SkippedMagnetCaches, cache.ID)
 			continue
 		}
@@ -705,6 +738,11 @@ func buildCachePlan(plan *migrationPlan, caches []model.MagnetCache) error {
 			priority++
 		}
 	}
+	aliases, err := planCacheAliases(caches, aliasCandidates)
+	if err != nil {
+		return err
+	}
+	plan.cacheAliases = aliases
 	return nil
 }
 
@@ -825,15 +863,12 @@ func populatePlan(tx *gorm.DB, plan *migrationPlan, report *MigrationReport) err
 			report.SourceMagnetsExisting++
 		}
 	}
-	return nil
+	return populateCacheAliases(tx, plan)
 }
 
 func ensureExistingWorkCompatible(tx *gorm.DB, existing *model.FilmWork, planned *plannedWork) error {
-	if existing.PrimaryDir != planned.work.PrimaryDir {
-		return &IdentityCollisionError{Identity: planned.identity, LegacyFilmIDs: append([]uint(nil), planned.filmIDs...), Reason: fmt.Sprintf("normalized primary directory %q differs from legacy %q", existing.PrimaryDir, planned.work.PrimaryDir)}
-	}
-	if existing.SourceURL != "" && planned.work.SourceURL != "" && existing.SourceURL != planned.work.SourceURL {
-		return &IdentityCollisionError{Identity: planned.identity, LegacyFilmIDs: append([]uint(nil), planned.filmIDs...), Reason: fmt.Sprintf("normalized source URL %q differs from legacy %q", existing.SourceURL, planned.work.SourceURL)}
+	if err := validateExistingWorkCompatibility(existing, planned); err != nil {
+		return err
 	}
 	updates := make(map[string]interface{})
 	fillEmptyUpdate(updates, "source_ref", existing.SourceRef, planned.work.SourceRef)
@@ -862,11 +897,13 @@ func ensureExistingWorkCompatible(tx *gorm.DB, existing *model.FilmWork, planned
 	if existing.ReleaseDate.IsZero() && !planned.work.ReleaseDate.IsZero() {
 		updates["release_date"] = planned.work.ReleaseDate
 	}
-	if len(existing.Actors) == 0 && len(planned.work.Actors) > 0 {
-		updates["actors"] = planned.work.Actors
+	actors := unionArrays(existing.Actors, planned.work.Actors)
+	if !slices.Equal(existing.Actors, actors) {
+		updates["actors"] = actors
 	}
-	if len(existing.Tags) == 0 && len(planned.work.Tags) > 0 {
-		updates["tags"] = planned.work.Tags
+	tags := unionArrays(existing.Tags, planned.work.Tags)
+	if !slices.Equal(existing.Tags, tags) {
+		updates["tags"] = tags
 	}
 	if existing.SynopsisScanAt == nil && planned.work.SynopsisScanAt != nil {
 		updates["synopsis_scan_at"] = planned.work.SynopsisScanAt
@@ -900,10 +937,16 @@ func populateFiles(tx *gorm.DB, planned *plannedWork, report *MigrationReport) e
 	if len(existing) == 0 {
 		for index := range planned.files {
 			row := model.FilmFile{
-				WorkID: planned.workID, PartIndex: planned.files[index].partIndex,
+				ID: planned.files[index].fileID, WorkID: planned.workID, PartIndex: planned.files[index].partIndex,
 				PartCount: planned.files[index].partCount, SourcePath: planned.files[index].sourcePath,
+				SourceSize: planned.files[index].sourceSize, CreatedAt: planned.files[index].createdAt,
+				UpdatedAt: planned.files[index].updatedAt,
 			}
-			if err := tx.Create(&row).Error; err != nil {
+			createTx := tx
+			if row.CreatedAt.IsZero() {
+				createTx = tx.Session(&gorm.Session{NowFunc: func() time.Time { return time.Time{} }})
+			}
+			if err := createTx.Create(&row).Error; err != nil {
 				return fmt.Errorf("create file for %s part %d: %w", planned.identity, row.PartIndex, err)
 			}
 			planned.files[index].fileID = row.ID
@@ -921,8 +964,21 @@ func populateFiles(tx *gorm.DB, planned *plannedWork, report *MigrationReport) e
 			return &IdentityCollisionError{Identity: planned.identity, LegacyFilmIDs: append([]uint(nil), planned.filmIDs...), Reason: "normalized multipart topology differs from legacy"}
 		}
 		want.fileID = got.ID
+		updates := make(map[string]interface{})
 		if got.SourcePath == "" && want.sourcePath != "" {
-			if err := tx.Model(&got).Update("source_path", want.sourcePath).Error; err != nil {
+			updates["source_path"] = want.sourcePath
+		}
+		if got.SourceSize == 0 && want.sourceSize != 0 {
+			updates["source_size"] = want.sourceSize
+		}
+		if got.CreatedAt.IsZero() && !want.createdAt.IsZero() {
+			updates["created_at"] = want.createdAt
+		}
+		if got.UpdatedAt.IsZero() && !want.updatedAt.IsZero() {
+			updates["updated_at"] = want.updatedAt
+		}
+		if len(updates) > 0 {
+			if err := tx.Model(&got).UpdateColumns(updates).Error; err != nil {
 				return err
 			}
 		}
@@ -940,6 +996,12 @@ func validatePlan(tx *gorm.DB, plan *migrationPlan) error {
 		if work.PrimaryDir != planned.work.PrimaryDir || work.SourceRef == "" {
 			return &ValidationError{Identity: planned.identity, Reason: "work identity fields are incomplete"}
 		}
+		if !slices.Equal(unionArrays(nil, work.Actors), unionArrays(work.Actors, planned.work.Actors)) {
+			return &ValidationError{Identity: planned.identity, Reason: "work actors omit planned legacy values"}
+		}
+		if !slices.Equal(unionArrays(nil, work.Tags), unionArrays(work.Tags, planned.work.Tags)) {
+			return &ValidationError{Identity: planned.identity, Reason: "work tags omit planned legacy values"}
+		}
 		var files []model.FilmFile
 		if err := tx.Where("work_id = ?", work.ID).Order("part_index ASC").Find(&files).Error; err != nil {
 			return &ValidationError{Identity: planned.identity, Reason: err.Error()}
@@ -949,10 +1011,18 @@ func validatePlan(tx *gorm.DB, plan *migrationPlan) error {
 		}
 		planned.workID = work.ID
 		for index := range files {
-			if files[index].PartIndex != index+1 || files[index].PartCount != len(files) {
+			got := files[index]
+			want := planned.files[index]
+			if got.PartIndex != index+1 || got.PartCount != len(files) {
 				return &ValidationError{Identity: planned.identity, Reason: "file parts are not contiguous"}
 			}
-			planned.files[index].fileID = files[index].ID
+			if got.ID != want.fileID {
+				return &ValidationError{Identity: planned.identity, Reason: "file ID differs from the migration plan"}
+			}
+			if got.SourcePath != want.sourcePath || got.SourceSize != want.sourceSize || timeDiffers(got.CreatedAt, want.createdAt) || timeDiffers(got.UpdatedAt, want.updatedAt) {
+				return &ValidationError{Identity: planned.identity, Reason: "file projection differs from legacy"}
+			}
+			planned.files[index].fileID = got.ID
 		}
 	}
 	for _, magnet := range plan.magnets {
@@ -961,7 +1031,7 @@ func validatePlan(tx *gorm.DB, plan *migrationPlan) error {
 			return &ValidationError{Identity: magnet.work.identity, Reason: fmt.Sprintf("source magnet count is %d: %v", count, err)}
 		}
 	}
-	return nil
+	return validateCacheAliases(tx, plan)
 }
 
 func fillString(target *string, value string) {
@@ -981,6 +1051,10 @@ func unionArrays(current, additional model.StringArray) model.StringArray {
 	result := make(model.StringArray, 0, len(current)+len(additional))
 	for _, values := range []model.StringArray{current, additional} {
 		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
 			if !seen[value] {
 				seen[value] = true
 				result = append(result, value)

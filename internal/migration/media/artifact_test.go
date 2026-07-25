@@ -109,7 +109,7 @@ func TestMigrateLegacyMediaUsesOnlyFirstPartWorkArtifacts(t *testing.T) {
 	}
 }
 
-func TestMigrateLegacyMediaPrefersCanonicalArtifactDirectoryForDuplicatePart(t *testing.T) {
+func TestMigrateLegacyMediaPrefersCanonicalArtifactDirectoryAcrossMultipartSources(t *testing.T) {
 	database := newMigrationTestDB(t)
 	dataDir := t.TempDir()
 	previousDataDir := flags.DataDir
@@ -117,8 +117,8 @@ func TestMigrateLegacyMediaPrefersCanonicalArtifactDirectoryForDuplicatePart(t *
 	t.Cleanup(func() { flags.DataDir = previousDataDir })
 	createStorages(t, database, model.Storage{ID: 18, Driver: "FC2", MountPath: "/fc2"})
 	films := []model.Film{
-		{Source: "fc2", Actor: "个人收藏", Name: "FC2-PPV-2382903 历史标题", Url: "FC2-PPV-2382903"},
-		{Source: "fc2", Actor: "个人收藏", Name: "FC2-PPV-2382903.mp4", Url: "FC2-PPV-2382903"},
+		{Source: "fc2", Actor: "个人收藏", Name: "FC2-PPV-2382903-cd1.mp4", Url: "FC2-PPV-2382903"},
+		{Source: "fc2", Actor: "个人收藏", Name: "FC2-PPV-2382903 历史标题-cd2.mp4", Url: "FC2-PPV-2382903"},
 	}
 	if err := database.Create(&films).Error; err != nil {
 		t.Fatalf("seed duplicate part films: %v", err)
@@ -127,10 +127,10 @@ func TestMigrateLegacyMediaPrefersCanonicalArtifactDirectoryForDuplicatePart(t *
 	alternateRoot := filepath.Join(legacyParent, "FC2-PPV-2382903 历史标题")
 	canonicalRoot := filepath.Join(legacyParent, "FC2-PPV-2382903")
 	writeArtifactFixture(t, alternateRoot, map[string]string{
-		"FC2-PPV-2382903 历史标题.nfo":   "alternate nfo",
-		"FC2-PPV-2382903 历史标题.1.srt": "alternate subtitle",
+		"FC2-PPV-2382903 历史标题-cd2.nfo":   "alternate nfo",
+		"FC2-PPV-2382903 历史标题-cd2.1.srt": "alternate subtitle",
 	})
-	writeArtifactFixture(t, canonicalRoot, map[string]string{"FC2-PPV-2382903.nfo": "canonical nfo"})
+	writeArtifactFixture(t, canonicalRoot, map[string]string{"FC2-PPV-2382903-cd1.nfo": "canonical nfo"})
 
 	report, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{
 		Mode: MigrationApply, DataDir: dataDir, JournalPath: filepath.Join(dataDir, "journal.json"),
@@ -138,12 +138,13 @@ func TestMigrateLegacyMediaPrefersCanonicalArtifactDirectoryForDuplicatePart(t *
 	if err != nil {
 		t.Fatalf("migrate duplicate part artifacts: %v", err)
 	}
-	if report.ArtifactMovesPlanned != 1 || report.ArtifactDeletesPlanned != 1 || report.ArtifactsMoved != 1 || report.ArtifactsDeleted != 1 || report.ArtifactsExisting != 1 {
-		t.Fatalf("duplicate part artifact report = %+v", report)
+	if report.ArtifactMovesPlanned != 2 || report.ArtifactDeletesPlanned != 1 || report.ArtifactDirectoriesPlanned != 1 ||
+		report.ArtifactsMoved != 2 || report.ArtifactsDeleted != 1 || report.ArtifactDirectoriesRemoved != 1 {
+		t.Fatalf("multipart source artifact report = %+v", report)
 	}
 	target := filepath.Join(dataDir, "emby", "fc2", "个人收藏", "FC2-PPV-2382903", "FC2-PPV-2382903.nfo")
 	assertArtifactContent(t, target, "canonical nfo")
-	assertArtifactContent(t, filepath.Join(filepath.Dir(target), "FC2-PPV-2382903.1.srt"), "alternate subtitle")
+	assertArtifactContent(t, filepath.Join(filepath.Dir(target), "FC2-PPV-2382903-cd2.1.srt"), "alternate subtitle")
 	if _, err := os.Stat(alternateRoot); !os.IsNotExist(err) {
 		t.Fatalf("alternate duplicate root remains: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestMigrateLegacyMediaRefusesConflictingArtifactTarget(t *testing.T) {
 	assertCount(t, database, &model.SourceMagnet{}, 0)
 }
 
-func TestMigrateLegacyMediaRefusesPlannedArtifactTargetCollisionBeforeDatabaseWrites(t *testing.T) {
+func TestMigrateLegacyMediaRejectsAmbiguousPlainSourcesBeforeArtifactPlanning(t *testing.T) {
 	database := newMigrationTestDB(t)
 	dataDir := t.TempDir()
 	previousDataDir := flags.DataDir
@@ -218,12 +219,14 @@ func TestMigrateLegacyMediaRefusesPlannedArtifactTargetCollisionBeforeDatabaseWr
 	writeArtifactFixture(t, filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123 second"), map[string]string{"poster.jpg": "second"})
 
 	_, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{Mode: MigrationApply, DataDir: dataDir})
-	if !errors.Is(err, ErrArtifactCollision) {
-		t.Fatalf("planned collision error = %v, want ErrArtifactCollision", err)
+	if !errors.Is(err, ErrIdentityCollision) {
+		t.Fatalf("ambiguous plain source error = %v, want ErrIdentityCollision", err)
 	}
 	assertCount(t, database, &model.FilmWork{}, 0)
 	assertCount(t, database, &model.FilmFile{}, 0)
 	assertCount(t, database, &model.SourceMagnet{}, 0)
+	assertArtifactContent(t, filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123 first", "poster.jpg"), "first")
+	assertArtifactContent(t, filepath.Join(dataDir, "emby", "javdb", "Actor A", "ABP-123 second", "poster.jpg"), "second")
 }
 
 func TestMigrateLegacyMediaRejectsMatchingArtifactSymlinkBeforeDatabaseWrites(t *testing.T) {
