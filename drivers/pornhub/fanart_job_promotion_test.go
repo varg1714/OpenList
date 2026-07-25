@@ -22,9 +22,9 @@ func TestScanFilmFanartPromotesFirstLaterLandscapeAfterAllFramesExist(t *testing
 	originalPromote := promoteLandscapeFanartCandidate
 	t.Cleanup(func() { promoteLandscapeFanartCandidate = originalPromote })
 	allFramesExisted := false
-	promoteLandscapeFanartCandidate = func(source, dir, filmName string, candidateIndex int) (bool, error) {
+	promoteLandscapeFanartCandidate = func(identity virtual_file.MediaIdentity, candidateIndex int) (bool, error) {
 		for index := 1; index <= 3; index++ {
-			path, err := virtual_file.FanartPath(source, dir, filmName, index)
+			path, err := virtual_file.MediaFanartPath(identity, index)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -34,7 +34,7 @@ func TestScanFilmFanartPromotesFirstLaterLandscapeAfterAllFramesExist(t *testing
 			}
 		}
 		allFramesExisted = true
-		return originalPromote(source, dir, filmName, candidateIndex)
+		return originalPromote(identity, candidateIndex)
 	}
 	media := &mockFanartMedia{
 		duration: 100,
@@ -115,7 +115,7 @@ func TestScanFanartRetriesPromotionFailureThroughQuery(t *testing.T) {
 	setupPornhubFanartTest(t)
 	originalPromote := promoteLandscapeFanartCandidate
 	t.Cleanup(func() { promoteLandscapeFanartCandidate = originalPromote })
-	promoteLandscapeFanartCandidate = func(string, string, string, int) (bool, error) {
+	promoteLandscapeFanartCandidate = func(virtual_file.MediaIdentity, int) (bool, error) {
 		return false, errors.New("promotion unavailable")
 	}
 	driver := newFanartDriver(&mockFanartMedia{

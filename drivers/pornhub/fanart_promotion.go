@@ -9,7 +9,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
 
-var promoteLandscapeFanartCandidate = virtual_file.PromoteLandscapeFanart
+var promoteLandscapeFanartCandidate = virtual_file.PromoteLandscapeMediaFanart
 
 func (d *Pornhub) finalizeFanart(ctx context.Context, work *model.FilmWork, count int) {
 	if _, err := d.promoteLandscapeFanart(work, count); err != nil {
@@ -28,13 +28,14 @@ func (d *Pornhub) promoteLandscapeFanart(work *model.FilmWork, count int) (bool,
 	if count < 2 {
 		return false, nil
 	}
+	identity := pornhubMediaIdentity(work)
 	for index := 2; index <= count; index++ {
-		if err := virtual_file.RecoverFanartSwap(DriverName, work.PrimaryDir, work.Code, 1, index); err != nil {
+		if err := virtual_file.RecoverMediaFanartSwap(identity, 1, index); err != nil {
 			return false, fmt.Errorf("recover fanart promotion at index %d: %w", index, err)
 		}
 	}
 	for index := 2; index <= count; index++ {
-		landscapeReady, err := promoteLandscapeFanartCandidate(DriverName, work.PrimaryDir, work.Code, index)
+		landscapeReady, err := promoteLandscapeFanartCandidate(identity, index)
 		if err != nil {
 			return false, fmt.Errorf("promote landscape fanart at index %d: %w", index, err)
 		}
