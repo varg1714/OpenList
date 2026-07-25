@@ -36,7 +36,7 @@ type Pornhub struct {
 	fanartStopping     bool
 	fanartMedia        fanartMediaOps
 	fanartGetVideo     func(context.Context, string) (string, error)
-	removeBackgroundCb func(string, string, string) error
+	removeBackgroundCb func(virtual_file.MediaIdentity) error
 }
 
 var resolvePornhubVideoLink = func(ctx context.Context, driver *Pornhub, sourceRef string) (string, error) {

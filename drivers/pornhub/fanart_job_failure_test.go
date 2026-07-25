@@ -19,7 +19,7 @@ func TestScanFilmFanartCleanupFailureDoesNotAdvanceProgress(t *testing.T) {
 	driver := newFanartDriver(media, func(_ context.Context, key string) (string, error) {
 		return "https://example.test/video/" + key, nil
 	})
-	driver.removeBackgroundCb = func(source, dir, name string) error {
+	driver.removeBackgroundCb = func(virtual_file.MediaIdentity) error {
 		return fmt.Errorf("cleanup denied")
 	}
 
@@ -139,14 +139,15 @@ func TestScanFilmFanartCancellationDoesNotDelayRetry(t *testing.T) {
 }
 
 func TestScanFilmFanartRemovesBackgroundThenPromotesLegacyPoster(t *testing.T) {
-	dataDir := setupPornhubFanartTest(t)
+	setupPornhubFanartTest(t)
 	media := &mockFanartMedia{duration: 100.0}
 	driver := newFanartDriver(media, func(_ context.Context, key string) (string, error) {
 		return "https://example.test/video/" + key, nil
 	})
 
 	film := createFanartWork(t, "bg-test", "vk6", 0, time.Time{})
-	paths, err := virtual_file.PosterPaths(DriverName, film.PrimaryDir, film.Code)
+	identity := pornhubMediaIdentity(&film)
+	paths, err := virtual_file.ResolveMediaArtifactPaths(identity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestScanFilmFanartRemovesBackgroundThenPromotesLegacyPoster(t *testing.T) {
 	if err := os.WriteFile(paths.Background, []byte("regular background"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	driver.removeBackgroundCb = func(_, _, _ string) error {
+	driver.removeBackgroundCb = func(virtual_file.MediaIdentity) error {
 		if _, err := os.Lstat(paths.LegacyPoster); err != nil {
 			return fmt.Errorf("legacy poster unavailable before background cleanup: %w", err)
 		}
@@ -185,7 +186,10 @@ func TestScanFilmFanartRemovesBackgroundThenPromotesLegacyPoster(t *testing.T) {
 		t.Fatalf("legacy poster not renamed: %v", err)
 	}
 
-	fanartPath := filepath.Join(dataDir, "emby", DriverName, film.PrimaryDir, virtual_file.GetRealName(virtual_file.AppendImageName(film.Code)), "fanart1.jpg")
+	fanartPath, err := virtual_file.MediaFanartPath(identity, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Lstat(fanartPath); err != nil {
 		t.Fatalf("fanart1 not published: %v", err)
 	}

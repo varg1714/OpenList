@@ -181,7 +181,7 @@ func TestScanFilmFanartExistingFanartTriggersBackgroundCleanup(t *testing.T) {
 	driver := newFanartDriver(&mockFanartMedia{duration: 80.0}, func(_ context.Context, key string) (string, error) {
 		return "https://example.test/video/" + key, nil
 	})
-	driver.removeBackgroundCb = func(source, dir, name string) error {
+	driver.removeBackgroundCb = func(virtual_file.MediaIdentity) error {
 		cleanupCalls++
 		return nil
 	}
@@ -211,7 +211,7 @@ func TestScanFilmFanartPersistedProgressTriggersBackgroundCleanup(t *testing.T) 
 	driver := newFanartDriver(&mockFanartMedia{duration: 80}, func(_ context.Context, key string) (string, error) {
 		return "https://example.test/video/" + key, nil
 	})
-	driver.removeBackgroundCb = func(source, dir, name string) error {
+	driver.removeBackgroundCb = func(virtual_file.MediaIdentity) error {
 		cleanupCalls++
 		return nil
 	}

@@ -20,9 +20,7 @@ func (d *Pornhub) scanMediaArtifacts() error {
 		if work.ImageURL == "" {
 			continue
 		}
-		identity := virtual_file.MediaIdentity{
-			StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code,
-		}
+		identity := pornhubMediaIdentity(&work)
 		cachePornhubMediaImage(virtual_file.MediaInfo{
 			Identity:      &identity,
 			Title:         model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
@@ -34,4 +32,13 @@ func (d *Pornhub) scanMediaArtifacts() error {
 		})
 	}
 	return nil
+}
+
+func pornhubMediaIdentity(work *model.FilmWork) virtual_file.MediaIdentity {
+	return virtual_file.MediaIdentity{
+		StorageID:  work.StorageID,
+		Source:     work.Source,
+		PrimaryDir: work.PrimaryDir,
+		Code:       work.Code,
+	}
 }

@@ -125,6 +125,6 @@ func newFanartDriver(media fanartMediaOps, getVideo func(context.Context, string
 		},
 		fanartMedia:        media,
 		fanartGetVideo:     getVideo,
-		removeBackgroundCb: virtual_file.RemoveBackground,
+		removeBackgroundCb: virtual_file.RemoveMediaBackground,
 	}
 }
