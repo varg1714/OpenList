@@ -16,6 +16,7 @@ func UpsertSourceMagnets(workID uint, magnets []model.SourceMagnet) error {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				magnet.ID = 0
 				magnet.WorkID = workID
+				magnet.Selected = false
 				if err := tx.Create(&magnet).Error; err != nil {
 					return err
 				}
@@ -29,7 +30,6 @@ func UpsertSourceMagnets(workID uint, magnets []model.SourceMagnet) error {
 				"magnet_uri": magnet.MagnetURI,
 				"provider":   magnet.Provider,
 				"priority":   magnet.Priority,
-				"selected":   magnet.Selected,
 				"subtitle":   magnet.Subtitle,
 				"scan_at":    magnet.ScanAt,
 				"last_error": magnet.LastError,
@@ -70,6 +70,23 @@ func ListSourceMagnets(workID uint) ([]model.SourceMagnet, error) {
 	var magnets []model.SourceMagnet
 	err := db.Where("work_id = ?", workID).Order("priority ASC, id ASC").Find(&magnets).Error
 	return magnets, err
+}
+
+func ListPlaybackSourceMagnets(workID uint) ([]model.SourceMagnet, error) {
+	var magnets []model.SourceMagnet
+	err := db.Where("work_id = ?", workID).Order("selected DESC, priority ASC, id ASC").Find(&magnets).Error
+	return magnets, err
+}
+
+func UpdateSourceMagnetLastError(magnetID uint, message string) error {
+	result := db.Model(&model.SourceMagnet{}).Where("id = ?", magnetID).Update("last_error", message)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func ensureSelectedSourceMagnet(tx *gorm.DB, workID uint) (model.SourceMagnet, error) {

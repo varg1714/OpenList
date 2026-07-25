@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -51,7 +52,7 @@ func TestUpsertSourceMagnetsEnsuresOneSelected(t *testing.T) {
 
 	magnets := []model.SourceMagnet{
 		{MagnetURI: "magnet:one", Fingerprint: "one", Priority: 10, Selected: true},
-		{MagnetURI: "magnet:two", Fingerprint: "two", Priority: 1, Selected: true},
+		{MagnetURI: "magnet:two", Fingerprint: "two", Priority: 1},
 	}
 	if err := UpsertSourceMagnets(11, magnets); err != nil {
 		t.Fatalf("upsert selected magnets: %v", err)
@@ -63,6 +64,73 @@ func TestUpsertSourceMagnetsEnsuresOneSelected(t *testing.T) {
 	selected := selectedSourceMagnets(listed)
 	if len(selected) != 1 || selected[0].Fingerprint != "two" {
 		t.Fatalf("selected magnets = %+v, want only priority-1 magnet", selected)
+	}
+}
+
+func TestUpsertSourceMagnetsPreservesSelectedFingerprint(t *testing.T) {
+	setupSourceMagnetRepositoryTestDB(t)
+
+	if err := UpsertSourceMagnets(16, []model.SourceMagnet{
+		{MagnetURI: "magnet:one", Fingerprint: "one", Priority: 1},
+		{MagnetURI: "magnet:two", Fingerprint: "two", Priority: 2},
+	}); err != nil {
+		t.Fatalf("upsert initial magnets: %v", err)
+	}
+	listed, err := ListSourceMagnets(16)
+	if err != nil {
+		t.Fatalf("list initial magnets: %v", err)
+	}
+	if err := SelectSourceMagnet(16, listed[1].ID); err != nil {
+		t.Fatalf("select second magnet: %v", err)
+	}
+
+	if err := UpsertSourceMagnets(16, []model.SourceMagnet{
+		{MagnetURI: "magnet:one-updated", Fingerprint: "one", Priority: 1, Selected: true},
+		{MagnetURI: "magnet:two-updated", Fingerprint: "two", Priority: 2},
+	}); err != nil {
+		t.Fatalf("upsert rediscovered magnets: %v", err)
+	}
+
+	listed, err = ListSourceMagnets(16)
+	if err != nil {
+		t.Fatalf("list rediscovered magnets: %v", err)
+	}
+	selected := selectedSourceMagnets(listed)
+	if len(selected) != 1 || selected[0].Fingerprint != "two" {
+		t.Fatalf("selected magnets = %+v, want preserved fingerprint two", selected)
+	}
+}
+
+func TestUpsertSourceMagnetsPreservesSelectedFingerprintWhenRescanOmitsIt(t *testing.T) {
+	setupSourceMagnetRepositoryTestDB(t)
+
+	if err := UpsertSourceMagnets(17, []model.SourceMagnet{
+		{MagnetURI: "magnet:one", Fingerprint: "one", Priority: 1},
+		{MagnetURI: "magnet:two", Fingerprint: "two", Priority: 2},
+	}); err != nil {
+		t.Fatalf("upsert initial magnets: %v", err)
+	}
+	listed, err := ListSourceMagnets(17)
+	if err != nil {
+		t.Fatalf("list initial magnets: %v", err)
+	}
+	if err := SelectSourceMagnet(17, listed[1].ID); err != nil {
+		t.Fatalf("select second magnet: %v", err)
+	}
+
+	if err := UpsertSourceMagnets(17, []model.SourceMagnet{
+		{MagnetURI: "magnet:one-updated", Fingerprint: "one", Priority: 1, Selected: true},
+	}); err != nil {
+		t.Fatalf("upsert cumulative rescan: %v", err)
+	}
+
+	listed, err = ListSourceMagnets(17)
+	if err != nil {
+		t.Fatalf("list cumulative magnets: %v", err)
+	}
+	selected := selectedSourceMagnets(listed)
+	if len(listed) != 2 || len(selected) != 1 || selected[0].Fingerprint != "two" {
+		t.Fatalf("cumulative magnets = %+v, selected = %+v; want both rows with fingerprint two selected", listed, selected)
 	}
 }
 
@@ -117,6 +185,69 @@ func TestSourceMagnetEmptyCandidateBehavior(t *testing.T) {
 	}
 	if err := SelectSourceMagnet(15, 999999); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("select empty candidate error = %v, want gorm.ErrRecordNotFound", err)
+	}
+}
+
+func TestListPlaybackSourceMagnetsOrdersSelectedBeforePriority(t *testing.T) {
+	setupSourceMagnetRepositoryTestDB(t)
+
+	if err := UpsertSourceMagnets(18, []model.SourceMagnet{
+		{MagnetURI: "magnet:priority", Fingerprint: "priority", Priority: 1},
+		{MagnetURI: "magnet:selected", Fingerprint: "selected", Priority: 9},
+		{MagnetURI: "magnet:next", Fingerprint: "next", Priority: 2},
+	}); err != nil {
+		t.Fatalf("upsert playback magnets: %v", err)
+	}
+	stored, err := ListSourceMagnets(18)
+	if err != nil {
+		t.Fatalf("list playback fixtures: %v", err)
+	}
+	var selectedID uint
+	for _, magnet := range stored {
+		if magnet.Fingerprint == "selected" {
+			selectedID = magnet.ID
+		}
+	}
+	if err := SelectSourceMagnet(18, selectedID); err != nil {
+		t.Fatalf("select playback fixture: %v", err)
+	}
+
+	ordered, err := ListPlaybackSourceMagnets(18)
+	if err != nil {
+		t.Fatalf("list ordered playback magnets: %v", err)
+	}
+	fingerprints := make([]string, len(ordered))
+	for index := range ordered {
+		fingerprints[index] = ordered[index].Fingerprint
+	}
+	if want := []string{"selected", "priority", "next"}; !slices.Equal(fingerprints, want) {
+		t.Fatalf("playback order = %v, want %v", fingerprints, want)
+	}
+}
+
+func TestUpdateSourceMagnetLastErrorChangesOnlyCandidate(t *testing.T) {
+	setupSourceMagnetRepositoryTestDB(t)
+
+	if err := UpsertSourceMagnets(19, []model.SourceMagnet{
+		{MagnetURI: "magnet:first", Fingerprint: "first", Priority: 1},
+		{MagnetURI: "magnet:second", Fingerprint: "second", Priority: 2},
+	}); err != nil {
+		t.Fatalf("upsert error-state magnets: %v", err)
+	}
+	stored, err := ListSourceMagnets(19)
+	if err != nil {
+		t.Fatalf("list error-state fixtures: %v", err)
+	}
+	if err := UpdateSourceMagnetLastError(stored[0].ID, "provider rejected magnet"); err != nil {
+		t.Fatalf("update source magnet error: %v", err)
+	}
+
+	updated, err := ListSourceMagnets(19)
+	if err != nil {
+		t.Fatalf("list updated error state: %v", err)
+	}
+	if updated[0].LastError != "provider rejected magnet" || updated[1].LastError != "" {
+		t.Fatalf("candidate errors = %q, %q; want first candidate only", updated[0].LastError, updated[1].LastError)
 	}
 }
 
