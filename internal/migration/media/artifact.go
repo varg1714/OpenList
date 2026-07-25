@@ -16,6 +16,7 @@ var (
 	ErrArtifactMigration      = errors.New("media artifact migration failed")
 	ErrArtifactSafety         = errors.New("media artifact path is unsafe")
 	ErrArtifactJournalVersion = errors.New("unsupported media artifact journal version")
+	errDanglingArtifactLink   = errors.New("media artifact symlink target does not exist")
 )
 
 type ArtifactCollisionError struct {
@@ -96,6 +97,9 @@ func safeArtifactSourcePath(root, name string) (string, error) {
 		return sourcePath, nil
 	}
 	resolved, err := filepath.EvalSymlinks(sourcePath)
+	if os.IsNotExist(err) {
+		return sourcePath, errDanglingArtifactLink
+	}
 	if err != nil {
 		return "", &ArtifactMigrationError{Path: sourcePath, Reason: err.Error()}
 	}
@@ -117,6 +121,25 @@ func safeArtifactSourcePath(root, name string) (string, error) {
 		return "", &ArtifactMigrationError{Path: resolved, Reason: "symlink target is not a regular file"}
 	}
 	return resolved, nil
+}
+
+func danglingArtifactLinkExists(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, &ArtifactMigrationError{Path: path, Reason: err.Error()}
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, &ArtifactMigrationError{Path: path, Reason: "expected a dangling artifact symlink"}
+	}
+	if _, err := filepath.EvalSymlinks(path); err == nil {
+		return false, &ArtifactMigrationError{Path: path, Reason: "artifact symlink target now exists"}
+	} else if !os.IsNotExist(err) {
+		return false, &ArtifactMigrationError{Path: path, Reason: err.Error()}
+	}
+	return true, nil
 }
 
 func safeArtifactTargetPath(root, name string) (string, error) {

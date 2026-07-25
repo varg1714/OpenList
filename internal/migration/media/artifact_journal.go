@@ -340,6 +340,13 @@ func preflightJournalOperations(plan *artifactPlan, dataDir string) error {
 			if !exists && moveTargets[operation.VerifyPath] != operation.SHA256 {
 				return &ArtifactMigrationError{Path: operation.VerifyPath, Reason: "cleanup verification target is unavailable"}
 			}
+		case artifactRemoveLink:
+			if err := rejectSymlinkAncestors(dataDir, filepath.Dir(operation.SourcePath)); err != nil {
+				return err
+			}
+			if _, err := danglingArtifactLinkExists(operation.SourcePath); err != nil {
+				return err
+			}
 		case artifactRemoveDir, artifactRemoveTree:
 			if err := rejectSymlinkAncestors(dataDir, operation.SourcePath); err != nil {
 				return err
@@ -399,7 +406,7 @@ func migrateArtifacts(plan *artifactPlan, options MigrationOptions, report *Migr
 			} else {
 				report.ArtifactsExisting++
 			}
-		case artifactDelete:
+		case artifactDelete, artifactRemoveLink:
 			if changed {
 				report.ArtifactsDeleted++
 			}
@@ -420,6 +427,8 @@ func executeArtifactOperation(operation *artifactOperation, progress *artifactPr
 		return executeSymlinkMove(operation, progress)
 	case artifactDelete:
 		return executeArtifactDelete(operation, progress)
+	case artifactRemoveLink:
+		return executeDanglingArtifactLinkRemoval(operation, progress)
 	case artifactRemoveDir:
 		return executeDirectoryRemoval(operation, progress)
 	case artifactRemoveTree:
@@ -574,6 +583,32 @@ func executeArtifactDelete(operation *artifactOperation, progress *artifactProgr
 		return false, err
 	}
 	return changed, nil
+}
+
+func executeDanglingArtifactLinkRemoval(operation *artifactOperation, progress *artifactProgressLog) (bool, error) {
+	if err := rejectSymlinkAncestors(progress.dataDir, filepath.Dir(operation.SourcePath)); err != nil {
+		return false, err
+	}
+	exists, err := danglingArtifactLinkExists(operation.SourcePath)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, progress.record(operation, "done")
+	}
+	if err := progress.record(operation, "verified"); err != nil {
+		return false, err
+	}
+	if err := os.Remove(operation.SourcePath); err != nil {
+		return false, &ArtifactMigrationError{Path: operation.SourcePath, Reason: err.Error()}
+	}
+	if err := progress.record(operation, "cleaned"); err != nil {
+		return false, err
+	}
+	if err := progress.record(operation, "done"); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func executeDirectoryRemoval(operation *artifactOperation, progress *artifactProgressLog) (bool, error) {

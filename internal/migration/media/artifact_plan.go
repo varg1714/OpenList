@@ -18,6 +18,7 @@ const (
 	artifactMove       artifactOperationKind = "move"
 	artifactSymlink    artifactOperationKind = "symlink"
 	artifactDelete     artifactOperationKind = "delete"
+	artifactRemoveLink artifactOperationKind = "remove_dangling_symlink"
 	artifactRemoveDir  artifactOperationKind = "remove_directory"
 	artifactRemoveTree artifactOperationKind = "remove_tree"
 )
@@ -65,6 +66,7 @@ type artifactPlanBuilder struct {
 	targetRoots   map[string]struct{}
 	recognized    map[string]struct{}
 	candidateSeen map[string]struct{}
+	danglingLinks map[string]struct{}
 }
 
 func inspectArtifacts(plan *migrationPlan, options MigrationOptions, report *MigrationReport) (*artifactPlan, error) {
@@ -123,7 +125,7 @@ func populateArtifactReport(report *MigrationReport, plan *artifactPlan) {
 		switch operation.Kind {
 		case artifactMove, artifactSymlink:
 			report.ArtifactMovesPlanned++
-		case artifactDelete:
+		case artifactDelete, artifactRemoveLink:
 			report.ArtifactDeletesPlanned++
 		case artifactRemoveDir, artifactRemoveTree:
 			report.ArtifactDirectoriesPlanned++
@@ -136,6 +138,7 @@ func collectArtifactPlan(plan *migrationPlan, dataDir string) (*artifactPlan, er
 	builder := &artifactPlanBuilder{
 		dataDir: dataDir, required: make(map[string][]artifactCandidate), roots: make(map[string]struct{}),
 		parents: make(map[string]struct{}), targetRoots: make(map[string]struct{}), recognized: make(map[string]struct{}), candidateSeen: make(map[string]struct{}),
+		danglingLinks: make(map[string]struct{}),
 	}
 	for _, root := range plan.artifactRoots {
 		parent, err := safeArtifactPath(dataDir, "emby", root.source, root.primaryDir)
@@ -323,6 +326,12 @@ func (builder *artifactPlanBuilder) candidate(sourceRoot, targetRoot, sourceName
 		return artifactCandidate{}, false, nil
 	}
 	resolved, err := safeArtifactSourcePath(sourceRoot, sourceName)
+	if errors.Is(err, errDanglingArtifactLink) {
+		builder.danglingLinks[sourcePath] = struct{}{}
+		builder.recognized[sourcePath] = struct{}{}
+		builder.candidateSeen[sourcePath+"\x00"+filepath.Join(targetRoot, targetName)] = struct{}{}
+		return artifactCandidate{}, false, nil
+	}
 	if err != nil {
 		return artifactCandidate{}, false, err
 	}
@@ -468,6 +477,9 @@ func (builder *artifactPlanBuilder) build() (*artifactPlan, error) {
 		}
 		result.Operations = append(result.Operations, artifactOperation{Kind: artifactDelete, SourcePath: cleanup.source.sourcePath, VerifyPath: cleanup.verify, SHA256: hash, State: "pending"})
 	}
+	for path := range builder.danglingLinks {
+		result.Operations = append(result.Operations, artifactOperation{Kind: artifactRemoveLink, SourcePath: path, State: "pending"})
+	}
 	for root := range builder.roots {
 		if _, target := builder.targetRoots[root]; target {
 			continue
@@ -518,7 +530,7 @@ func compareArtifactOperations(left, right artifactOperation) int {
 			return 0
 		case artifactSymlink:
 			return 1
-		case artifactDelete:
+		case artifactDelete, artifactRemoveLink:
 			return 2
 		default:
 			return 3
