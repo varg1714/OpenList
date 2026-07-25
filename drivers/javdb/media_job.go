@@ -19,7 +19,10 @@ import (
 
 const currentTranslationVersion = model.CurrentTranslationVersion
 
-var batchTranslateMediaWorks = open_ai.BatchTranslate
+var (
+	batchTranslateMediaWorks = open_ai.BatchTranslate
+	matchMediaSubtitles      = MatchSubtitleCatSubtitles
+)
 
 func (d *Javdb) scanTranslations() {
 	works, err := db.QueryTranslationMediaWorks(DriverName, currentTranslationVersion, 20)
@@ -122,7 +125,7 @@ func (d *Javdb) scanMediaMetadataAndMagnets() {
 	if limit <= 0 {
 		return
 	}
-	works, err := db.QueryTagMediaWorks(DriverName, limit)
+	works, err := db.QueryPendingMediaWorks(DriverName, db.MediaWorkScanAll, limit)
 	if err != nil {
 		utils.Log.Warnf("failed to query JavDB metadata works: %s", err)
 		return
@@ -165,9 +168,11 @@ func (d *Javdb) scanMediaMetadataAndMagnets() {
 				seenActors[actor.Name] = true
 			}
 		}
-		if len(actors) > 0 {
-			if err := db.UpdateMediaWorkActors(work.ID, actors); err != nil {
-				utils.Log.Warnf("failed to update actors for %s: %s", work.Code, err)
+		if err := db.UpdateMediaWorkActors(work.ID, actors); err != nil {
+			utils.Log.Warnf("failed to update actors for %s: %s", work.Code, err)
+			next := time.Now().Add(6 * time.Hour)
+			if updateErr := db.UpdateMediaWorkActorRetry(work.ID, next, err.Error()); updateErr != nil {
+				utils.Log.Warnf("failed to update actor retry for %s: %s", work.Code, updateErr)
 			}
 		}
 		tags := append(model.StringArray(nil), work.Tags...)
@@ -215,11 +220,22 @@ func (d *Javdb) scanMediaSubtitles() {
 	}
 	for index := range works {
 		work := works[index]
-		subtitles, matchErr := MatchSubtitleCatSubtitles(work.Code)
+		subtitles, matchErr := matchMediaSubtitles(work.Code)
 		if matchErr != nil {
 			next := time.Now().Add(24 * time.Hour)
 			if err := db.UpdateMediaWorkSubtitleScan(work.ID, &next, matchErr.Error()); err != nil {
 				utils.Log.Warnf("failed to update subtitle retry for %s: %s", work.Code, err)
+			}
+			continue
+		}
+		if len(subtitles) == 0 {
+			var nextRetryAt *time.Time
+			if !work.ReleaseDate.Before(time.Now().AddDate(-1, 0, 0)) {
+				next := time.Now().AddDate(0, 0, 7)
+				nextRetryAt = &next
+			}
+			if err := db.UpdateMediaWorkSubtitleScan(work.ID, nextRetryAt, ""); err != nil {
+				utils.Log.Warnf("failed to complete empty subtitle scan for %s: %s", work.Code, err)
 			}
 			continue
 		}
