@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
@@ -40,7 +39,7 @@ func (d *Javdb) scanTranslations() {
 		}
 		if _, candidate, candidateErr := d.getAiravNamingAddr(file); candidateErr == nil && candidate.Title != "" {
 			_, candidateTitle := splitName(candidate.Title)
-			items[index].Candidate = virtual_file.ClearFilmName(candidateTitle)
+			items[index].Candidate = candidateTitle
 		}
 	}
 	if len(items) == 0 {
@@ -264,53 +263,6 @@ func (d *Javdb) scanMediaSubtitles() {
 		}
 		if err := db.UpdateMediaWorkSubtitleScan(work.ID, nil, ""); err != nil {
 			utils.Log.Warnf("failed to complete subtitle scan for %s: %s", work.Code, err)
-		}
-	}
-}
-
-func (d *Javdb) scanMediaSampleImages() {
-	works, err := db.QuerySampleImageMediaWorks(DriverName, 72*time.Hour, 20)
-	if err != nil {
-		utils.Log.Warnf("failed to query JavDB sample works: %s", err)
-		return
-	}
-	remaining := maxSampleImageRequestsPerRun
-	for index := range works {
-		work := works[index]
-		for sampleIndex := work.SampleImageCount + 1; sampleIndex <= maxSampleImageCount; sampleIndex++ {
-			if remaining == 0 {
-				return
-			}
-			remoteURL, pathErr := sampleImageURL(work.ImageURL, sampleIndex)
-			if pathErr != nil {
-				if err := db.UpdateMediaWorkSampleScan(work.ID, false); err != nil {
-					utils.Log.Warnf("failed to update sample scan for %s: %s", work.Code, err)
-				}
-				break
-			}
-			remaining--
-			_, cacheErr := virtual_file.CacheMediaFanart(context.Background(), mediaIdentity(work), sampleIndex, virtual_file.HTTPFileCacheRequest{
-				URL: remoteURL, Headers: map[string]string{"Referer": work.SourceURL}, Client: d.client,
-			})
-			if cacheErr != nil {
-				var statusErr *virtual_file.HTTPStatusError
-				if errors.As(cacheErr, &statusErr) && statusErr.StatusCode == http.StatusForbidden {
-					if err := db.UpdateMediaWorkSampleProgress(work.ID, sampleIndex-1, true); err != nil {
-						utils.Log.Warnf("failed to complete samples for %s: %s", work.Code, err)
-					}
-				} else if err := db.UpdateMediaWorkSampleScan(work.ID, false); err != nil {
-					utils.Log.Warnf("failed to update sample retry for %s: %s", work.Code, err)
-				}
-				break
-			}
-			complete := sampleIndex == maxSampleImageCount
-			if err := db.UpdateMediaWorkSampleProgress(work.ID, sampleIndex, complete); err != nil {
-				utils.Log.Warnf("failed to update sample progress for %s: %s", work.Code, err)
-				break
-			}
-			if complete {
-				break
-			}
 		}
 	}
 }

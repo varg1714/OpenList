@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/gocolly/colly/v2"
@@ -155,85 +153,5 @@ func (d *Javdb) getAiravNamingAddr(film model.EmbyFileObj) (string, model.EmbyFi
 	}
 
 	return actorPageUrl, matchedFilm, nil
-
-}
-
-func (d *Javdb) getAiravNamingFilms(films []model.EmbyFileObj, dirName string) (map[string]model.EmbyFileObj, error) {
-
-	nameCache := make(map[string]model.EmbyFileObj)
-	actorCache := make(map[string]bool)
-
-	var savingNamingMapping []model.EmbyFileObj
-
-	// 1. 加载库中已缓存的命名
-	actors := db.QueryByActor("airav", dirName)
-	for index := range actors {
-		film := actors[index]
-		nameCache[splitCode(film.Title)] = model.EmbyFileObj{
-			Title:    film.Title,
-			Synopsis: film.Synopsis,
-		}
-	}
-
-	// 2. 逐影片匹配命名
-	for index := range films {
-
-		code, _ := splitName(films[index].Title)
-
-		// 已有缓存，无需重复爬取
-		if _, exists := nameCache[code]; exists {
-			continue
-		}
-
-		addr, searchResult, err := d.getAiravNamingAddr(films[index])
-		if err != nil {
-			utils.Log.Info("airav详情页爬取错误", err)
-			continue
-		}
-
-		// 2.1 搜索结果（含简介）优先入缓存，避免被演员列表覆盖
-		if searchResult.Url != "" {
-			searchCode := splitCode(searchResult.Title)
-			if _, exists := nameCache[searchCode]; !exists {
-				nameCache[searchCode] = searchResult
-			}
-			if addr == "" || actorCache[addr] {
-				savingNamingMapping = append(savingNamingMapping, searchResult)
-			}
-		}
-
-		// 2.2 爬取该演员主页所有作品（仅填充空缺）
-		if addr != "" && !actorCache[addr] {
-			namingFilms, err := virtual_file.GetFilmsWithStorage("airav", dirName, addr, func(index int) string {
-				return addr + strconv.Itoa(index)
-			},
-				func(urlFunc func(index int) string, index int, data []model.EmbyFileObj) ([]model.EmbyFileObj, bool, error) {
-					return d.getAiravPageInfo(urlFunc, index, data)
-				}, virtual_file.Option{CacheFile: false, MaxPageNum: 40})
-
-			if err != nil {
-				utils.Log.Info("airav影片列表爬取失败", err)
-			}
-			for nameFileIndex := range namingFilms {
-				tempFilm := namingFilms[nameFileIndex]
-				tempCode := splitCode(tempFilm.Title)
-				if _, exists := nameCache[tempCode]; !exists {
-					nameCache[tempCode] = tempFilm
-				}
-			}
-
-			actorCache[addr] = true
-		}
-
-	}
-
-	if len(savingNamingMapping) > 0 {
-		err := db.CreateFilms("airav", dirName, dirName, savingNamingMapping)
-		if err != nil {
-			utils.Log.Infof("影片名称映射入库失败:%s", err.Error())
-		}
-	}
-
-	return nameCache, nil
 
 }
