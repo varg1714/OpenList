@@ -217,7 +217,7 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	}
 
 	// 3. translate film name
-	title := open_ai.Translate(virtual_file.ClearFilmName(sukeMeta.Magnets[0].GetName()))
+	title := open_ai.Translate(magnetDisplayTitle(sukeMeta.Magnets[0].GetName()))
 	// 4. save film info
 
 	// 4.1 get film thumbnail
@@ -231,14 +231,7 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	if ppvFilmInfo.ReleaseTime.Year() == 1 {
 		ppvFilmInfo.ReleaseTime = time.Now()
 	}
-	// 4.2 build the film info to be cached
-	cachingFiles := buildCacheFile(len(sukeMeta.Magnets[0].GetFiles()), fc2Id, title, ppvFilmInfo.ReleaseTime, ppvFilmInfo.Actors, tags)
-	if len(cachingFiles) > 0 {
-		cachingFiles[0].Thumbnail.Thumbnail = ppvFilmInfo.Thumb()
-	}
-	if len(cachingFiles) == 0 {
-		return model.EmbyFileObj{}, errors.New("磁力清单为空")
-	}
+	fileCount := max(1, len(sukeMeta.Magnets[0].GetFiles()))
 	work, err := buildDiscoveredWork(d.ID, "个人收藏", fc2Id, fc2Id, title, ppvFilmInfo.Thumb())
 	if err != nil {
 		return model.EmbyFileObj{}, err
@@ -246,7 +239,7 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	if err := db.UpsertDiscoveredWork(&work); err != nil {
 		return model.EmbyFileObj{}, err
 	}
-	files := make([]model.FilmFile, len(cachingFiles))
+	files := make([]model.FilmFile, fileCount)
 	for index := range files {
 		files[index].PartIndex = index + 1
 		files[index].PartCount = len(files)
@@ -274,50 +267,6 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	}
 	return virtual_file.ConvertMediaFileToEmbyFile(model.FilmFileWithWork{FilmFile: storedFiles[0], Work: work})
 
-}
-
-func buildCacheFile(fileCount int, fc2Id string, title string, releaseTime time.Time, actors, tags []string) []model.EmbyFileObj {
-
-	var cachingFiles []model.EmbyFileObj
-	if fileCount <= 1 {
-		cachingFiles = append(cachingFiles, model.EmbyFileObj{
-			ObjThumb: model.ObjThumb{
-				Object: model.Object{
-					Name:     virtual_file.AppendFilmName(fc2Id),
-					IsFolder: false,
-					Size:     622857143,
-					Modified: time.Now(),
-					Path:     "个人收藏",
-				},
-			},
-			Title:       title,
-			ReleaseTime: releaseTime,
-			Url:         fc2Id,
-			Actors:      actors,
-			Tags:        tags,
-		})
-	} else {
-		for index := range fileCount {
-			realName := virtual_file.AppendFilmName(fmt.Sprintf("%s-cd%d", fc2Id, index+1))
-			cachingFiles = append(cachingFiles, model.EmbyFileObj{
-				ObjThumb: model.ObjThumb{
-					Object: model.Object{
-						Name:     realName,
-						IsFolder: false,
-						Size:     622857143,
-						Modified: time.Now(),
-						Path:     "个人收藏",
-					},
-				},
-				Title:       title,
-				ReleaseTime: releaseTime,
-				Url:         fc2Id,
-				Actors:      actors,
-				Tags:        tags,
-			})
-		}
-	}
-	return cachingFiles
 }
 
 func (d *FC2) getWhatLinkInfo(magnet string) (WhatLinkInfo, error) {
