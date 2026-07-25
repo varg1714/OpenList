@@ -19,14 +19,13 @@ type Addition struct {
 	MockedByMatchUa       string `json:"mocked_by_match_ua"`
 	QuickCache            bool   `json:"quick_cache" required:"true"`
 	CloudPlayDriverType   string `json:"cloud_play_driver_type" required:"true" default:"PikPak" type:"select" options:"PikPak,115 Cloud"`
-	BackPlayDriverType    string `json:"back_play_driver_type" required:"false" default:"PikPak" type:"select" options:"PikPak,115 Cloud"`
 	FallbackPlay          bool   `json:"fallback_play" required:"false"`
 	CloudPlayDownloadPath string `json:"cloud_play_download_path" required:"false" help:"If empty then use global setting."`
 	Filter                string `json:"filter" required:"false" help:"Multi values must separated by commas."`
 	SubtitleScanTime      uint64 `json:"subtitle_scan_time" required:"true" type:"number" `
 	SubtitlesScanLimit    int    `json:"subtitles_scan_limit" required:"true" type:"number" `
-	RefreshNfo            bool   `json:"refresh_nfo" required:"false" help:"match the film info from web to db"`
-	SyncNfo               bool   `json:"sync_nfo" required:"false" help:"Sync nfo from db to disk"`
+	RefreshNfo            bool   `json:"refresh_nfo" required:"false" help:"Force rewriting every normalized NFO during scheduled maintenance."`
+	SyncNfo               bool   `json:"sync_nfo" required:"false" help:"Write only normalized NFO records whose metadata changed."`
 	EmbyServers           string `json:"emby_servers" required:"false" type:"text"`
 	MatchFilmTagLimit     int    `json:"match_film_tag_limit" required:"false" type:"number" `
 	MatchTopFilmsStarter  int    `json:"match_top_film_starter" required:"true" type:"number" `

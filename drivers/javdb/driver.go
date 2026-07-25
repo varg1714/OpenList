@@ -52,12 +52,15 @@ func (d *Javdb) Init(ctx context.Context) error {
 
 	d.cron = cron.NewCron(duration)
 	d.cron.Do(func() {
+		if err := d.filterFilms(); err != nil {
+			utils.Log.Warnf("failed to filter normalized JavDB works: %s", err)
+		}
 		d.scanTranslations()
 		d.scanMediaSynopsis()
 		d.scanMediaMetadataAndMagnets()
 		d.scanMediaSubtitles()
-		if d.RefreshNfo {
-			d.refreshMediaNFOs()
+		if err := d.syncConfiguredNFOs(); err != nil {
+			utils.Log.Warnf("failed to synchronize JavDB NFOs: %s", err)
 		}
 		d.scanMediaSampleImages()
 		d.scanMediaDMMPosters()
@@ -198,9 +201,6 @@ func (d *Javdb) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 		return nil, err
 	}
 	link, err := d.cloudPlayMedia(ctx, args, d.CloudPlayDriverType, mediaFile)
-	if err != nil && d.BackPlayDriverType != "" {
-		link, err = d.cloudPlayMedia(ctx, args, d.BackPlayDriverType, mediaFile)
-	}
 	if err != nil && d.FallbackPlay && d.MockedLink != "" {
 		return mockedLink, nil
 	}
