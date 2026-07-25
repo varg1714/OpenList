@@ -29,7 +29,11 @@ func ListMediaFiles(storageID uint, source, primaryDir string) ([]model.EmbyFile
 }
 
 func DeleteMediaFile(fileID uint) error {
-	return db.DeleteMediaFile(fileID)
+	file, err := db.GetFilmFileWithWork(fileID)
+	if err != nil {
+		return err
+	}
+	return DeleteMediaWork(file.WorkID)
 }
 
 func ResolveMediaObj(storageID uint, source, primaryDir, groupName, fileName string) (model.Obj, error) {
@@ -70,14 +74,11 @@ func DeleteMediaWork(workID uint) error {
 	if err != nil {
 		return err
 	}
-	if err := db.DeleteFilmWork(workID); err != nil {
-		return err
-	}
 	identity := MediaIdentity{StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code}
 	if err := DeleteMediaArtifacts(identity); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	return nil
+	return db.DeleteFilmWork(workID)
 }
 
 func ResolveMediaActorTreeObj(storageID uint, source, path, rootID string, modified time.Time) (model.Obj, error) {
