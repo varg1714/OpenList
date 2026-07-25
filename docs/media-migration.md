@@ -53,7 +53,7 @@ The command prints a JSON report with planned and completed move, verified-delet
 
 Selected regular artifacts are renamed into the runtime root. An allowed internal leaf symlink is recreated as an internal target symlink and its legacy leaf is removed only after target verification. External leaf symlinks, symlinked ancestors, non-regular artifacts, and differing bytes for one required target fail preflight.
 
-For multipart works, cd1 is authoritative for poster, background, NFO, and fanart. cd2 and later work-level copies are deleted only after the authoritative target hash is verified. Part subtitles from every valid legacy root are retained as `{code}.{index}.{ext}` or `{code}-cdN.{index}.{ext}`. When duplicate roots describe the same part, the exact-code directory supplies work-level artifacts; other roots may still supply unique subtitles. Legacy artifact directories are removed with `Remove` only when empty. The migration never uses recursive deletion.
+For multipart works, cd1 is authoritative for poster, background, NFO, and fanart. cd2 and later work-level copies are deleted only after the authoritative target hash is verified. Part subtitles from every valid legacy root are retained as `{code}.{index}.{ext}` or `{code}-cdN.{index}.{ext}`. When duplicate roots describe the same part, the exact-code directory supplies work-level artifacts; other roots may still supply unique subtitles. After planned artifact placement and verification, legacy artifact roots are removed recursively, including unrecognized files such as `.strm`. Under each database-owned `{source}/{primaryDir}` parent, directories that are not canonical roots of either a legacy film or an existing normalized work are also removed recursively.
 
 ## Resume
 
@@ -63,4 +63,4 @@ Journal v1 represented copy-and-retain behavior and is not compatible. The comma
 
 ## Legacy Retention
 
-Migration never deletes legacy `Film` or `MagnetCache` rows, including rows reported as skipped. Selected artifact files are moved, and redundant work-level files are verification-gated cleanup candidates. Unrecognized files remain untouched and keep their legacy directory nonempty.
+Migration never deletes legacy `Film` or `MagnetCache` rows, including rows reported as skipped. Selected artifact files are moved, and redundant work-level files are verification-gated cleanup candidates. Legacy and database-orphan artifact directories are then removed recursively, so keep the data-directory backup until production verification is complete.
