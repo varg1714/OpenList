@@ -2,11 +2,15 @@ package fc2
 
 import (
 	"context"
+	"errors"
+	"os"
 	"testing"
 
+	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"gorm.io/gorm"
 )
 
 func TestBuildDiscoveredWorkAcceptsBareAndCanonicalFC2Codes(t *testing.T) {
@@ -85,12 +89,14 @@ func TestWrapAddedStarPreservesTypedIdentity(t *testing.T) {
 	}
 }
 
-func TestRemoveIndividualMediaFilePreservesSiblingParts(t *testing.T) {
+func TestRemoveIndividualMediaFileDeletesWholeAggregate(t *testing.T) {
+	oldDataDir := flags.DataDir
+	flags.DataDir = t.TempDir()
+	t.Cleanup(func() { flags.DataDir = oldDataDir })
 	work := model.FilmWork{StorageID: 42, Source: "fc2", Code: "FC2-PPV-REMOVE", SourceRef: "FC2-PPV-REMOVE", PrimaryDir: "actor"}
 	if err := db.GetDb().Create(&work).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = virtual_file.DeleteMediaWork(work.ID) })
 	if err := db.ReplaceFilmFiles(work.ID, []model.FilmFile{{PartIndex: 1, PartCount: 2}, {PartIndex: 2, PartCount: 2}}); err != nil {
 		t.Fatal(err)
 	}
@@ -98,15 +104,125 @@ func TestRemoveIndividualMediaFilePreservesSiblingParts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	paths, err := virtual_file.ResolveMediaArtifactPaths(virtual_file.MediaIdentity{
+		StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(paths.Root, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := (&FC2{Storage: model.Storage{ID: 42}}).Remove(context.Background(), &model.EmbyFileObj{WorkID: work.ID, FilmFileID: files[0].ID}); err != nil {
 		t.Fatalf("remove individual file: %v", err)
 	}
-	remaining, err := db.ListFilmFiles(work.ID)
+	var workCount int64
+	if err := db.GetDb().Model(&model.FilmWork{}).Where("id = ?", work.ID).Count(&workCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if workCount != 0 {
+		t.Fatalf("remaining work count = %d", workCount)
+	}
+	var tombstoneCount int64
+	if err := db.GetDb().Model(&model.MissedFilm{}).Where("code = ?", work.Code).Count(&tombstoneCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tombstoneCount != 1 {
+		t.Fatalf("tombstone count = %d, want 1", tombstoneCount)
+	}
+	if _, err := os.Stat(paths.Root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("artifact root still exists or stat failed: %v", err)
+	}
+}
+
+func TestFC2DiscoverySkipsTombstonesAndContinuesAfterBadItem(t *testing.T) {
+	resetFC2DiscoveryTables(t)
+	if err := db.CreateMissedFilms([]string{"FC2-PPV-700"}); err != nil {
+		t.Fatal(err)
+	}
+	oldFetch := fetchFC2DailyPageFilms
+	t.Cleanup(func() { fetchFC2DailyPageFilms = oldFetch })
+	page := 0
+	fetchFC2DailyPageFilms = func(*FC2, string) ([]string, error) {
+		page++
+		if page == 1 {
+			return []string{"FC2-PPV-700", "", "FC2-PPV-701"}, nil
+		}
+		return nil, nil
+	}
+	driver := FC2{Storage: model.Storage{ID: 70}}
+
+	films, err := driver.getFilms("actor", func(index int) string { return "page" })
+
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(remaining) != 1 || remaining[0].ID != files[1].ID {
-		t.Fatalf("remaining files = %+v", remaining)
+	if len(films) != 1 || films[0].Code != "FC2-PPV-701" {
+		t.Fatalf("discovered films = %+v", films)
+	}
+}
+
+func TestFC2DiscoveryRetainsAccumulatedIDsAfterPageFailure(t *testing.T) {
+	resetFC2DiscoveryTables(t)
+	oldFetch := fetchFC2DailyPageFilms
+	t.Cleanup(func() { fetchFC2DailyPageFilms = oldFetch })
+	page := 0
+	fetchFC2DailyPageFilms = func(*FC2, string) ([]string, error) {
+		page++
+		if page == 1 {
+			return []string{"FC2-PPV-702"}, nil
+		}
+		return nil, errors.New("page unavailable")
+	}
+	driver := FC2{Storage: model.Storage{ID: 70}}
+
+	films, err := driver.getFilms("actor", func(index int) string { return "page" })
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(films) != 1 || films[0].Code != "FC2-PPV-702" {
+		t.Fatalf("films after page failure = %+v", films)
+	}
+}
+
+func TestMissAVSyncContinuesAfterInvalidItem(t *testing.T) {
+	resetFC2DiscoveryTables(t)
+	work := model.FilmWork{
+		StorageID: 70, Source: "fc2", Code: "FC2-PPV-703", SourceRef: "FC2-PPV-703",
+		SourceURL: "FC2-PPV-703", PrimaryDir: "actor",
+	}
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnsureSingleFilmFile(work.ID); err != nil {
+		t.Fatal(err)
+	}
+	driver := FC2{Storage: model.Storage{ID: 70}}
+
+	err := driver.syncMissAvFilms([]model.EmbyFileObj{
+		{ObjThumb: model.ObjThumb{Object: model.Object{Name: ""}}},
+		{ObjThumb: model.ObjThumb{Object: model.Object{Name: work.Code}}, Tags: []string{"ranked"}},
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := db.GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Tags) != 1 || updated.Tags[0] != "ranked" {
+		t.Fatalf("updated tags = %#v", updated.Tags)
+	}
+}
+
+func resetFC2DiscoveryTables(t *testing.T) {
+	t.Helper()
+	for _, value := range []interface{}{&model.SourceMagnet{}, &model.FilmFile{}, &model.FilmWork{}, &model.MissedFilm{}} {
+		if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(value).Error; err != nil {
+			t.Fatalf("reset %T: %v", value, err)
+		}
 	}
 }

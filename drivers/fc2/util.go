@@ -37,40 +37,50 @@ func (d *FC2) findMagnet(url string) (string, error) {
 	return res.String(), err
 }
 
+var fetchFC2DailyPageFilms = func(driver *FC2, url string) ([]string, error) {
+	return driver.getFc2DailyPageFilms(url)
+}
+
 func (d *FC2) getFilms(primaryDir string, urlFunc func(index int) string) ([]model.EmbyFileObj, error) {
-
-	var filmIds []string
-	page := 1
-	preSize := len(filmIds)
-
-	for page == 1 || (preSize != len(filmIds)) {
-
-		ids, err2 := d.getFc2DailyPageFilms(urlFunc(page))
-		if err2 != nil && !strings.Contains(err2.Error(), "Not Found") {
-			utils.Log.Warnf("影片爬取失败: %s", err2.Error())
-			return nil, err2
-		} else {
-			page++
-			preSize = len(filmIds)
-			filmIds = append(filmIds, ids...)
+	filmIDs := make([]string, 0)
+	seen := make(map[string]struct{})
+	for page := 1; ; page++ {
+		ids, err := fetchFC2DailyPageFilms(d, urlFunc(page))
+		if err != nil {
+			if !strings.Contains(err.Error(), "Not Found") {
+				utils.Log.Warnf("影片爬取失败: %s", err)
+			}
+			break
 		}
-
+		added := 0
+		for _, id := range ids {
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			filmIDs = append(filmIDs, id)
+			added++
+		}
+		if added == 0 {
+			break
+		}
 	}
 
-	for _, id := range filmIds {
+	for _, id := range db.QueryUnMissedFilms(filmIDs) {
 		work, err := buildDiscoveredWork(d.ID, primaryDir, id, id, "", "")
 		if err != nil {
-			return nil, err
+			utils.Log.Warnf("failed to normalize FC2 discovery %q: %s", id, err)
+			continue
 		}
 		if err := db.UpsertDiscoveredWork(&work); err != nil {
-			return nil, err
+			utils.Log.Warnf("failed to persist FC2 discovery %s: %s", work.Code, err)
+			continue
 		}
 		if _, err := db.EnsureSingleFilmFile(work.ID); err != nil {
-			return nil, err
+			utils.Log.Warnf("failed to persist FC2 file %s: %s", work.Code, err)
 		}
 	}
 	return virtual_file.ListMediaFiles(d.ID, "fc2", primaryDir)
-
 }
 
 func buildDiscoveredWork(storageID uint, primaryDir, code, sourceURL, rawTitle, imageURL string) (model.FilmWork, error) {
@@ -258,14 +268,6 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	if err := db.UpsertSourceMagnets(work.ID, magnets); err != nil {
 		return model.EmbyFileObj{}, err
 	}
-	identity := fc2MediaIdentity(work)
-	if result := virtual_file.CacheImageAndNfo(virtual_file.MediaInfo{
-		Identity: &identity, Title: model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
-		ImgUrl: work.ImageURL, Actors: []string(work.Actors), Release: work.ReleaseDate, Tags: []string(work.Tags),
-	}); result == virtual_file.CreatedFailed {
-		utils.Log.Warnf("failed to publish FC2 favorite artifacts for %s", work.Code)
-	}
-
 	storedFiles, err := db.ListFilmFiles(work.ID)
 	if err != nil || len(storedFiles) == 0 {
 		return model.EmbyFileObj{}, err
@@ -362,27 +364,4 @@ func (d *FC2) getPageFilms(url string) ([]string, error) {
 
 	return ids, err
 
-}
-
-func (d *FC2) deleteFilm(obj model.Obj) error {
-	err := db.DeleteAllMagnetCacheByCode(av.GetFilmCode(obj.GetName()))
-	if err != nil {
-		utils.Log.Warnf("影片缓存信息删除失败：%s", err.Error())
-	}
-	err = virtual_file.DeleteImageAndNfo("fc2", "个人收藏", obj.GetName())
-	if err != nil {
-		utils.Log.Warnf("影片附件信息删除失败：%s", err.Error())
-	}
-
-	err = db.CreateMissedFilms([]string{av.GetFilmCode(obj.GetName())})
-	if err != nil {
-		utils.Log.Warnf("影片黑名单信息失败：%s", err.Error())
-	}
-
-	err = db.DeleteFilmsByCode("fc2", "个人收藏", av.GetFilmCode(obj.GetName()))
-	if err != nil {
-		utils.Log.Warnf("影片删除失败：%s", err.Error())
-	}
-
-	return err
 }
