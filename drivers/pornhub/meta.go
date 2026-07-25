@@ -21,6 +21,7 @@ type Addition struct {
 	MatchFilmTagLimit    int    `json:"match_film_tag_limit" required:"false" type:"number" `
 	LinkCacheTime        int    `json:"linkCacheTime" type:"number"`
 	SyncNfo              bool   `json:"sync_nfo" required:"false" help:"Sync nfo from db to disk"`
+	RefreshNfo           bool   `json:"refresh_nfo" required:"false" help:"Force rewriting every normalized NFO during scheduled maintenance."`
 }
 
 var config = driver.Config{

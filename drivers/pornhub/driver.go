@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,10 @@ type Pornhub struct {
 	cron        *cron.Cron
 }
 
+var resolvePornhubVideoLink = func(driver *Pornhub, sourceRef string) (string, error) {
+	return driver.getVideoLink(sourceRef)
+}
+
 func (d *Pornhub) Config() driver.Config {
 	return config
 }
@@ -46,6 +51,12 @@ func (d *Pornhub) Init(ctx context.Context) error {
 	d.cron = cron.NewCron(duration)
 	d.cron.Do(func() {
 		d.reMatchTags()
+		if err := d.scanMediaArtifacts(); err != nil {
+			utils.Log.Warnf("failed to synchronize Pornhub artifacts: %s", err)
+		}
+		if err := d.syncConfiguredNFOs(); err != nil {
+			utils.Log.Warnf("failed to synchronize Pornhub NFOs: %s", err)
+		}
 	})
 
 	return nil
@@ -89,10 +100,6 @@ func (d *Pornhub) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 		if err != nil {
 			return nil, err
 		}
-		if err := d.syncDiscoveredNFO(films); err != nil {
-			utils.Log.Warnf("failed to sync Pornhub NFO: %s", err)
-		}
-
 		return utils.SliceConvert(virtual_file.WrapMediaFiles(films), func(src model.EmbyFileDirWrapper) (model.Obj, error) {
 			return &src, nil
 		})
@@ -189,13 +196,15 @@ func (d *Pornhub) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 				return nil, err
 			}
 			videoLink.URL = canonical
+			videoLink.Header = http.Header{"Referer": []string{d.ServerUrl}}
 			return videoLink, nil
 		}
-		url, err := d.getVideoLink(embyFile.SourceRef)
+		url, err := resolvePornhubVideoLink(d, embyFile.SourceRef)
 		if err != nil {
 			return nil, err
 		}
 		videoLink.URL = url
+		videoLink.Header = http.Header{"Referer": []string{d.ServerUrl}}
 		return videoLink, nil
 	}
 
