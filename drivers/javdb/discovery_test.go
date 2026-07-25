@@ -86,12 +86,11 @@ func TestWrapAddedStarPreservesTypedIdentity(t *testing.T) {
 	}
 }
 
-func TestRemoveIndividualMediaFilePreservesSiblingParts(t *testing.T) {
+func TestRemoveIndividualMediaFileDeletesWholeAggregate(t *testing.T) {
 	work := model.FilmWork{StorageID: 41, Source: DriverName, Code: "ABP-REMOVE", SourceRef: "ABP-REMOVE", PrimaryDir: "actor"}
 	if err := db.GetDb().Create(&work).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = virtual_file.DeleteMediaWork(work.ID) })
 	if err := db.ReplaceFilmFiles(work.ID, []model.FilmFile{{PartIndex: 1, PartCount: 2}, {PartIndex: 2, PartCount: 2}}); err != nil {
 		t.Fatal(err)
 	}
@@ -103,11 +102,11 @@ func TestRemoveIndividualMediaFilePreservesSiblingParts(t *testing.T) {
 	if err := (&Javdb{Storage: model.Storage{ID: 41}}).Remove(context.Background(), &model.EmbyFileObj{WorkID: work.ID, FilmFileID: files[0].ID}); err != nil {
 		t.Fatalf("remove individual file: %v", err)
 	}
-	remaining, err := db.ListFilmFiles(work.ID)
-	if err != nil {
+	var workCount int64
+	if err := db.GetDb().Model(&model.FilmWork{}).Where("id = ?", work.ID).Count(&workCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(remaining) != 1 || remaining[0].ID != files[1].ID {
-		t.Fatalf("remaining files = %+v", remaining)
+	if workCount != 0 {
+		t.Fatalf("remaining work count = %d", workCount)
 	}
 }

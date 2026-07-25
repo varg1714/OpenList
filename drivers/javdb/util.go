@@ -504,23 +504,6 @@ func (d *Javdb) deleteFilm(dir, fileName, id string) error {
 	return nil
 }
 
-func (d *Javdb) tryAcquireLink(ctx context.Context, file model.Obj, args model.LinkArgs, magnetGetter func(obj model.Obj) (string, error)) (*model.Link, error) {
-	mediaFile, err := mediaFileFromObj(file)
-	if err != nil {
-		return nil, err
-	}
-	link, err := d.cloudPlayMedia(ctx, args, d.CloudPlayDriverType, mediaFile)
-	if err != nil {
-		utils.Log.Infof("The first cloud drive download failed:[%s]", err.Error())
-		if d.BackPlayDriverType != "" {
-			utils.Log.Infof("using the second cloud drive instead.")
-			return d.cloudPlayMedia(ctx, args, d.BackPlayDriverType, mediaFile)
-		}
-	}
-
-	return link, err
-}
-
 // set cookies raw
 func setCookieRaw(cookieRaw string) []*http.Cookie {
 	// 可以添加多个cookie
