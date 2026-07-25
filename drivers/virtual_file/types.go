@@ -63,11 +63,6 @@ type Actor struct {
 	Thumb string `xml:"thumb"`
 }
 
-type Option struct {
-	MaxPageNum int
-	CacheFile  bool
-}
-
 const (
 	Exist = iota
 	CreatedFailed
