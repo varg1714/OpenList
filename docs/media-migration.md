@@ -68,7 +68,7 @@ go run ./cmd/migrate-media \
   --dry-run
 ```
 
-Dry-run requires `--db` to name an existing regular file and opens SQLite with `mode=ro`. It performs the complete identity, path-safety, byte-collision, cleanup, and journal-compatibility preflight without creating a database, WAL, SHM, journal sidecar, normalized table, artifact directory, or migration journal. The JSON report includes aggregate operations and separate planned move, delete, and empty-directory-removal counts.
+Dry-run requires `--db` to name an existing regular file and opens SQLite with `mode=ro`. It performs the complete identity, path-safety, duplicate-artifact cleanup, and journal-compatibility preflight without creating a database, WAL, SHM, journal sidecar, normalized table, artifact directory, or migration journal. The JSON report includes aggregate operations and separate planned move, delete, and empty-directory-removal counts.
 
 ## Storage Mapping
 
@@ -102,7 +102,7 @@ go run ./cmd/migrate-media \
 
 The command prints a JSON report with planned and completed move, verified-delete, directory-removal, and existing-target counts. Apply opens SQLite read-only for preflight, closes that connection, and only then opens a separate read-write connection to initialize or change the normalized schema. Database identity writes are transactional.
 
-Selected regular artifacts are renamed into the runtime root. An allowed internal leaf symlink is recreated as an internal target symlink and its legacy leaf is removed only after target verification. External leaf symlinks, symlinked ancestors, non-regular artifacts, and differing bytes for one required target fail preflight.
+Selected regular artifacts are renamed into the runtime root. An allowed internal leaf symlink is recreated as an internal target symlink and its legacy leaf is removed only after target verification. External leaf symlinks, symlinked ancestors, and non-regular artifacts fail preflight. When multiple artifacts map to one runtime path, an existing target is retained; otherwise the first candidate in deterministic migration order is selected. Later candidates are deleted after the retained target hash is verified, even when their contents differ.
 
 For multipart works, cd1 is authoritative for poster, background, NFO, and fanart. cd2 and later work-level copies are deleted only after the authoritative target hash is verified. Part subtitles from every valid legacy root are retained as `{code}.{index}.{ext}` or `{code}-cdN.{index}.{ext}`. When duplicate roots describe the same part, the exact-code directory supplies work-level artifacts; other roots may still supply unique subtitles. After planned artifact placement and verification, legacy artifact roots are removed recursively, including unrecognized files such as `.strm`. Under each database-owned `{source}/{primaryDir}` parent, directories that are not canonical roots of either a legacy film or an existing normalized work are also removed recursively.
 
