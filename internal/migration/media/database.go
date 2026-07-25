@@ -136,8 +136,9 @@ type plannedWork struct {
 }
 
 type plannedArtifactSource struct {
-	name      string
-	partIndex int
+	name          string
+	directoryName string
+	partIndex     int
 }
 
 type plannedFile struct {

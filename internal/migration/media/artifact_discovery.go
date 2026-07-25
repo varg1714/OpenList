@@ -1,8 +1,11 @@
 package media
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
@@ -23,30 +26,63 @@ func (builder *artifactPlanBuilder) artifactSourcesFor(work *plannedWork) ([]pla
 	if err != nil {
 		return nil, &ArtifactMigrationError{Path: parent, Reason: err.Error()}
 	}
-	known := make(map[string]struct{}, len(sources))
-	for _, source := range sources {
-		known[legacyRealNameFor(source.name)] = struct{}{}
-	}
+	matches := make([]plannedArtifactSource, 0)
 	for _, entry := range entries {
-		name := entry.Name()
-		if !entry.IsDir() || name == work.identity.Code {
+		if !entry.IsDir() {
 			continue
 		}
+		name := entry.Name()
 		fields := strings.Fields(name)
-		if len(fields) < 2 {
+		if len(fields) == 0 {
 			continue
 		}
 		code, normalizeErr := model.NormalizeMediaCode("javdb", fields[0])
-		if normalizeErr != nil || code != work.identity.Code {
-			continue
+		if normalizeErr == nil && code == work.identity.Code {
+			matches = append(matches, plannedArtifactSource{name: name, directoryName: name, partIndex: 1})
 		}
-		if _, exists := known[name]; exists {
-			continue
-		}
-		sources = append(sources, plannedArtifactSource{name: name, partIndex: 1})
-		known[name] = struct{}{}
 	}
-	return sources, nil
+
+	resolved := make([]plannedArtifactSource, 0, len(sources)+len(matches))
+	replacedLongName := false
+	known := make(map[string]struct{}, len(sources)+len(matches))
+	for _, source := range sources {
+		rootName := source.legacyRootName()
+		root := filepath.Join(parent, rootName)
+		if _, statErr := os.Lstat(root); errors.Is(statErr, syscall.ENAMETOOLONG) {
+			if len(matches) == 0 {
+				return nil, &ArtifactMigrationError{Path: root, Reason: statErr.Error()}
+			}
+			replacedLongName = true
+			continue
+		}
+		resolved = append(resolved, source)
+		known[rootName] = struct{}{}
+	}
+	for _, match := range matches {
+		if match.name == work.identity.Code && !replacedLongName {
+			continue
+		}
+		if _, exists := known[match.name]; exists {
+			continue
+		}
+		resolved = append(resolved, match)
+		known[match.name] = struct{}{}
+	}
+	return resolved, nil
+}
+
+func (source plannedArtifactSource) legacyRootName() string {
+	if source.directoryName != "" {
+		return source.directoryName
+	}
+	return legacyRealNameFor(source.name)
+}
+
+func (source plannedArtifactSource) legacyBaseName() string {
+	if source.directoryName != "" {
+		return source.directoryName
+	}
+	return clearArtifactExtension(source.name)
 }
 
 func removableArtifactMetadata(entry os.DirEntry) bool {

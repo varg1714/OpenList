@@ -1,6 +1,7 @@
 package media
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 type artifactOperationKind string
@@ -154,18 +156,18 @@ func (builder *artifactPlanBuilder) collectWork(work *plannedWork) error {
 
 	exactPart := make(map[int]bool)
 	for _, source := range artifactSources {
-		if legacyRealNameFor(source.name) == work.identity.Code {
+		if source.legacyRootName() == work.identity.Code {
 			exactPart[source.partIndex] = true
 		}
 	}
 	for _, source := range artifactSources {
-		legacyBase := clearArtifactExtension(source.name)
-		legacyRoot, err := safeArtifactPath(builder.dataDir, "emby", work.identity.Source, work.work.PrimaryDir, legacyRealNameFor(source.name))
+		legacyBase := source.legacyBaseName()
+		legacyRoot, err := safeArtifactPath(builder.dataDir, "emby", work.identity.Source, work.work.PrimaryDir, source.legacyRootName())
 		if err != nil {
 			return err
 		}
 		builder.roots[legacyRoot] = struct{}{}
-		exact := legacyRealNameFor(source.name) == work.identity.Code
+		exact := source.legacyRootName() == work.identity.Code
 		authoritative := source.partIndex == 1 && (!exactPart[source.partIndex] || exact)
 		workFiles := [][2]string{{"poster.jpg", "poster.jpg"}, {legacyBase + ".jpg", work.identity.Code + ".jpg"}, {legacyBase + "-background.jpg", work.identity.Code + "-background.jpg"}, {legacyBase + ".nfo", work.identity.Code + ".nfo"}}
 		for _, names := range workFiles {
@@ -283,7 +285,8 @@ func (builder *artifactPlanBuilder) candidate(sourceRoot, targetRoot, sourceName
 		return artifactCandidate{}, false, err
 	}
 	info, err := os.Lstat(sourcePath)
-	if os.IsNotExist(err) {
+	// A component beyond NAME_MAX cannot correspond to an existing directory entry.
+	if os.IsNotExist(err) || errors.Is(err, syscall.ENAMETOOLONG) {
 		return artifactCandidate{}, false, nil
 	}
 	if err != nil {

@@ -5,10 +5,91 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
+
+func TestMigrateLegacyMediaUsesActualArtifactNamesWhenDatabaseNameIsTooLong(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	dataDir := t.TempDir()
+	createStorages(t, database, model.Storage{ID: 15, Driver: "Javdb", MountPath: "/javdb"})
+	databaseName := "SSNI-772 " + strings.Repeat("x", 300) + ".mp4"
+	film := model.Film{
+		Source: "javdb",
+		Actor:  "miru",
+		Name:   databaseName,
+		Url:    "https://javdb.test/v/ssni-772",
+	}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed film: %v", err)
+	}
+	actualName := "SSNI-772 truncated.title"
+	legacyRoot := filepath.Join(dataDir, "emby", "javdb", "miru", actualName)
+	writeArtifactFixture(t, legacyRoot, map[string]string{
+		actualName + ".jpg": "legacy poster",
+		actualName + ".nfo": "legacy nfo",
+	})
+
+	// When
+	report, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{
+		Mode: MigrationApply, DataDir: dataDir, JournalPath: filepath.Join(dataDir, "migration-journal.json"),
+	})
+
+	// Then
+	if err != nil {
+		t.Fatalf("migrate artifacts for overlong database name: %v", err)
+	}
+	if report.ArtifactsMoved != 2 || report.ArtifactDirectoriesRemoved != 1 {
+		t.Fatalf("artifact report = %+v", report)
+	}
+	targetRoot := filepath.Join(dataDir, "emby", "javdb", "miru", "SSNI-772")
+	assertArtifactContent(t, filepath.Join(targetRoot, "SSNI-772.jpg"), "legacy poster")
+	assertArtifactContent(t, filepath.Join(targetRoot, "SSNI-772.nfo"), "legacy nfo")
+	if _, err := os.Stat(legacyRoot); !os.IsNotExist(err) {
+		t.Fatalf("legacy root remains after migration: %v", err)
+	}
+}
+
+func TestMigrateLegacyMediaSkipsImpossibleBackgroundNameForMaximumLengthDirectory(t *testing.T) {
+	// Given
+	database := newMigrationTestDB(t)
+	dataDir := t.TempDir()
+	createStorages(t, database, model.Storage{ID: 15, Driver: "Javdb", MountPath: "/javdb"})
+	film := model.Film{
+		Source: "javdb",
+		Actor:  "miru",
+		Name:   "SSNI-772 " + strings.Repeat("x", 300) + ".mp4",
+		Url:    "https://javdb.test/v/ssni-772",
+	}
+	if err := database.Create(&film).Error; err != nil {
+		t.Fatalf("seed film: %v", err)
+	}
+	actualName := "SSNI-772 " + strings.Repeat("x", 242)
+	legacyRoot := filepath.Join(dataDir, "emby", "javdb", "miru", actualName)
+	writeArtifactFixture(t, legacyRoot, map[string]string{
+		actualName + ".jpg": "legacy poster",
+		actualName + ".nfo": "legacy nfo",
+	})
+
+	// When
+	report, err := MigrateLegacyMediaWithOptions(context.Background(), database, MigrationOptions{
+		Mode: MigrationApply, DataDir: dataDir, JournalPath: filepath.Join(dataDir, "migration-journal.json"),
+	})
+
+	// Then
+	if err != nil {
+		t.Fatalf("migrate maximum-length artifact names: %v", err)
+	}
+	if report.ArtifactsMoved != 2 || report.ArtifactDirectoriesRemoved != 1 {
+		t.Fatalf("artifact report = %+v", report)
+	}
+	targetRoot := filepath.Join(dataDir, "emby", "javdb", "miru", "SSNI-772")
+	assertArtifactContent(t, filepath.Join(targetRoot, "SSNI-772.jpg"), "legacy poster")
+	assertArtifactContent(t, filepath.Join(targetRoot, "SSNI-772.nfo"), "legacy nfo")
+}
 
 func TestMigrateLegacyMediaMovesCodePrefixedArtifactDirectoryWhenDatabaseTitleDiffers(t *testing.T) {
 	// Given
