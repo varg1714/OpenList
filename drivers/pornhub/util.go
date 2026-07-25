@@ -20,13 +20,12 @@ import (
 )
 
 var viewKeyCompile = regexp.MustCompile(`/view_video.php\?viewkey=([^&\s]+)`)
-var cacheDiscoveredImageAndNFO = virtual_file.CacheImageAndNfo
-var updateDiscoveredMediaNFO = virtual_file.UpdateMediaNfo
 
 func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error) {
 	var films []PornFilm
+	isPlaylist := strings.Contains(pageKey, "/playlist/")
 
-	if strings.Contains(pageKey, "/playlist/") {
+	if isPlaylist {
 		key := strings.ReplaceAll(pageKey, "/playlist/", "")
 		playListFilms, err := d.getPlayListFilms(key, dirName)
 		if err != nil {
@@ -44,6 +43,11 @@ func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error)
 			return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
 		}
 		films = actorFilms
+	}
+	if isPlaylist {
+		for index := range films {
+			films[index].Tags = append(films[index].Tags, dirName)
+		}
 	}
 
 	if len(films) == 0 {
@@ -70,52 +74,10 @@ func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error)
 			utils.Log.Warnf("failed to ensure Pornhub file %s: %s", work.Code, err)
 			continue
 		}
-		if cacheDiscoveredWorkArtifacts(work) == virtual_file.CreatedFailed {
-			utils.Log.Warnf("failed to cache Pornhub artifacts for %s", work.Code)
-		}
 	}
 
 	return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
 
-}
-
-func cacheDiscoveredWorkArtifacts(work model.FilmWork) int {
-	identity := virtual_file.MediaIdentity{
-		StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code,
-	}
-	return cacheDiscoveredImageAndNFO(virtual_file.MediaInfo{
-		Identity: &identity,
-		Title:    model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
-		Synopsis: work.Synopsis,
-		ImgUrl:   work.ImageURL,
-		Release:  work.ReleaseDate,
-		Actors:   []string(work.Actors),
-		Tags:     []string(work.Tags),
-	})
-}
-
-func (d *Pornhub) syncDiscoveredNFO(files []model.EmbyFileObj) error {
-	if !d.SyncNfo {
-		return nil
-	}
-	var firstErr error
-	for _, file := range files {
-		identity := virtual_file.MediaIdentity{
-			StorageID: d.ID, Source: DriverName, PrimaryDir: file.Path, Code: file.Code,
-		}
-		err := updateDiscoveredMediaNFO(virtual_file.MediaInfo{
-			Identity: &identity,
-			Title:    model.BuildMediaTitle(file.Code, file.Title, ""),
-			Synopsis: file.Synopsis,
-			Release:  file.ReleaseTime,
-			Actors:   file.Actors,
-			Tags:     file.Tags,
-		})
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
 }
 
 func buildDiscoveredWork(storageID uint, primaryDir string, film PornFilm) (model.FilmWork, error) {
@@ -130,7 +92,14 @@ func buildDiscoveredWork(storageID uint, primaryDir string, film PornFilm) (mode
 	return model.FilmWork{
 		StorageID: storageID, Source: DriverName, Code: code,
 		SourceRef: code, SourceURL: canonical, PrimaryDir: primaryDir,
-		RawTitle: film.Title, ImageURL: film.Image, Actors: model.StringArray{film.Username},
+		RawTitle: film.Title, ImageURL: film.Image,
+		Actors: func() model.StringArray {
+			if strings.TrimSpace(film.Username) != "" {
+				return model.StringArray{film.Username}
+			}
+			return model.StringArray{primaryDir}
+		}(),
+		Tags:        model.StringArray(film.Tags),
 		ReleaseDate: time.Now(),
 	}, nil
 }
@@ -458,7 +427,7 @@ func convertFilms(actor string, films []PornFilm) ([]model.EmbyFileObj, error) {
 				return []string{actor}
 			}(),
 			Title: src.Title,
-			Tags:  []string{},
+			Tags:  append([]string(nil), src.Tags...),
 		}, nil
 	})
 }

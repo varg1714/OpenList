@@ -19,6 +19,7 @@ type PornFilm struct {
 	ViewKey   string
 	SourceURL string
 	Username  string
+	Tags      []string
 }
 
 type MakeDirParam struct {

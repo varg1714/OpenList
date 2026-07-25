@@ -2,10 +2,15 @@ package pornhub
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -58,6 +63,22 @@ func TestBuildDiscoveredWorkUsesNormalizedViewKeyIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildDiscoveredWorkUsesPrimaryDirActorAndPlaylistTags(t *testing.T) {
+	work, err := buildDiscoveredWork(12, "Playlist A", PornFilm{
+		ViewKey: "abc124", Title: "Original title", SourceURL: "https://www.pornhub.com/view_video.php?viewkey=abc124",
+		Tags: []string{"Playlist A"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(work.Actors) != 1 || work.Actors[0] != "Playlist A" {
+		t.Fatalf("fallback actors = %#v", work.Actors)
+	}
+	if len(work.Tags) != 1 || work.Tags[0] != "Playlist A" {
+		t.Fatalf("playlist tags = %#v", work.Tags)
+	}
+}
+
 func TestBuildDiscoveredWorkDeduplicatesEquivalentViewKeys(t *testing.T) {
 	film := PornFilm{ViewKey: "abc123", SourceURL: "https://www.pornhub.com/view_video.php?viewkey=abc123"}
 	first, err := buildDiscoveredWork(7, "actor", film)
@@ -88,7 +109,7 @@ func TestBuildDiscoveredWorkRejectsMissingOrInvalidURL(t *testing.T) {
 }
 
 func TestConvertFilmsUsesCodeOnlyObjectName(t *testing.T) {
-	films, err := convertFilms("Actor A", []PornFilm{{ViewKey: "abc123", Title: "Original title"}})
+	films, err := convertFilms("Actor A", []PornFilm{{ViewKey: "abc123", Title: "Original title", Tags: []string{"playlist"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,10 +119,13 @@ func TestConvertFilmsUsesCodeOnlyObjectName(t *testing.T) {
 	if films[0].Name != "abc123" || films[0].Code != "abc123" || films[0].Title != "Original title" {
 		t.Fatalf("projection = %+v", films[0])
 	}
+	if len(films[0].Tags) != 1 || films[0].Tags[0] != "playlist" {
+		t.Fatalf("projection tags = %#v", films[0].Tags)
+	}
 }
 
 func TestLinkUsesCanonicalSourceURLDirectly(t *testing.T) {
-	d := &Pornhub{}
+	d := &Pornhub{Addition: Addition{ServerUrl: "https://www.pornhub.com"}}
 	file := &model.EmbyFileObj{SourceURL: "https://www.pornhub.com/view_video.php?viewkey=abc123"}
 
 	link, err := d.Link(nil, file, model.LinkArgs{})
@@ -111,6 +135,64 @@ func TestLinkUsesCanonicalSourceURLDirectly(t *testing.T) {
 	if link.URL != file.SourceURL {
 		t.Fatalf("link URL = %q, want %q", link.URL, file.SourceURL)
 	}
+	if link.Header.Get("Referer") != d.ServerUrl {
+		t.Fatalf("link Referer = %q", link.Header.Get("Referer"))
+	}
+}
+
+func TestLinkAddsRefererToResolvedPornhubVideo(t *testing.T) {
+	oldResolve := resolvePornhubVideoLink
+	t.Cleanup(func() { resolvePornhubVideoLink = oldResolve })
+	resolvePornhubVideoLink = func(*Pornhub, string) (string, error) {
+		return "https://cdn.pornhub.test/video.mp4", nil
+	}
+	driver := Pornhub{Addition: Addition{ServerUrl: "https://www.pornhub.com"}}
+
+	link, err := driver.Link(context.Background(), &model.EmbyFileObj{SourceRef: "abc123"}, model.LinkArgs{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.Header.Get("Referer") != driver.ServerUrl {
+		t.Fatalf("link Referer = %q", link.Header.Get("Referer"))
+	}
+}
+
+func TestLinkReturnsMockedLinkWithoutResolutionWhenMockedEnabled(t *testing.T) {
+	oldResolve := resolvePornhubVideoLink
+	t.Cleanup(func() { resolvePornhubVideoLink = oldResolve })
+	calls := 0
+	resolvePornhubVideoLink = func(*Pornhub, string) (string, error) {
+		calls++
+		return "", errors.New("unexpected resolution")
+	}
+	driver := Pornhub{Addition: Addition{Mocked: true, MockedLink: "https://mock.test/video.mp4"}}
+
+	link, err := driver.Link(context.Background(), &model.EmbyFileObj{SourceRef: "abc123"}, model.LinkArgs{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.URL != driver.MockedLink || calls != 0 {
+		t.Fatalf("mock link = %q, resolver calls = %d", link.URL, calls)
+	}
+	if _, exists := link.Header["Referer"]; exists {
+		t.Fatalf("mock link leaked Referer header %#v", link.Header)
+	}
+}
+
+func TestLinkReturnsResolutionErrorWhenMockedDisabled(t *testing.T) {
+	oldResolve := resolvePornhubVideoLink
+	t.Cleanup(func() { resolvePornhubVideoLink = oldResolve })
+	wantErr := errors.New("resolution failed")
+	resolvePornhubVideoLink = func(*Pornhub, string) (string, error) { return "", wantErr }
+	driver := Pornhub{Addition: Addition{MockedLink: "https://dormant.test/video.mp4"}}
+
+	_, err := driver.Link(context.Background(), &model.EmbyFileObj{SourceRef: "abc123"}, model.LinkArgs{})
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("resolution error = %v, want %v", err, wantErr)
+	}
 }
 
 func TestLinkRejectsMissingCanonicalSourceURL(t *testing.T) {
@@ -119,12 +201,15 @@ func TestLinkRejectsMissingCanonicalSourceURL(t *testing.T) {
 	}
 }
 
-func TestCacheDiscoveredWorkArtifactsUsesStableIdentity(t *testing.T) {
-	original := cacheDiscoveredImageAndNFO
-	t.Cleanup(func() { cacheDiscoveredImageAndNFO = original })
+func TestScanMediaArtifactsUsesStableIdentityAndReferer(t *testing.T) {
+	if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.FilmWork{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	original := cachePornhubMediaImage
+	t.Cleanup(func() { cachePornhubMediaImage = original })
 
 	var captured virtual_file.MediaInfo
-	cacheDiscoveredImageAndNFO = func(info virtual_file.MediaInfo) int {
+	cachePornhubMediaImage = func(info virtual_file.MediaInfo) int {
 		captured = info
 		return virtual_file.CreatedSuccess
 	}
@@ -133,7 +218,13 @@ func TestCacheDiscoveredWorkArtifactsUsesStableIdentity(t *testing.T) {
 		RawTitle: "Original title", TranslatedTitle: "Translated title",
 		ImageURL: "https://example.test/cover.jpg", Actors: model.StringArray{"Actor A"}, Tags: model.StringArray{"tag"},
 	}
-	cacheDiscoveredWorkArtifacts(work)
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatal(err)
+	}
+	driver := Pornhub{Storage: model.Storage{ID: 12}, Addition: Addition{ServerUrl: "https://www.pornhub.com"}}
+	if err := driver.scanMediaArtifacts(); err != nil {
+		t.Fatal(err)
+	}
 
 	if captured.Identity == nil {
 		t.Fatal("artifact call omitted media identity")
@@ -145,44 +236,62 @@ func TestCacheDiscoveredWorkArtifactsUsesStableIdentity(t *testing.T) {
 	if captured.Title != "abc123 Translated title" || captured.ImgUrl != work.ImageURL {
 		t.Fatalf("artifact metadata = %+v", captured)
 	}
+	if captured.ImgUrlHeaders["Referer"] != "https://www.pornhub.com" {
+		t.Fatalf("poster headers = %#v", captured.ImgUrlHeaders)
+	}
 }
 
-func TestSyncNfoUpdatesIdentityWhenTagMatchingDisabled(t *testing.T) {
-	original := updateDiscoveredMediaNFO
-	t.Cleanup(func() { updateDiscoveredMediaNFO = original })
-
-	var captured virtual_file.MediaInfo
-	updateDiscoveredMediaNFO = func(info virtual_file.MediaInfo) error {
-		captured = info
-		return nil
-	}
-	d := &Pornhub{Addition: Addition{SyncNfo: true, MatchFilmTagLimit: 0}}
-	files := []model.EmbyFileObj{{
-		WorkID: 12, FilmFileID: 22, Code: "abc123", SourceRef: "abc123", SourceURL: "https://www.pornhub.com/view_video.php?viewkey=abc123",
-		ObjThumb: model.ObjThumb{Object: model.Object{Name: "abc123.mp4", Path: "Actor A"}},
-		Title:    "Existing title", Synopsis: "Synopsis", Actors: []string{"Actor A"}, Tags: []string{"tag"},
-	}}
-	if err := d.syncDiscoveredNFO(files); err != nil {
+func TestReMatchTagsLeavesNFOStaleForScheduledSync(t *testing.T) {
+	if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.FilmWork{}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if captured.Identity == nil {
-		t.Fatal("SyncNfo omitted media identity")
+	oldDataDir := flags.DataDir
+	flags.DataDir = t.TempDir()
+	t.Cleanup(func() { flags.DataDir = oldDataDir })
+	oldWait := waitPornhubTagScan
+	waitPornhubTagScan = func(time.Duration) {}
+	t.Cleanup(func() { waitPornhubTagScan = oldWait })
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_, _ = response.Write([]byte(`<div class="tagsWrapper"><div class="gtm-event-video-underplayer item"><span>tag-a</span></div></div>`))
+	}))
+	t.Cleanup(server.Close)
+	work := model.FilmWork{
+		StorageID: 86, Source: DriverName, Code: "abc860", SourceRef: "abc860", SourceURL: server.URL,
+		PrimaryDir: "actor", RawTitle: "title", MetadataVersion: 1, NfoVersion: 1,
 	}
-	identity := *captured.Identity
-	if identity.StorageID != d.ID || identity.Source != DriverName || identity.PrimaryDir != "Actor A" || identity.Code != "abc123" {
-		t.Fatalf("synced identity = %+v", identity)
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatal(err)
 	}
-	if captured.Title != "abc123 Existing title" || captured.Synopsis != "Synopsis" {
-		t.Fatalf("synced metadata = %+v", captured)
+	driver := Pornhub{
+		Storage:  model.Storage{ID: 86},
+		Addition: Addition{ServerUrl: server.URL, MatchFilmTagLimit: 1},
+	}
+
+	driver.reMatchTags()
+
+	updated, err := db.GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.MetadataVersion <= updated.NfoVersion {
+		t.Fatalf("metadata version = %d, NFO version = %d", updated.MetadataVersion, updated.NfoVersion)
+	}
+	paths, err := virtual_file.ResolveMediaArtifactPaths(virtual_file.MediaIdentity{
+		StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(paths.NFO); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("enrichment wrote NFO directly: %v", err)
 	}
 }
 
-func TestRemoveIndividualMediaFilePreservesSiblingParts(t *testing.T) {
+func TestRemoveIndividualMediaFileDeletesWholeAggregate(t *testing.T) {
 	work := model.FilmWork{StorageID: 43, Source: DriverName, Code: "abc-remove", SourceRef: "abc-remove", PrimaryDir: "actor"}
 	if err := db.GetDb().Create(&work).Error; err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = virtual_file.DeleteMediaWork(work.ID) })
 	if err := db.ReplaceFilmFiles(work.ID, []model.FilmFile{{PartIndex: 1, PartCount: 2}, {PartIndex: 2, PartCount: 2}}); err != nil {
 		t.Fatal(err)
 	}
@@ -194,11 +303,11 @@ func TestRemoveIndividualMediaFilePreservesSiblingParts(t *testing.T) {
 	if err := (&Pornhub{Storage: model.Storage{ID: 43}}).Remove(context.Background(), &model.EmbyFileObj{WorkID: work.ID, FilmFileID: files[0].ID}); err != nil {
 		t.Fatalf("remove individual file: %v", err)
 	}
-	remaining, err := db.ListFilmFiles(work.ID)
-	if err != nil {
+	var workCount int64
+	if err := db.GetDb().Model(&model.FilmWork{}).Where("id = ?", work.ID).Count(&workCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(remaining) != 1 || remaining[0].ID != files[1].ID {
-		t.Fatalf("remaining files = %+v", remaining)
+	if workCount != 0 {
+		t.Fatalf("remaining work count = %d", workCount)
 	}
 }
