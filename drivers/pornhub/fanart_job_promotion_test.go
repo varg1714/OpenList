@@ -8,13 +8,11 @@ import (
 	"image/color"
 	"image/jpeg"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
-	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
 
 func TestScanFilmFanartPromotesFirstLaterLandscapeAfterAllFramesExist(t *testing.T) {
@@ -161,43 +159,22 @@ func TestScanFanartRetriesPromotionFailureThroughQuery(t *testing.T) {
 	}
 }
 
-func TestScanFanartCompletedAuditRecoversInterruptedPromotion(t *testing.T) {
+func TestScanFanartSkipsCompletedWork(t *testing.T) {
 	setupPornhubFanartTest(t)
+	videoCalls := 0
 	driver := newFanartDriver(&mockFanartMedia{}, func(_ context.Context, _ string) (string, error) {
-		return "", errors.New("completed audit should not resolve video")
+		videoCalls++
+		return "", errors.New("completed work should not resolve video")
 	})
-	film := createFanartWork(t, "audit-recovery", "view-audit", 3, time.Time{})
-	film.SampleImageComplete = true
+	film := createFanartWork(t, "completed", "view-completed", 3, time.Now().Add(-73*time.Hour))
 	if err := db.GetDb().Model(&film).Update("sample_image_complete", true).Error; err != nil {
-		t.Fatal(err)
-	}
-	firstPath := (fanartJPEGFixture{width: 2, height: 3, fill: color.RGBA{R: 220, A: 255}}).write(t, film, 1)
-	secondPath := (fanartJPEGFixture{width: 4, height: 2, fill: color.RGBA{B: 220, A: 255}}).write(t, film, 2)
-	(fanartJPEGFixture{width: 3, height: 4, fill: color.RGBA{G: 220, A: 255}}).write(t, film, 3)
-	oldMarker := filepath.Join(filepath.Dir(firstPath), "."+filepath.Base(firstPath)+"-"+filepath.Base(secondPath)+".swap-old")
-	if err := os.Link(firstPath, oldMarker); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(firstPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(secondPath, firstPath); err != nil {
 		t.Fatal(err)
 	}
 
 	driver.scanFanart(context.Background())
 
-	width, height, gotColor := fanartJPEGDetails(t, firstPath)
-	if width != 4 || height != 2 || gotColor != (color.RGBA{B: 220, A: 255}) {
-		t.Fatalf("recovered fanart1 = (%d, %d, %v), want landscape blue frame", width, height, gotColor)
-	}
-	width, height, gotColor = fanartJPEGDetails(t, secondPath)
-	if width != 2 || height != 3 || gotColor != (color.RGBA{R: 220, A: 255}) {
-		t.Fatalf("recovered fanart2 = (%d, %d, %v), want portrait red frame", width, height, gotColor)
-	}
-	stored := loadFanartWork(t, film.ID)
-	if !stored.SampleImageComplete || stored.SampleImageScanAt == nil {
-		t.Fatalf("audit progress = (%d, %t), scan time = %v, want complete with scan time", stored.SampleImageCount, stored.SampleImageComplete, stored.SampleImageScanAt)
+	if videoCalls != 0 {
+		t.Fatalf("video resolution calls = %d, want 0 for completed work", videoCalls)
 	}
 }
 
@@ -220,21 +197,6 @@ func (f fanartJPEGFixture) encode(t *testing.T) []byte {
 		t.Fatalf("encode JPEG: %v", err)
 	}
 	return encoded.Bytes()
-}
-
-func (f fanartJPEGFixture) write(t *testing.T, film model.FilmWork, index int) string {
-	t.Helper()
-	path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, f.encode(t), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }
 
 func fanartJPEGDetails(t *testing.T, path string) (int, int, color.RGBA) {

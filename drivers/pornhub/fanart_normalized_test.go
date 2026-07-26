@@ -20,6 +20,7 @@ func TestRunFanartProcessesNormalizedWorkWithoutLegacyFilm(t *testing.T) {
 		Code:        "normalized-view-key",
 		SourceRef:   "normalized-view-key",
 		SourceURL:   "https://www.pornhub.com/view_video.php?viewkey=normalized-view-key",
+		ImageURL:    "https://example.test/cover.jpg",
 		PrimaryDir:  "normalized-actor",
 		ReleaseDate: time.Now(),
 	}

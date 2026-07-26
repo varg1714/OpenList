@@ -96,6 +96,7 @@ func createFanartWork(t *testing.T, code string, sourceRef string, count int, sc
 		Code:              code,
 		SourceRef:         sourceRef,
 		SourceURL:         "https://www.pornhub.com/view_video.php?viewkey=" + sourceRef,
+		ImageURL:          "https://example.test/cover.jpg",
 		PrimaryDir:        "actor",
 		ReleaseDate:       time.Now(),
 		SampleImageCount:  count,
