@@ -1,6 +1,7 @@
 package pornhub
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
@@ -42,4 +43,43 @@ func TestScanMediaArtifactsUsesStableIdentityAndReferer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, model.DMMPosterStatusSuccess, stored.DMMPosterStatus)
 	require.NotNil(t, stored.DMMPosterScanAt)
+}
+
+func TestScanMediaArtifactsClassifiesHTTPNotFoundAsTerminal(t *testing.T) {
+	tests := []struct {
+		name       string
+		cacheErr   error
+		wantStatus string
+	}{
+		{name: "HTTP 404", cacheErr: errors.New("download media poster: HTTP 404"), wantStatus: model.DMMPosterStatusNotFound},
+		{name: "HTTP 410", cacheErr: errors.New("download media poster: HTTP 410"), wantStatus: model.DMMPosterStatusNotFound},
+		{name: "other error", cacheErr: errors.New("connection refused"), wantStatus: model.DMMPosterStatusTransientError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			require.NoError(t, db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.FilmWork{}).Error)
+			original := cachePornhubMediaImage
+			t.Cleanup(func() { cachePornhubMediaImage = original })
+			cachePornhubMediaImage = func(virtual_file.MediaInfo) (int, error) {
+				return virtual_file.CreatedFailed, test.cacheErr
+			}
+			work := model.FilmWork{
+				StorageID: 13, Source: DriverName, Code: "def456", PrimaryDir: "Actor B",
+				ImageURL: "https://image.test/poster.jpg",
+			}
+			require.NoError(t, db.GetDb().Create(&work).Error)
+			driver := Pornhub{Storage: model.Storage{ID: 13}, Addition: Addition{ServerUrl: "https://www.pornhub.com"}}
+
+			// When
+			err := driver.scanMediaArtifacts()
+
+			// Then
+			require.NoError(t, err)
+			stored, err := db.GetFilmWork(work.ID)
+			require.NoError(t, err)
+			require.Equal(t, test.wantStatus, stored.DMMPosterStatus)
+			require.NotNil(t, stored.DMMPosterScanAt)
+		})
+	}
 }

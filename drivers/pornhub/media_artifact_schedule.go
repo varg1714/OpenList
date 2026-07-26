@@ -2,6 +2,7 @@ package pornhub
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
@@ -43,7 +44,7 @@ func (d *Pornhub) scanMediaArtifacts() error {
 			}
 		}
 		if cacheErr != nil {
-			status = model.DMMPosterStatusTransientError
+			status = classifyPosterError(cacheErr)
 			utils.Log.Warnf("failed to cache Pornhub poster for %s: %s", work.Code, cacheErr)
 		}
 		if err := db.UpdateMediaWorkDMMPosterStatus(work.ID, status); err != nil {
@@ -60,6 +61,14 @@ func pornhubMediaIdentity(work *model.FilmWork) virtual_file.MediaIdentity {
 		PrimaryDir: work.PrimaryDir,
 		Code:       work.Code,
 	}
+}
+
+func classifyPosterError(err error) string {
+	msg := err.Error()
+	if strings.Contains(msg, "HTTP 404") || strings.Contains(msg, "HTTP 410") {
+		return model.DMMPosterStatusNotFound
+	}
+	return model.DMMPosterStatusTransientError
 }
 
 func filmWorkIDs(works []model.FilmWork) []uint {
