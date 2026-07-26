@@ -3,17 +3,18 @@ package pornhub
 import (
 	"testing"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPornhubNFOFlagsPreferForcedRefreshWhenBothEnabled(t *testing.T) {
 	oldSync := syncPornhubMediaNFOs
 	t.Cleanup(func() { syncPornhubMediaNFOs = oldSync })
-	var forces []bool
-	syncPornhubMediaNFOs = func(storageID uint, source string, force bool) error {
+	var options []virtual_file.MediaNFOSyncOptions
+	syncPornhubMediaNFOs = func(storageID uint, source string, option virtual_file.MediaNFOSyncOptions) error {
 		require.Equal(t, uint(83), storageID)
 		require.Equal(t, DriverName, source)
-		forces = append(forces, force)
+		options = append(options, option)
 		return nil
 	}
 
@@ -22,5 +23,5 @@ func TestPornhubNFOFlagsPreferForcedRefreshWhenBothEnabled(t *testing.T) {
 	err := driver.syncConfiguredNFOs()
 
 	require.NoError(t, err)
-	require.Equal(t, []bool{true}, forces)
+	require.Equal(t, []virtual_file.MediaNFOSyncOptions{{Force: true}}, options)
 }
