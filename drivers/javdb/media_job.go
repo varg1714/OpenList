@@ -185,6 +185,9 @@ func (d *Javdb) scanMediaMetadataAndMagnets() {
 			if err := db.UpdateMediaWorkTagRetry(work.ID, next, fetchErr.Error()); err != nil {
 				utils.Log.Warnf("failed to update tag retry for %s: %s", work.Code, err)
 			}
+			if err := db.UpdateMediaWorkActorRetry(work.ID, next, fetchErr.Error()); err != nil {
+				utils.Log.Warnf("failed to update actor retry for %s: %s", work.Code, err)
+			}
 			continue
 		}
 		magnets := sourceMagnetsFromMeta(meta)
