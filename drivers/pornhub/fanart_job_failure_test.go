@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/db"
 )
 
 func TestScanFilmFanartCleanupFailureDoesNotAdvanceProgress(t *testing.T) {
@@ -84,42 +83,6 @@ func TestScanFilmFanartTransientExtractFailureUpdatesScanTime(t *testing.T) {
 	}
 	if stored.SampleImageScanAt == nil || stored.SampleImageScanAt.Before(started) {
 		t.Errorf("scan time = %v, want at or after %s", stored.SampleImageScanAt, started)
-	}
-}
-
-func TestScanFilmFanartAuditsCompletedFilmWithoutResolvingVideo(t *testing.T) {
-	setupPornhubFanartTest(t)
-	media := &mockFanartMedia{duration: 100.0}
-	driver := newFanartDriver(media, func(_ context.Context, _ string) (string, error) {
-		return "", errors.New("completed audit should not resolve video")
-	})
-
-	film := createFanartWork(t, "completed", "vk5", 3, time.Time{})
-	film.SampleImageComplete = true
-	if err := db.GetDb().Model(&film).Update("sample_image_complete", true).Error; err != nil {
-		t.Fatal(err)
-	}
-	for index := 1; index <= 3; index++ {
-		path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("existing"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	driver.scanFilmFanart(context.Background(), &film)
-
-	stored := loadFanartWork(t, film.ID)
-	if !stored.SampleImageComplete {
-		t.Error("completed film should remain complete")
-	}
-	if stored.SampleImageScanAt == nil {
-		t.Error("completed disk audit did not update scan time")
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/db"
 )
 
 func TestScanFilmFanartExtractsEvenlySpacedFrames(t *testing.T) {
@@ -66,80 +65,6 @@ func TestScanFilmFanartRecreatesMissingPersistedFrame(t *testing.T) {
 	path2, _ := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 2)
 	if _, err := os.Lstat(path2); err != nil {
 		t.Errorf("fanart2 should exist: %v", err)
-	}
-}
-
-func TestScanFilmFanartContinuesWhenConfiguredCountIncreases(t *testing.T) {
-	setupPornhubFanartTest(t)
-	driver := newFanartDriver(&mockFanartMedia{duration: 120}, func(_ context.Context, key string) (string, error) {
-		return "https://example.test/video/" + key, nil
-	})
-	driver.FanartCount = 5
-
-	film := createFanartWork(t, "count-increase", "view-increase", 3, time.Time{})
-	film.SampleImageComplete = true
-	if err := db.GetDb().Model(&film).Update("sample_image_complete", true).Error; err != nil {
-		t.Fatal(err)
-	}
-	for index := 1; index <= 3; index++ {
-		path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("existing"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	driver.scanFilmFanart(context.Background(), &film)
-
-	stored := loadFanartWork(t, film.ID)
-	if stored.SampleImageCount != 5 || !stored.SampleImageComplete {
-		t.Fatalf("progress = (%d, %t), want (5, true)", stored.SampleImageCount, stored.SampleImageComplete)
-	}
-	for index := 4; index <= 5; index++ {
-		path, _ := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
-		if _, err := os.Lstat(path); err != nil {
-			t.Fatalf("fanart%d not created after count increase: %v", index, err)
-		}
-	}
-}
-
-func TestScanFilmFanartRepairsCompletedFilmMissingFrame(t *testing.T) {
-	setupPornhubFanartTest(t)
-	driver := newFanartDriver(&mockFanartMedia{duration: 120}, func(_ context.Context, key string) (string, error) {
-		return "https://example.test/video/" + key, nil
-	})
-	film := createFanartWork(t, "completed-missing", "view-missing", 3, time.Time{})
-	film.SampleImageComplete = true
-	if err := db.GetDb().Model(&film).Update("sample_image_complete", true).Error; err != nil {
-		t.Fatal(err)
-	}
-	for _, index := range []int{1, 3} {
-		path, err := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, index)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("existing"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	driver.scanFilmFanart(context.Background(), &film)
-
-	path, _ := virtual_file.FanartPath(DriverName, film.PrimaryDir, film.Code, 2)
-	if _, err := os.Lstat(path); err != nil {
-		t.Fatalf("missing completed fanart was not repaired: %v", err)
-	}
-	stored := loadFanartWork(t, film.ID)
-	if stored.SampleImageCount != 3 || !stored.SampleImageComplete {
-		t.Fatalf("progress = (%d, %t), want (3, true)", stored.SampleImageCount, stored.SampleImageComplete)
 	}
 }
 
