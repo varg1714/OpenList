@@ -19,7 +19,7 @@ func (d *Pornhub) reMatchTags() {
 	utils.Log.Info("start to match porn tags")
 	defer utils.Log.Info("finish match porn tags")
 
-	films, err := db.QueryPendingMediaWorks(DriverName, db.MediaWorkScanTags, d.MatchFilmTagLimit)
+	films, err := db.QueryUnscannedOrDueMediaTagWorks(DriverName, d.MatchFilmTagLimit)
 	if err != nil {
 		utils.Log.Warn("failed to query films:", err.Error())
 		return
