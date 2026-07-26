@@ -42,8 +42,12 @@ func (d *Javdb) scanMediaSampleImages() {
 			if cacheErr != nil {
 				var statusErr *virtual_file.HTTPStatusError
 				if errors.As(cacheErr, &statusErr) && statusErr.StatusCode == http.StatusForbidden {
-					if err := completeMediaSamples(work, sampleIndex-1); err != nil {
-						markMediaSampleRetry(work, err)
+					if sampleIndex > 1 {
+						if err := completeMediaSamples(work, sampleIndex-1); err != nil {
+							markMediaSampleRetry(work, err)
+						}
+					} else {
+						markMediaSampleRetry(work, cacheErr)
 					}
 				} else {
 					markMediaSampleRetry(work, cacheErr)
