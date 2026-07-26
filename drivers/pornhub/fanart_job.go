@@ -23,7 +23,7 @@ func (d *Pornhub) scanFanart(ctx context.Context) {
 	utils.Log.Info("start scanning fanart for pornhub films")
 	defer utils.Log.Info("finish scanning fanart for pornhub films")
 
-	works, err := db.QuerySampleImageMediaWorks(DriverName, d.fanartRetryInterval(), d.FanartScanLimit)
+	works, err := db.QueryGeneratedSampleImageMediaWorks(DriverName, d.fanartRetryInterval(), d.FanartScanLimit)
 	if err != nil {
 		utils.Log.Warnf("failed to query fanart works: %s", err.Error())
 		return
