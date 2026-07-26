@@ -11,6 +11,16 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	gocache "github.com/OpenListTeam/go-cache"
+)
+
+const unavailableActorRetryInterval = 5 * time.Minute
+
+var (
+	unavailableActorPages  = gocache.NewMemCache(gocache.WithShards[struct{}](8))
+	fetchPornhubActorFilms = func(driver *Pornhub, pageKey string) ([]PornFilm, error) {
+		return driver.getActorFilms(pageKey)
+	}
 )
 
 func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error) {
@@ -29,11 +39,20 @@ func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error)
 			pageKey += "/videos"
 		}
 
-		actorFilms, err := d.getActorFilms(pageKey)
+		retryKey := actorPageRetryKey(d.ID, pageKey)
+		if _, unavailable := unavailableActorPages.Get(retryKey); unavailable {
+			return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
+		}
+
+		actorFilms, err := fetchPornhubActorFilms(d, pageKey)
 		if err != nil {
+			unavailableActorPages.Set(retryKey, struct{}{}, gocache.WithEx[struct{}](unavailableActorRetryInterval))
 			return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
 		}
 		films = actorFilms
+		if len(films) == 0 {
+			unavailableActorPages.Set(retryKey, struct{}{}, gocache.WithEx[struct{}](unavailableActorRetryInterval))
+		}
 	}
 	if isPlaylist {
 		for index := range films {
@@ -68,6 +87,10 @@ func (d *Pornhub) getFilms(dirName, pageKey string) ([]model.EmbyFileObj, error)
 	}
 
 	return virtual_file.ListMediaFiles(d.ID, DriverName, dirName)
+}
+
+func actorPageRetryKey(storageID uint, pageKey string) string {
+	return fmt.Sprintf("%d:%s", storageID, pageKey)
 }
 
 func buildDiscoveredWork(storageID uint, primaryDir string, film PornFilm) (model.FilmWork, error) {

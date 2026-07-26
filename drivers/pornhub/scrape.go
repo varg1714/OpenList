@@ -67,7 +67,10 @@ type actorFilmPage interface {
 }
 
 func (d *Pornhub) resolveActorFilms(wd actorFilmPage, pageKey string) []PornFilm {
-	films, _ := resolveFilms(wd, Model)
+	films, available := resolveFilms(wd, Model)
+	if !available || len(films) == 0 {
+		return films
+	}
 
 	for page := 2; hasNextActorFilmPage(wd); page++ {
 		pageURL := fmt.Sprintf("%s%s?page=%d", d.ServerUrl, pageKey, page)
@@ -77,7 +80,10 @@ func (d *Pornhub) resolveActorFilms(wd actorFilmPage, pageKey string) []PornFilm
 		}
 
 		time.Sleep(time.Duration(d.SpiderMaxWaitTime) * time.Second)
-		pageFilms, _ := resolveFilms(wd, Model)
+		pageFilms, pageAvailable := resolveFilms(wd, Model)
+		if !pageAvailable || len(pageFilms) == 0 {
+			return films
+		}
 		films = append(films, pageFilms...)
 	}
 	return films
