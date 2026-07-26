@@ -54,7 +54,7 @@ func TestSyncMediaNFOsWritesOnlyStaleWorks(t *testing.T) {
 		return nil
 	}
 
-	err := SyncMediaNFOs(71, "javdb", false)
+	err := SyncMediaNFOs(71, "javdb", MediaNFOSyncOptions{IncludeCode: true})
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"STALE"}, written)
@@ -80,7 +80,7 @@ func TestRefreshMediaNFOsRewritesFreshAndStaleWorks(t *testing.T) {
 		return nil
 	}
 
-	err := SyncMediaNFOs(73, "fc2", true)
+	err := SyncMediaNFOs(73, "fc2", MediaNFOSyncOptions{Force: true, IncludeCode: true})
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"FRESH", "STALE"}, written)
@@ -102,7 +102,7 @@ func TestSyncMediaNFOsRecordsErrorAndContinues(t *testing.T) {
 		return nil
 	}
 
-	err := SyncMediaNFOs(74, "pornhub", false)
+	err := SyncMediaNFOs(74, "pornhub", MediaNFOSyncOptions{})
 
 	require.ErrorContains(t, err, "disk full")
 	require.Equal(t, []string{"FAIL", "SUCCEED"}, written)
@@ -113,6 +113,36 @@ func TestSyncMediaNFOsRecordsErrorAndContinues(t *testing.T) {
 	succeededAfter, err := db.GetFilmWork(succeeded.ID)
 	require.NoError(t, err)
 	require.Equal(t, uint(4), succeededAfter.NfoVersion)
+}
+
+func TestSyncMediaNFOsProjectsConfiguredTitle(t *testing.T) {
+	tests := []struct {
+		name        string
+		includeCode bool
+		wantTitle   string
+	}{
+		{name: "includes code", includeCode: true, wantTitle: "TITLE title"},
+		{name: "omits code", includeCode: false, wantTitle: "title"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMediaNFOSyncTestDB(t)
+			createMediaNFOSyncWork(t, 75, "pornhub", "TITLE", 2, 0)
+
+			oldWrite := writeNormalizedMediaNFO
+			t.Cleanup(func() { writeNormalizedMediaNFO = oldWrite })
+			var title string
+			writeNormalizedMediaNFO = func(info MediaInfo) error {
+				title = info.Title
+				return nil
+			}
+
+			err := SyncMediaNFOs(75, "pornhub", MediaNFOSyncOptions{IncludeCode: test.includeCode})
+
+			require.NoError(t, err)
+			require.Equal(t, test.wantTitle, title)
+		})
+	}
 }
 
 func setupMediaNFOSyncTestDB(t *testing.T) {

@@ -3,6 +3,7 @@ package virtual_file
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -10,8 +11,13 @@ import (
 
 var writeNormalizedMediaNFO = UpdateMediaNfo
 
-func SyncMediaNFOs(storageID uint, source string, force bool) error {
-	works, err := db.QueryMediaWorksForNFOSync(storageID, source, force, 0)
+type MediaNFOSyncOptions struct {
+	Force       bool
+	IncludeCode bool
+}
+
+func SyncMediaNFOs(storageID uint, source string, options MediaNFOSyncOptions) error {
+	works, err := db.QueryMediaWorksForNFOSync(storageID, source, options.Force, 0)
 	if err != nil {
 		return fmt.Errorf("query media works for NFO sync: %w", err)
 	}
@@ -22,9 +28,16 @@ func SyncMediaNFOs(storageID uint, source string, force bool) error {
 		identity := MediaIdentity{
 			StorageID: work.StorageID, Source: work.Source, PrimaryDir: work.PrimaryDir, Code: work.Code,
 		}
+		title := strings.TrimSpace(work.TranslatedTitle)
+		if title == "" {
+			title = strings.TrimSpace(work.RawTitle)
+		}
+		if options.IncludeCode || title == "" {
+			title = model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle)
+		}
 		info := MediaInfo{
 			Identity: &identity,
-			Title:    model.BuildMediaTitle(work.Code, work.RawTitle, work.TranslatedTitle),
+			Title:    title,
 			Synopsis: work.Synopsis,
 			Release:  work.ReleaseDate,
 			Actors:   []string(work.Actors),
