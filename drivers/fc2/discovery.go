@@ -2,18 +2,23 @@ package fc2
 
 import (
 	"strings"
+	"time"
 
-	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
-var fetchFC2DailyPageFilms = func(driver *FC2, url string) ([]string, error) {
-	return driver.getFc2DailyPageFilms(url)
-}
+var (
+	fetchFC2DailyPageFilms = func(driver *FC2, url string) ([]string, error) {
+		return driver.getFc2DailyPageFilms(url)
+	}
+	addFC2Star = func(driver *FC2, code string, tags []string) (model.EmbyFileObj, error) {
+		return driver.addStar(code, tags)
+	}
+)
 
-func (d *FC2) getFilms(primaryDir string, urlFunc func(index int) string) ([]model.EmbyFileObj, error) {
+func (d *FC2) getFilms(_ string, urlFunc func(index int) string) ([]model.EmbyFileObj, error) {
 	filmIDs := make([]string, 0)
 	seen := make(map[string]struct{})
 	for page := 1; ; page++ {
@@ -39,20 +44,12 @@ func (d *FC2) getFilms(primaryDir string, urlFunc func(index int) string) ([]mod
 	}
 
 	for _, id := range db.QueryUnMissedFilms(filmIDs) {
-		work, err := buildDiscoveredWork(d.ID, primaryDir, id, id, "", "")
-		if err != nil {
-			utils.Log.Warnf("failed to normalize FC2 discovery %q: %s", id, err)
-			continue
+		if _, err := addFC2Star(d, id, nil); err != nil {
+			utils.Log.Warnf("failed to add FC2 discovery %q: %s", id, err)
 		}
-		if err := db.UpsertDiscoveredWork(&work); err != nil {
-			utils.Log.Warnf("failed to persist FC2 discovery %s: %s", work.Code, err)
-			continue
-		}
-		if _, err := db.EnsureSingleFilmFile(work.ID); err != nil {
-			utils.Log.Warnf("failed to persist FC2 file %s: %s", work.Code, err)
-		}
+		time.Sleep(time.Duration(d.ScanTimeLimit) * time.Second)
 	}
-	return virtual_file.ListMediaFiles(d.ID, "fc2", primaryDir)
+	return []model.EmbyFileObj{}, nil
 }
 
 func buildDiscoveredWork(storageID uint, primaryDir, code, sourceURL, rawTitle, imageURL string) (model.FilmWork, error) {

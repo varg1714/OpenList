@@ -142,7 +142,11 @@ func TestFC2DiscoverySkipsTombstonesAndContinuesAfterBadItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldFetch := fetchFC2DailyPageFilms
-	t.Cleanup(func() { fetchFC2DailyPageFilms = oldFetch })
+	oldAddStar := addFC2Star
+	t.Cleanup(func() {
+		fetchFC2DailyPageFilms = oldFetch
+		addFC2Star = oldAddStar
+	})
 	page := 0
 	fetchFC2DailyPageFilms = func(*FC2, string) ([]string, error) {
 		page++
@@ -151,6 +155,14 @@ func TestFC2DiscoverySkipsTombstonesAndContinuesAfterBadItem(t *testing.T) {
 		}
 		return nil, nil
 	}
+	var attempted []string
+	addFC2Star = func(_ *FC2, code string, _ []string) (model.EmbyFileObj, error) {
+		attempted = append(attempted, code)
+		if code == "" {
+			return model.EmbyFileObj{}, errors.New("invalid code")
+		}
+		return model.EmbyFileObj{}, nil
+	}
 	driver := FC2{Storage: model.Storage{ID: 70}}
 
 	films, err := driver.getFilms("actor", func(index int) string { return "page" })
@@ -158,15 +170,22 @@ func TestFC2DiscoverySkipsTombstonesAndContinuesAfterBadItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(films) != 1 || films[0].Code != "FC2-PPV-701" {
-		t.Fatalf("discovered films = %+v", films)
+	if len(films) != 0 {
+		t.Fatalf("discovery list should be refresh-only: %+v", films)
+	}
+	if len(attempted) != 2 || attempted[0] != "" || attempted[1] != "FC2-PPV-701" {
+		t.Fatalf("addStar attempts = %#v", attempted)
 	}
 }
 
 func TestFC2DiscoveryRetainsAccumulatedIDsAfterPageFailure(t *testing.T) {
 	resetFC2DiscoveryTables(t)
 	oldFetch := fetchFC2DailyPageFilms
-	t.Cleanup(func() { fetchFC2DailyPageFilms = oldFetch })
+	oldAddStar := addFC2Star
+	t.Cleanup(func() {
+		fetchFC2DailyPageFilms = oldFetch
+		addFC2Star = oldAddStar
+	})
 	page := 0
 	fetchFC2DailyPageFilms = func(*FC2, string) ([]string, error) {
 		page++
@@ -175,6 +194,11 @@ func TestFC2DiscoveryRetainsAccumulatedIDsAfterPageFailure(t *testing.T) {
 		}
 		return nil, errors.New("page unavailable")
 	}
+	var attempted []string
+	addFC2Star = func(_ *FC2, code string, _ []string) (model.EmbyFileObj, error) {
+		attempted = append(attempted, code)
+		return model.EmbyFileObj{}, nil
+	}
 	driver := FC2{Storage: model.Storage{ID: 70}}
 
 	films, err := driver.getFilms("actor", func(index int) string { return "page" })
@@ -182,8 +206,11 @@ func TestFC2DiscoveryRetainsAccumulatedIDsAfterPageFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(films) != 1 || films[0].Code != "FC2-PPV-702" {
-		t.Fatalf("films after page failure = %+v", films)
+	if len(films) != 0 {
+		t.Fatalf("discovery list should be refresh-only after page failure: %+v", films)
+	}
+	if len(attempted) != 1 || attempted[0] != "FC2-PPV-702" {
+		t.Fatalf("addStar attempts after page failure = %#v", attempted)
 	}
 }
 
