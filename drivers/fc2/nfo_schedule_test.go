@@ -13,11 +13,11 @@ import (
 func TestFC2NFOFlagsPreferForcedRefreshWhenBothEnabled(t *testing.T) {
 	oldSync := syncFC2MediaNFOs
 	t.Cleanup(func() { syncFC2MediaNFOs = oldSync })
-	var forces []bool
-	syncFC2MediaNFOs = func(storageID uint, source string, force bool) error {
+	var options []virtual_file.MediaNFOSyncOptions
+	syncFC2MediaNFOs = func(storageID uint, source string, option virtual_file.MediaNFOSyncOptions) error {
 		require.Equal(t, uint(81), storageID)
 		require.Equal(t, "fc2", source)
-		forces = append(forces, force)
+		options = append(options, option)
 		return nil
 	}
 
@@ -26,7 +26,7 @@ func TestFC2NFOFlagsPreferForcedRefreshWhenBothEnabled(t *testing.T) {
 	err := driver.syncConfiguredNFOs()
 
 	require.NoError(t, err)
-	require.Equal(t, []bool{true}, forces)
+	require.Equal(t, []virtual_file.MediaNFOSyncOptions{{Force: true, IncludeCode: true}}, options)
 }
 
 func TestFC2ScheduledArtifactScanPublishesPersistedImage(t *testing.T) {
