@@ -68,7 +68,7 @@ func (d *FC2) scanMediaSampleImages() {
 	utils.Log.Info("start scanning FC2 sample images")
 	defer utils.Log.Info("finish scanning FC2 sample images")
 
-	works, err := db.QuerySampleImageMediaWorks("fc2", 72*time.Hour, 20)
+	works, err := db.QueryGeneratedSampleImageMediaWorks("fc2", 72*time.Hour, 20)
 	if err != nil {
 		utils.Log.Warnf("failed to query FC2 sample works: %s", err)
 		return
