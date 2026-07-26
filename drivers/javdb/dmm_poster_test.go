@@ -2,6 +2,7 @@ package javdb
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -9,6 +10,9 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	"github.com/go-resty/resty/v2"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDMMPosterCIDAndCandidateOrder(t *testing.T) {
@@ -66,6 +70,42 @@ func TestCropDMMMonoPoster(t *testing.T) {
 	if format != "jpeg" || croppedImage.Bounds().Dx() != 380 || croppedImage.Bounds().Dy() != 541 {
 		t.Fatalf("cropped image = %s %dx%d", format, croppedImage.Bounds().Dx(), croppedImage.Bounds().Dy())
 	}
+}
+
+func TestDownloadDMMMonoPosterTreatsNoImageRedirectAsDefinitiveMiss(t *testing.T) {
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, "https://pics.dmm.com/mono/noimage/movie/adult_pl.jpg", http.StatusFound)
+	}))
+	defer server.Close()
+	driver := newMediaJobDriver(t, server)
+	driver.client.SetRedirectPolicy(resty.NoRedirectPolicy())
+
+	// When
+	content, definitiveMiss, err := driver.downloadDMMMonoPoster(context.Background(), "https://pics.dmm.co.jp/mono/movie/adult/1suke089/1suke089pl.jpg")
+
+	// Then
+	require.Error(t, err)
+	require.Empty(t, content)
+	require.True(t, definitiveMiss)
+}
+
+func TestDownloadDMMMonoPosterTreatsOtherRedirectAsTransientError(t *testing.T) {
+	// Given
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, "https://pics.dmm.com/mono/movie/adult/other.jpg", http.StatusFound)
+	}))
+	defer server.Close()
+	driver := newMediaJobDriver(t, server)
+	driver.client.SetRedirectPolicy(resty.NoRedirectPolicy())
+
+	// When
+	content, definitiveMiss, err := driver.downloadDMMMonoPoster(context.Background(), "https://pics.dmm.co.jp/mono/movie/adult/1suke089/1suke089pl.jpg")
+
+	// Then
+	require.Error(t, err)
+	require.Empty(t, content)
+	require.False(t, definitiveMiss)
 }
 
 func segmentedCompositeJPEG(t *testing.T, height int) []byte {

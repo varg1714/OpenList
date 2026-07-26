@@ -12,6 +12,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -65,6 +66,14 @@ func dmmMonoPosterCandidates(cid string) []string {
 	}
 }
 
+func isDMMNoImageRedirect(response *http.Response) bool {
+	if response == nil || response.StatusCode < http.StatusMultipleChoices || response.StatusCode >= http.StatusBadRequest {
+		return false
+	}
+	location, err := url.Parse(response.Header.Get("Location"))
+	return err == nil && location.Scheme == "https" && location.Host == "pics.dmm.com" && location.Path == "/mono/noimage/movie/adult_pl.jpg"
+}
+
 func cropDMMMonoPoster(content []byte) ([]byte, error) {
 	if len(content) < minDMMMonoPosterBytes {
 		return nil, fmt.Errorf("%w: response is too small: %d bytes", errDMMMonoPosterUnusable, len(content))
@@ -102,6 +111,9 @@ func (d *Javdb) downloadDMMPoster(ctx context.Context, candidate string) ([]byte
 	}
 	response, err := client.R().SetContext(ctx).SetDoNotParseResponse(true).Get(candidate)
 	if err != nil {
+		if response != nil && isDMMNoImageRedirect(response.RawResponse) {
+			return nil, true, err
+		}
 		return nil, false, err
 	}
 	body := response.RawBody()
@@ -143,6 +155,9 @@ func (d *Javdb) downloadDMMMonoPoster(ctx context.Context, candidate string) ([]
 	}
 	response, err := client.R().SetContext(ctx).SetDoNotParseResponse(true).Get(candidate)
 	if err != nil {
+		if response != nil && isDMMNoImageRedirect(response.RawResponse) {
+			return nil, true, err
+		}
 		return nil, false, err
 	}
 	body := response.RawBody()
