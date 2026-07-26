@@ -6,10 +6,10 @@ var syncJavdbMediaNFOs = virtual_file.SyncMediaNFOs
 
 func (d *Javdb) syncConfiguredNFOs() error {
 	if d.RefreshNfo {
-		return syncJavdbMediaNFOs(d.ID, DriverName, true)
+		return syncJavdbMediaNFOs(d.ID, DriverName, virtual_file.MediaNFOSyncOptions{Force: true, IncludeCode: true})
 	}
 	if d.SyncNfo {
-		return syncJavdbMediaNFOs(d.ID, DriverName, false)
+		return syncJavdbMediaNFOs(d.ID, DriverName, virtual_file.MediaNFOSyncOptions{IncludeCode: true})
 	}
 	return nil
 }
