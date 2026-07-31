@@ -19,7 +19,7 @@ type Addition struct {
 	driver.RootID
 }
 
-var defaultLinkParsePattern = `^https://115\.com/s/(?<shareId>[a-zA-Z0-9]+).*?(?:password=(?<sharePwd>[^&]+))?`
+var defaultLinkParsePattern = `^https://115(?:cdn)?\.com/s/(?<shareId>[a-zA-Z0-9]+)(?:\?(?:.*&)?password=(?<sharePwd>[^&]+))?`
 
 var config = driver.Config{
 	Name:        "115 Share",
