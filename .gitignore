@@ -34,3 +34,6 @@ alist
 
 .VSCodeCounter
 .gitnexus
+
+# local opencode config
+opencode.jsonc
