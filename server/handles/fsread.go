@@ -54,14 +54,15 @@ type ObjResp struct {
 }
 
 type FsListResp struct {
-	Content           []ObjResp     `json:"content"`
-	Total             int64         `json:"total"`
-	Readme            string        `json:"readme"`
-	Header            string        `json:"header"`
-	Write             bool          `json:"write"`
-	Provider          string        `json:"provider"`
-	DirectUploadTools []string      `json:"direct_upload_tools,omitempty"`
-	MkdirConfig       []driver.Item `json:"mkdir_config,omitempty"`
+	Content           []ObjResp               `json:"content"`
+	Total             int64                   `json:"total"`
+	Readme            string                  `json:"readme"`
+	Header            string                  `json:"header"`
+	Write             bool                    `json:"write"`
+	Provider          string                  `json:"provider"`
+	DirectUploadTools []string                `json:"direct_upload_tools,omitempty"`
+	MkdirConfig       []driver.Item           `json:"mkdir_config,omitempty"`
+	LinkParse         *driver.LinkParseConfig `json:"link_parse,omitempty"`
 }
 
 func FsListSplit(c *gin.Context) {
@@ -118,10 +119,12 @@ func FsList(c *gin.Context, req *ListReq, user *model.User) {
 	provider := "unknown"
 	var directUploadTools []string
 	var mkdirConfig []driver.Item
+	var linkParse *driver.LinkParseConfig
 	if user.CanWrite() {
 		if storage, err := fs.GetStorage(reqPath, &fs.GetStoragesArgs{}); err == nil {
 			directUploadTools = op.GetDirectUploadTools(storage)
 			provider = storage.Config().Name
+			linkParse = storage.Config().LinkParse
 			if config, ok := storage.(driver.MkdirConfig); ok {
 				mkdirConfig = config.MkdirConfig()
 			}
@@ -136,6 +139,7 @@ func FsList(c *gin.Context, req *ListReq, user *model.User) {
 		Provider:          provider,
 		DirectUploadTools: directUploadTools,
 		MkdirConfig:       mkdirConfig,
+		LinkParse:         linkParse,
 	})
 }
 

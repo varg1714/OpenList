@@ -1,0 +1,22 @@
+[     135ms] [LOG] [SSE] Connected @ http://127.0.0.1:37701/viewer-bundle.js:13
+[     135ms] [LOG] [SSE] Initial load: {projects: 2} @ http://127.0.0.1:37701/viewer-bundle.js:13
+[     135ms] [LOG] [SSE] Processing status: false Queue depth: 0 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[    2543ms] [LOG] [SSE] Processing status: true Queue depth: 1 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[    2543ms] [LOG] [SSE] Processing status: true Queue depth: 1 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[    3043ms] [LOG] [SSE] Processing status: true Queue depth: 1 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[    3043ms] [LOG] [SSE] Processing status: true Queue depth: 1 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17286ms] [LOG] [SSE] Processing status: true Queue depth: 1 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17326ms] [LOG] [SSE] Processing status: true Queue depth: 2 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17373ms] [LOG] [SSE] Processing status: true Queue depth: 3 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17373ms] [LOG] [SSE] Processing status: true Queue depth: 4 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17373ms] [LOG] [SSE] Processing status: true Queue depth: 4 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17373ms] [LOG] [SSE] Processing status: true Queue depth: 4 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17373ms] [LOG] [SSE] Processing status: true Queue depth: 4 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17373ms] [LOG] [SSE] Processing status: true Queue depth: 4 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17392ms] [LOG] [SSE] Processing status: true Queue depth: 5 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   17392ms] [LOG] [SSE] Processing status: true Queue depth: 5 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   18007ms] [LOG] [SSE] Processing status: true Queue depth: 4 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   18007ms] [LOG] [SSE] Processing status: true Queue depth: 3 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   18007ms] [LOG] [SSE] Processing status: true Queue depth: 2 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   18007ms] [LOG] [SSE] Processing status: true Queue depth: 1 @ http://127.0.0.1:37701/viewer-bundle.js:13
+[   18007ms] [LOG] [SSE] Processing status: false Queue depth: 0 @ http://127.0.0.1:37701/viewer-bundle.js:13

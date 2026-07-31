@@ -26,10 +26,6 @@ type Pan115Share struct {
 	limiter *rate.Limiter
 }
 
-func (d *Pan115Share) Config() driver.Config {
-	return config
-}
-
 func (d *Pan115Share) GetAddition() driver.Additional {
 	return &d.Addition
 }

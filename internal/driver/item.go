@@ -21,6 +21,10 @@ type VisibilityCondition struct {
 	Value any    `json:"value"`
 }
 
+type LinkParseConfig struct {
+	Pattern string `json:"pattern"`
+}
+
 type Info struct {
 	Common     []Item `json:"common"`
 	Additional []Item `json:"additional"`

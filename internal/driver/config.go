@@ -24,6 +24,8 @@ type Config struct {
 	LinkCacheMode `json:"-"`
 	// if the driver only store indices of files (e.g. UrlTree)
 	OnlyIndices bool `json:"only_indices"`
+	// LinkParse config for parsing share links in the frontend
+	LinkParse *LinkParseConfig `json:"link_parse,omitempty"`
 }
 type LinkCacheMode int8
 

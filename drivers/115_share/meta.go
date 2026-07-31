@@ -15,13 +15,25 @@ type Addition struct {
 	ReceiveCode  string  `json:"receive_code" type:"text" required:"true" help:"receive code of 115 share link"`
 	CID          string  `json:"cid" type:"text" required:"true" help:"transfer target folder id"`
 	DriverPath   string  `json:"115DriverPath" type:"text" required:"true" help:"115 driver path for link"`
+	LinkParse    string  `json:"link_parse" type:"text" help:"regex to parse share link, named capture group names must match field names, e.g. (?<shareId>...)(?<sharePwd>...)"`
 	driver.RootID
 }
+
+var defaultLinkParsePattern = `^https://115\.com/s/(?<shareId>[a-zA-Z0-9]+).*?(?:password=(?<sharePwd>[^&]+))?`
 
 var config = driver.Config{
 	Name:        "115 Share",
 	DefaultRoot: "0",
 	NoUpload:    true,
+	LinkParse:   &driver.LinkParseConfig{Pattern: defaultLinkParsePattern},
+}
+
+func (d *Pan115Share) Config() driver.Config {
+	cfg := config
+	if d.Addition.LinkParse != "" {
+		cfg.LinkParse = &driver.LinkParseConfig{Pattern: d.Addition.LinkParse}
+	}
+	return cfg
 }
 
 func init() {
