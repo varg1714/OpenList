@@ -37,3 +37,6 @@ alist
 
 # local opencode config
 opencode.jsonc
+
+# local codegraph index
+.codegraph/
