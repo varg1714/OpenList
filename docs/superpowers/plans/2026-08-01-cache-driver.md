@@ -1182,7 +1182,7 @@ func TestSyncAllSkipsFresh(t *testing.T) {
 	}
 }
 
-func TestSyncAllDeletesRowOnFailure(t *testing.T) {
+func TestSyncAllKeepsRowOnFailure(t *testing.T) {
 	d := setup(t)
 	_, _ = d.List(context.Background(), rootDir(), model.ListArgs{})
 	_ = os.RemoveAll(mustRootPath(d))
@@ -1191,6 +1191,7 @@ func TestSyncAllDeletesRowOnFailure(t *testing.T) {
 	if err != nil || item == nil {
 		t.Fatalf("get cache row: %v %v", item, err)
 	}
+	oldData := item.Data
 	if err := db.GetDb().Model(&model.CacheList{}).Where("id = ?", item.ID).Update("updated_at", time.Now().Add(-48*time.Hour)).Error; err != nil {
 		t.Fatalf("age row: %v", err)
 	}
@@ -1198,15 +1199,18 @@ func TestSyncAllDeletesRowOnFailure(t *testing.T) {
 	d.syncAll()
 
 	row, err := GetCacheList(d.ID, "/")
-	if err != nil || row != nil {
-		t.Errorf("expected row deleted after sync failure, got %v %v", row, err)
+	if err != nil || row == nil {
+		t.Fatalf("expected row kept after sync failure, got %v %v", row, err)
+	}
+	if len(row.Data) != len(oldData) {
+		t.Errorf("expected stale data kept unchanged, got %d entries, want %d", len(row.Data), len(oldData))
 	}
 }
 ```
 
 注意（实施期已实证的修正，最终版以本代码块为准）：
 - `sync_test.go` 为 `package cache` **内部测试包**（否则无法调用未导出的 `d.syncAll`；Go 禁止外部测试包引用未导出方法），init/setup/helpers 自包含，不得与同包测试文件函数重名；`setup` 内用同包 `GetCacheList`（无 `db.` 前缀）；`mustRootPath` 返回 Local 的 `root_folder_path` 即 tmp
-- `TestSyncAllDeletesRowOnFailure` 触发方式：`os.RemoveAll(mustRootPath(d))` 删除下游文件系统使 `op.List` 失败（**不要**用 `op.DeleteStorageById`——它会让 `GetStorageAndActualPath` 先失败走 continue 分支，测不到删行逻辑）
+- `TestSyncAllKeepsRowOnFailure` 触发方式：`os.RemoveAll(mustRootPath(d))` 删除下游文件系统使 `op.List` 失败（**不要**用 `op.DeleteStorageById`——它会让 `GetStorageAndActualPath` 先失败走 continue 分支）；断言：行保留且数据不变（stale）
 - `op.DeleteStorageById(ctx, id)` 签名带 ctx 参数
 
 ```go
@@ -1268,10 +1272,8 @@ func (d *Cache) syncAll() {
 		}
 		objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), model.ListArgs{})
 		if err != nil {
-			log.Errorf("cache: sync %s: %+v, drop row", dirPath, err)
-			if err := DeleteCacheList(d.ID, dirPath); err != nil {
-				log.Errorf("cache: sync delete row %s: %+v", dirPath, err)
-			}
+			// 保留既有缓存行：下游错误可能是暂时性故障（超时/5xx），删行会导致浏览 miss 回源雪崩
+			log.Errorf("cache: sync %s: %+v, keep stale row", dirPath, err)
 			continue
 		}
 		snaps := make([]model.CachedObj, 0, len(objs))

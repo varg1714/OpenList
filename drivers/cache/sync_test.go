@@ -157,7 +157,7 @@ func TestSyncAllSkipsFresh(t *testing.T) {
 	}
 }
 
-func TestSyncAllDeletesRowOnFailure(t *testing.T) {
+func TestSyncAllKeepsRowOnFailure(t *testing.T) {
 	d := setup(t)
 	_, _ = d.List(context.Background(), rootDir(), model.ListArgs{})
 	_ = os.RemoveAll(mustRootPath(d))
@@ -166,6 +166,7 @@ func TestSyncAllDeletesRowOnFailure(t *testing.T) {
 	if err != nil || item == nil {
 		t.Fatalf("get cache row: %v %v", item, err)
 	}
+	oldData := item.Data
 	if err := db.GetDb().Model(&model.CacheList{}).Where("id = ?", item.ID).Update("updated_at", time.Now().Add(-48*time.Hour)).Error; err != nil {
 		t.Fatalf("age row: %v", err)
 	}
@@ -173,7 +174,10 @@ func TestSyncAllDeletesRowOnFailure(t *testing.T) {
 	d.syncAll()
 
 	row, err := GetCacheList(d.ID, "/")
-	if err != nil || row != nil {
-		t.Errorf("expected row deleted after sync failure, got %v %v", row, err)
+	if err != nil || row == nil {
+		t.Fatalf("expected row kept after sync failure, got %v %v", row, err)
+	}
+	if len(row.Data) != len(oldData) {
+		t.Errorf("expected stale data kept unchanged, got %d entries, want %d", len(row.Data), len(oldData))
 	}
 }

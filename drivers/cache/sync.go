@@ -56,10 +56,9 @@ func (d *Cache) syncAll() {
 		}
 		objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), model.ListArgs{})
 		if err != nil {
-			log.Errorf("cache: sync %s: %+v, drop row", dirPath, err)
-			if err := DeleteCacheList(d.ID, dirPath); err != nil {
-				log.Errorf("cache: sync delete row %s: %+v", dirPath, err)
-			}
+			// 保留既有缓存行，不删除：下游错误可能是暂时性故障（超时/5xx），
+			// 删行会导致浏览 miss 回源雪崩；待日志足够后按错误细节决定保留/删除策略
+			log.Errorf("cache: sync %s: %+v, keep stale row", dirPath, err)
 			continue
 		}
 		snaps := make([]model.CachedObj, 0, len(objs))
