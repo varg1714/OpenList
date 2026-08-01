@@ -14,12 +14,13 @@ import (
 
 type fc2TestMagnet struct {
 	uri      string
+	name     string
 	files    []av.File
 	subtitle bool
 }
 
 func (m fc2TestMagnet) GetMagnet() string         { return m.uri }
-func (m fc2TestMagnet) GetName() string           { return "test" }
+func (m fc2TestMagnet) GetName() string           { return m.name }
 func (m fc2TestMagnet) GetSize() uint64           { return 0 }
 func (m fc2TestMagnet) IsSubTitle() bool          { return m.subtitle }
 func (m fc2TestMagnet) GetTags() []string         { return nil }

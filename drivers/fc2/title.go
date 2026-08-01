@@ -15,3 +15,13 @@ func magnetDisplayTitle(raw string) string {
 		return title
 	}
 }
+
+func stripFC2CodePrefix(code, title string) string {
+	lowerTitle := strings.ToLower(strings.TrimSpace(title))
+	lowerCode := strings.ToLower(code)
+	if !strings.HasPrefix(lowerTitle, lowerCode) {
+		return title
+	}
+	rest := strings.TrimSpace(title[len(code):])
+	return strings.TrimLeft(rest, "-_. ")
+}

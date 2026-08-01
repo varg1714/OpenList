@@ -10,7 +10,6 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
-	"github.com/OpenListTeam/OpenList/v4/internal/av"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/open_ai"
@@ -26,6 +25,13 @@ var magnetUrl, _ = regexp.Compile(".*<a href=\"(.*)\" class=\".*\"><i class=\".*
 var actorUrlsRegexp, _ = regexp.Compile(".*/article_search.php\\?id=(.*)")
 
 var dateRegexp, _ = regexp.Compile("\\d{4}-\\d{2}-\\d{2}")
+
+var (
+	translateFC2Title = open_ai.Translate
+	fetchFC2DailyFilm = func(d *FC2, fc2Id string) (model.EmbyFileObj, error) {
+		return d.getFc2DailyFilm(fc2Id)
+	}
+)
 
 func (d *FC2) findMagnet(url string) (string, error) {
 
@@ -140,13 +146,13 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	}
 
 	// 2. get magnet from suke
-	sukeMeta, err := av.GetMetaFromSuke(fc2Id)
+	sukeMeta, err := getFC2SukeMeta(fc2Id)
 	if err != nil {
 		utils.Log.Warn("failed to get the magnet info from suke:", err.Error())
 		return model.EmbyFileObj{}, err
 	} else if len(sukeMeta.Magnets) == 0 || sukeMeta.Magnets[0].GetMagnet() == "" {
 
-		sukeMeta, err = av.GetMetaFromSuke(code)
+		sukeMeta, err = getFC2SukeMeta(code)
 		if err == nil && len(sukeMeta.Magnets) > 0 {
 			fc2Id, err = model.NormalizeMediaCode("fc2", code)
 			if err != nil {
@@ -159,11 +165,12 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	}
 
 	// 3. translate film name
-	title := open_ai.Translate(magnetDisplayTitle(sukeMeta.Magnets[0].GetName()))
+	rawTitle := magnetDisplayTitle(stripFC2CodePrefix(fc2Id, sukeMeta.Magnets[0].GetName()))
+	title := translateFC2Title(rawTitle)
 	// 4. save film info
 
 	// 4.1 get film thumbnail
-	ppvFilmInfo, err := d.getFc2DailyFilm(fc2Id)
+	ppvFilmInfo, err := fetchFC2DailyFilm(d, fc2Id)
 	if err == nil {
 		if len(ppvFilmInfo.Actors) == 0 {
 			ppvFilmInfo.Actors = append(ppvFilmInfo.Actors, "个人收藏")
@@ -174,7 +181,7 @@ func (d *FC2) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 		ppvFilmInfo.ReleaseTime = time.Now()
 	}
 	fileCount := max(1, len(sukeMeta.Magnets[0].GetFiles()))
-	work, err := buildDiscoveredWork(d.ID, "个人收藏", fc2Id, fc2Id, title, ppvFilmInfo.Thumb())
+	work, err := buildDiscoveredWork(d.ID, "个人收藏", fc2Id, fc2Id, rawTitle, ppvFilmInfo.Thumb())
 	if err != nil {
 		return model.EmbyFileObj{}, err
 	}
