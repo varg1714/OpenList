@@ -1263,12 +1263,15 @@ func (d *Cache) syncAll() {
 		queue = queue[1:]
 		remoteStorage, remoteActualPath, err := op.GetStorageAndActualPath(d.RemotePath)
 		if err != nil {
+			log.Errorf("cache: sync resolve remote %s: %+v", d.RemotePath, err)
 			continue
 		}
 		objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), model.ListArgs{})
 		if err != nil {
 			log.Errorf("cache: sync %s: %+v, drop row", dirPath, err)
-			_ = DeleteCacheList(d.ID, dirPath)
+			if err := DeleteCacheList(d.ID, dirPath); err != nil {
+				log.Errorf("cache: sync delete row %s: %+v", dirPath, err)
+			}
 			continue
 		}
 		snaps := make([]model.CachedObj, 0, len(objs))
