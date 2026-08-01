@@ -339,7 +339,7 @@ func fromCachedObj(c model.CachedObj) model.Obj {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `/Library/Go/sdk/go1.25.4/bin/go test ./drivers/cache/ -run 'TestToCachedObj|TestFromCachedObj|TestMarshal|TestUnmarshal' -v`
+Run: `/Library/Go/sdk/go1.25.4/bin/go test ./drivers/cache/ -run 'TestToCachedObj|TestFromCachedObj|TestHashRoundTrip|TestSpecialCharsName' -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
