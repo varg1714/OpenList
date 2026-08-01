@@ -580,9 +580,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/local"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"gorm.io/driver/sqlite"
@@ -604,21 +607,29 @@ func setup(t *testing.T) *cache.Cache {
 	_ = os.MkdirAll(filepath.Join(tmp, "sub"), 0o755)
 	_ = os.WriteFile(filepath.Join(tmp, "a.txt"), []byte("hello"), 0o644)
 	_ = os.WriteFile(filepath.Join(tmp, "sub", "b.txt"), []byte("world"), 0o644)
-	_, err := op.CreateStorage(context.Background(), model.Storage{
-		Driver:   "Local",
+	localID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Local",
 		MountPath: "/local",
-		Addition: fmt.Sprintf(`{"root_folder_path":%q}`, tmp),
+		Addition:  fmt.Sprintf(`{"root_folder_path":%q}`, tmp),
 	})
 	if err != nil {
 		t.Fatalf("create local storage: %+v", err)
 	}
-	d, err := op.CreateStorage(context.Background(), model.Storage{
-		Driver:   "Cache",
+	cacheID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
 		MountPath: "/cache",
-		Addition: `{"remote_path":"/local","ttl_hours":24,"sync_interval_hours":0}`,
+		Addition:  `{"remote_path":"/local","ttl_hours":24,"sync_interval_hours":0}`,
 	})
 	if err != nil {
 		t.Fatalf("create cache storage: %+v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.DeleteStorageById(context.Background(), localID)
+		_ = op.DeleteStorageById(context.Background(), cacheID)
+	})
+	d, err := op.GetStorageByMountPath("/cache")
+	if err != nil {
+		t.Fatalf("get cache storage: %+v", err)
 	}
 	return d.(*cache.Cache)
 }
@@ -644,7 +655,7 @@ func TestListMissFillsCache(t *testing.T) {
 	if len(objs) != 2 {
 		t.Fatalf("expected 2 objs, got %d", len(objs))
 	}
-	item, err := db.GetCacheList(d.ID, "/")
+	item, err := cache.GetCacheList(d.ID, "/")
 	if err != nil || item == nil {
 		t.Fatalf("expected cache row, got %v %v", item, err)
 	}
@@ -693,7 +704,7 @@ func TestListRefresh(t *testing.T) {
 		t.Errorf("expected new.txt after refresh, got %v", names(objs))
 	}
 	_ = os.Remove(filepath.Join(root, "a.txt"))
-	objs, err = d.List(context.Background(), rootDir(), model.ListArgs{})
+	objs, err = d.List(context.Background(), rootDir(), model.ListArgs{Refresh: true})
 	if err != nil {
 		t.Fatalf("list after refresh: %+v", err)
 	}
@@ -744,8 +755,8 @@ func TestLinkForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("link: %+v", err)
 	}
-	if l.URL == "" {
-		t.Errorf("expected link url, got empty")
+	if l.RangeReader == nil {
+		t.Errorf("expected range reader, got %+v", l)
 	}
 }
 
@@ -768,11 +779,14 @@ func contains(list []string, s string) bool {
 }
 
 func mustRootPath(d *cache.Cache) string {
-	_, actual, err := op.GetStorageAndActualPath(d.RemotePath)
+	storage, _, err := op.GetStorageAndActualPath(d.RemotePath)
 	if err != nil {
 		panic(err)
 	}
-	return actual
+	if r, ok := storage.(driver.IRootPath); ok {
+		return r.GetRootPath()
+	}
+	panic("downstream storage does not expose a root path")
 }
 
 func mustLocalStorageID(d *cache.Cache) uint {
@@ -784,18 +798,14 @@ func mustLocalStorageID(d *cache.Cache) uint {
 }
 ```
 
-注意：
-- `mustRootPath(d)` 返回下游实际根路径（Local 的 `root_folder_path`），文件操作直接基于它
-- 测试文件需注册 `Local` 驱动：**测试文件顶部追加** `_ "github.com/OpenListTeam/OpenList/v4/drivers/local"`。cache 驱动自身通过 `"github.com/OpenListTeam/OpenList/v4/drivers/cache"` 导入触发注册。
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `/Library/Go/sdk/go1.25.4/bin/go test ./drivers/cache/ -run 'TestList|TestGet|TestLink' -v`
-Expected: FAIL — 编译错误 `undefined: cache.Cache`（driver.go 不存在）
-
-- [ ] **Step 3: Write minimal implementation**
-
-`drivers/cache/meta.go`：
+注意（实施期已实证的修正，最终版以本代码块为准）：
+- `op.CreateStorage` 返回 `(uint, error)`；用 `op.GetStorageByMountPath("/cache")` 取驱动实例
+- `db.GetCacheList` 不存在，用 `cache.GetCacheList`
+- 共享内存 DB + mount_path UNIQUE：setup 用 `t.Cleanup` 删除本测试创建的 storage
+- `op.GetStorageAndActualPath` 返回剥离 mount 前缀的相对路径（"/"），非 root_folder_path；`mustRootPath` 用 `driver.IRootPath.GetRootPath()` 取 Local 真实根目录
+- Local 驱动 Link 返回 RangeReader 型链接（无 URL），断言 `l.RangeReader != nil`
+- TestListRefresh 末段断言与实现矛盾，末次 List 改用 `Refresh: true`
+- plan 编排：driver.go 引用 `d.syncAll`（Task 5 交付物），Task 4 提交树处于该编译错误状态属预期，Task 5 落地后回归全量测试
 
 ```go
 package cache
@@ -1104,7 +1114,9 @@ func TestSyncAllDeletesRowOnFailure(t *testing.T) {
 }
 ```
 
-注意：`TestSyncAllDeletesRowOnFailure` 需要 import `op`（已在 driver_test.go 中，但 sync_test.go 独立文件需自行 import `"github.com/OpenListTeam/OpenList/v4/internal/op"`）。
+注意：
+- `TestSyncAllDeletesRowOnFailure` 需要 import `op`（已在 driver_test.go 中，但 sync_test.go 独立文件需自行 import `"github.com/OpenListTeam/OpenList/v4/internal/op"`）
+- helper（`setup`/`rootDir`/`names`/`contains`/`mustRootPath`/`mustLocalStorageID`）与 driver_test.go 同包共享，最终版以 Task 4 代码块为准；`mustRootPath` 返回 Local 的 `root_folder_path`（tmp），文件操作直接基于它
 
 - [ ] **Step 2: Run test to verify it fails**
 
