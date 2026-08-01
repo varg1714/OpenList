@@ -70,35 +70,57 @@ func (d *Cache) syncAll() {
 		log.Errorf("cache: list rows: %+v", err)
 		return
 	}
-	if len(rows) == 0 {
+	remoteStorage, remoteActualPath, err := op.GetStorageAndActualPath(d.RemotePath)
+	if err != nil {
+		log.Errorf("cache: sync resolve remote %s: %+v", d.RemotePath, err)
 		return
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return dirDepth(rows[i].DirPath) < dirDepth(rows[j].DirPath)
-	})
 	ttl := time.Duration(d.TTLHours) * time.Hour
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
 	}
+	entries, whitelisted := d.syncPathEntries(remoteActualPath)
+	rowsByDir := make(map[string]model.CacheList, len(rows))
 	known := make(map[string]bool, len(rows)*2)
 	for i := range rows {
+		rowsByDir[rows[i].DirPath] = rows[i]
 		known[rows[i].DirPath] = true
 	}
+	stale := func(dirPath string) bool {
+		return time.Since(rowsByDir[dirPath].UpdatedAt) >= ttl
+	}
 	queue := make([]string, 0)
-	for i := range rows {
-		if time.Since(rows[i].UpdatedAt) >= ttl {
-			queue = append(queue, rows[i].DirPath)
+	if !whitelisted {
+		for i := range rows {
+			if stale(rows[i].DirPath) {
+				queue = append(queue, rows[i].DirPath)
+			}
+		}
+	} else {
+		for i := range rows {
+			if withinSyncPaths(rows[i].DirPath, entries) && stale(rows[i].DirPath) {
+				queue = append(queue, rows[i].DirPath)
+			}
+		}
+		for _, e := range entries {
+			if row, ok := rowsByDir[e]; !ok || time.Since(row.UpdatedAt) >= ttl {
+				if !known[e] {
+					known[e] = true
+					queue = append(queue, e)
+				}
+			}
 		}
 	}
+	if len(queue) == 0 {
+		return
+	}
+	sort.Slice(queue, func(i, j int) bool {
+		return dirDepth(queue[i]) < dirDepth(queue[j])
+	})
 	ctx := context.Background()
 	for len(queue) > 0 {
 		dirPath := queue[0]
 		queue = queue[1:]
-		remoteStorage, remoteActualPath, err := op.GetStorageAndActualPath(d.RemotePath)
-		if err != nil {
-			log.Errorf("cache: sync resolve remote %s: %+v", d.RemotePath, err)
-			continue
-		}
 		objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), model.ListArgs{})
 		if err != nil {
 			// 保留既有缓存行，不删除：下游错误可能是暂时性故障（超时/5xx），
@@ -116,7 +138,7 @@ func (d *Cache) syncAll() {
 		for i := range snaps {
 			if snaps[i].IsFolder {
 				child := stdpath.Join(dirPath, snaps[i].Name)
-				if !known[child] {
+				if !known[child] && (!whitelisted || withinSyncPaths(child, entries)) {
 					known[child] = true
 					queue = append(queue, child)
 				}

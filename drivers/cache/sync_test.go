@@ -253,4 +253,83 @@ func TestSyncPathEntries(t *testing.T) {
 	if !enabled || len(got) != 0 {
 		t.Errorf("entries outside actualPath must be ignored, got (%v, %v)", got, enabled)
 	}
+	// 非根 actualPath：条目去掉 actualPath 前缀转换为驱动相对坐标
+	d.SyncPaths = "/local/sub"
+	got, enabled = d.syncPathEntries("/local")
+	if !enabled || !slices.Equal(got, []string{"/sub"}) {
+		t.Errorf("non-root actualPath conversion = (%v, %v), want ([/sub], true)", got, enabled)
+	}
+}
+
+func TestSyncAllSeedsWhitelistedDirs(t *testing.T) {
+	d := setup(t)
+	d.SyncPaths = "/sub"
+	d.syncAll()
+
+	item, err := GetCacheList(d.ID, "/sub")
+	if err != nil || item == nil {
+		t.Fatalf("expected seeded /sub row, got %v %v", item, err)
+	}
+	if !contains(names(fromCachedObjs(item.Data)), "b.txt") {
+		t.Errorf("expected b.txt seeded, got %v", names(fromCachedObjs(item.Data)))
+	}
+	root, err := GetCacheList(d.ID, "/")
+	if err != nil || root != nil {
+		t.Errorf("expected no root row seeded, got %v %v", root, err)
+	}
+}
+
+func TestSyncAllWhitelistRefreshesDescendants(t *testing.T) {
+	d := setup(t)
+	root := mustRootPath(d)
+	_ = os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "sub", "deep", "e.txt"), []byte("e"), 0o644)
+	d.SyncPaths = "/sub"
+	d.syncAll()
+
+	deepRow, err := GetCacheList(d.ID, "/sub/deep")
+	if err != nil || deepRow == nil {
+		t.Fatalf("expected seeded descendant /sub/deep, got %v %v", deepRow, err)
+	}
+	if !contains(names(fromCachedObjs(deepRow.Data)), "e.txt") {
+		t.Errorf("expected e.txt in /sub/deep, got %v", names(fromCachedObjs(deepRow.Data)))
+	}
+}
+
+func TestSyncAllSkipsNonWhitelistedRows(t *testing.T) {
+	d := setup(t)
+	d.SyncPaths = "/sub"
+	_, _ = d.List(context.Background(), rootDir(), model.ListArgs{})
+	_, _ = d.List(context.Background(), &model.Object{Path: "/sub", Name: "sub", IsFolder: true}, model.ListArgs{})
+
+	root := mustRootPath(d)
+	_ = os.WriteFile(filepath.Join(root, "new.txt"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "sub", "c.txt"), []byte("z"), 0o644)
+	aged := time.Now().Add(-48 * time.Hour)
+	for _, p := range []string{"/", "/sub"} {
+		item, err := GetCacheList(d.ID, p)
+		if err != nil || item == nil {
+			t.Fatalf("get row %s: %v %v", p, item, err)
+		}
+		if err := db.GetDb().Model(&model.CacheList{}).Where("id = ?", item.ID).Update("updated_at", aged).Error; err != nil {
+			t.Fatalf("age row: %v", err)
+		}
+	}
+
+	d.syncAll()
+
+	rootRow, err := GetCacheList(d.ID, "/")
+	if err != nil {
+		t.Fatalf("get root row: %v", err)
+	}
+	if contains(names(fromCachedObjs(rootRow.Data)), "new.txt") {
+		t.Errorf("non-whitelisted row must not be refreshed")
+	}
+	subRow, err := GetCacheList(d.ID, "/sub")
+	if err != nil {
+		t.Fatalf("get sub row: %v", err)
+	}
+	if !contains(names(fromCachedObjs(subRow.Data)), "c.txt") {
+		t.Errorf("whitelisted row must be refreshed, got %v", names(fromCachedObjs(subRow.Data)))
+	}
 }

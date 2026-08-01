@@ -41,6 +41,11 @@ func (d *Cache) Init(ctx context.Context) error {
 	}
 	d.RemotePath = utils.FixAndCleanPath(d.RemotePath)
 	d.syncProxy()
+	if _, actualPath, err := op.GetStorageAndActualPath(d.RemotePath); err == nil {
+		d.syncPathEntries(actualPath)
+	} else {
+		log.Warnf("cache: resolve remote for sync paths %s: %+v", d.RemotePath, err)
+	}
 	if d.TTLHours <= 0 {
 		d.TTLHours = 24
 	}
