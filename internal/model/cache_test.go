@@ -24,7 +24,10 @@ func TestCacheListModel(t *testing.T) {
 	item := model.CacheList{
 		StorageID: 1,
 		DirPath:   "/dir",
-		Data:      `[{"name":"a.txt"}]`,
+		Data: []model.CachedObj{
+			{Name: "a.txt", Size: 10, HashInfo: map[string]string{"sha1": "abc"}},
+			{Name: "b", IsFolder: true, Thumbnail: "https://example.com/t.jpg"},
+		},
 		UpdatedAt: time.Now(),
 	}
 	if err := db.GetDb().Create(&item).Error; err != nil {
@@ -34,7 +37,13 @@ func TestCacheListModel(t *testing.T) {
 	if err := db.GetDb().Where("storage_id = ? AND dir_path = ?", 1, "/dir").First(&got).Error; err != nil {
 		t.Fatalf("failed to find: %+v", err)
 	}
-	if got.Data != item.Data {
-		t.Errorf("expected data %q, got %q", item.Data, got.Data)
+	if len(got.Data) != 2 {
+		t.Fatalf("expected 2 data entries, got %d", len(got.Data))
+	}
+	if got.Data[0].Name != "a.txt" || got.Data[0].HashInfo["sha1"] != "abc" {
+		t.Errorf("data[0] mismatch: %+v", got.Data[0])
+	}
+	if !got.Data[1].IsFolder || got.Data[1].Thumbnail != "https://example.com/t.jpg" {
+		t.Errorf("data[1] mismatch: %+v", got.Data[1])
 	}
 }

@@ -41,7 +41,7 @@ func TestToCachedObjWithThumb(t *testing.T) {
 }
 
 func TestFromCachedObjRoundTrip(t *testing.T) {
-	c := CachedObj{
+	c := model.CachedObj{
 		ID:        "id1",
 		Path:      "/dir/a.txt",
 		Name:      "a.txt",
@@ -49,7 +49,7 @@ func TestFromCachedObjRoundTrip(t *testing.T) {
 		Modified:  time.Unix(100, 0),
 		Ctime:     time.Unix(50, 0),
 		IsFolder:  false,
-		HashInfo:  utils.NewHashInfoByMap(map[*utils.HashType]string{utils.SHA1: "abc"}),
+		HashInfo:  map[string]string{"sha1": "abc"},
 		Thumbnail: "https://example.com/thumb.jpg",
 	}
 	obj := fromCachedObj(c)
@@ -68,7 +68,7 @@ func TestFromCachedObjRoundTrip(t *testing.T) {
 }
 
 func TestFromCachedObjNoThumb(t *testing.T) {
-	obj := fromCachedObj(CachedObj{Name: "x.txt", IsFolder: true})
+	obj := fromCachedObj(model.CachedObj{Name: "x.txt", IsFolder: true})
 	if _, ok := obj.(*model.Object); !ok {
 		t.Fatalf("expected *model.Object, got %T", obj)
 	}
@@ -77,48 +77,25 @@ func TestFromCachedObjNoThumb(t *testing.T) {
 	}
 }
 
-func TestMarshalUnmarshal(t *testing.T) {
-	snaps := []CachedObj{{Name: "a", Path: "/a"}, {Name: "b", IsFolder: true, Thumbnail: "t"}}
-	data, err := marshalObjs(snaps)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+func TestHashRoundTrip(t *testing.T) {
+	obj := &model.Object{
+		Name:     "h.txt",
+		HashInfo: utils.NewHashInfoByMap(map[*utils.HashType]string{utils.SHA1: "abc", utils.MD5: "def"}),
 	}
-	objs, err := unmarshalObjs(data)
-	if err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	c := toCachedObj("/", obj)
+	if c.HashInfo["sha1"] != "abc" || c.HashInfo["md5"] != "def" {
+		t.Errorf("hash not exported: %+v", c.HashInfo)
 	}
-	if len(objs) != 2 {
-		t.Fatalf("expected 2 objs, got %d", len(objs))
-	}
-	if objs[0].GetName() != "a" || !objs[1].IsDir() {
-		t.Errorf("bad unmarshal: %+v %+v", objs[0], objs[1])
+	obj2 := fromCachedObj(c)
+	if obj2.GetHash().GetHash(utils.SHA1) != "abc" || obj2.GetHash().GetHash(utils.MD5) != "def" {
+		t.Errorf("hash not restored: %s %s", obj2.GetHash().GetHash(utils.SHA1), obj2.GetHash().GetHash(utils.MD5))
 	}
 }
 
-func TestMarshalEmpty(t *testing.T) {
-	data, err := marshalObjs(nil)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	objs, err := unmarshalObjs(data)
-	if err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(objs) != 0 {
-		t.Errorf("expected 0 objs, got %d", len(objs))
-	}
-}
-
-func TestUnmarshalSpecialChars(t *testing.T) {
-	data, err := marshalObjs([]CachedObj{{Name: strings.Repeat("很", 50) + ".txt"}})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	objs, err := unmarshalObjs(data)
-	if err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if objs[0].GetName() != strings.Repeat("很", 50)+".txt" {
-		t.Errorf("special chars corrupted")
+func TestSpecialCharsName(t *testing.T) {
+	name := strings.Repeat("很", 50) + ".txt"
+	c := toCachedObj("/", &model.Object{Name: name})
+	if c.Name != name {
+		t.Errorf("special chars corrupted: %q", c.Name)
 	}
 }
