@@ -141,6 +141,39 @@ func TestSyncAllRefreshesExpired(t *testing.T) {
 	}
 }
 
+func TestSyncAllFullRefreshOnRootPath(t *testing.T) {
+	d := setup(t)
+	_, _ = d.List(context.Background(), rootDir(), model.ListArgs{})
+
+	root := mustRootPath(d)
+	_ = os.WriteFile(filepath.Join(root, "new.txt"), []byte("x"), 0o644)
+	_ = os.Remove(filepath.Join(root, "a.txt"))
+	_ = os.MkdirAll(filepath.Join(root, "newdir"), 0o755)
+
+	item, err := GetCacheList(d.ID, "/")
+	if err != nil || item == nil {
+		t.Fatalf("get cache row: %v %v", item, err)
+	}
+	if err := db.GetDb().Model(&model.CacheList{}).Where("id = ?", item.ID).Update("updated_at", time.Now().Add(-48*time.Hour)).Error; err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+
+	d.SyncPaths = "/"
+	d.syncAll()
+
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list: %+v", err)
+	}
+	got := names(objs)
+	if contains(got, "a.txt") {
+		t.Errorf("expected a.txt removed, got %v", got)
+	}
+	if !contains(got, "new.txt") || !contains(got, "newdir") {
+		t.Errorf("expected new.txt and newdir added, got %v", got)
+	}
+}
+
 func TestSyncAllSkipsFresh(t *testing.T) {
 	d := setup(t)
 	_, _ = d.List(context.Background(), rootDir(), model.ListArgs{})
@@ -190,8 +223,8 @@ func TestParseSyncPaths(t *testing.T) {
 	}{
 		{"", nil},
 		{"   \n  ", nil},
-		{"..", nil},
-		{"/", nil},
+		{"..", []string{"/"}},
+		{"/", []string{"/"}},
 		{"/sub", []string{"/sub"}},
 		{"sub", []string{"/sub"}},
 		{"/sub\n/sub2", []string{"/sub", "/sub2"}},
@@ -239,7 +272,7 @@ func TestSyncPathEntries(t *testing.T) {
 		{"", nil, false},
 		{"/sub", []string{"/sub"}, true},
 		{"/sub\n/missing", []string{"/sub", "/missing"}, true},
-		{"..", nil, true},
+		{"..", []string{"/"}, true},
 	}
 	for _, c := range cases {
 		d.SyncPaths = c.raw

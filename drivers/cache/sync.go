@@ -27,10 +27,11 @@ func parseSyncPaths(raw string) []string {
 	seen := make(map[string]bool)
 	var res []string
 	for _, line := range strings.Split(raw, "\n") {
-		p := utils.FixAndCleanPath(strings.TrimSpace(line))
-		if p == "/" || seen[p] {
+		line = strings.TrimSpace(line)
+		if line == "" || seen[utils.FixAndCleanPath(line)] {
 			continue
 		}
+		p := utils.FixAndCleanPath(line)
 		seen[p] = true
 		res = append(res, p)
 	}
