@@ -22,7 +22,13 @@ type Cache struct {
 }
 
 func (d *Cache) Config() driver.Config {
-	return config
+	cfg := config
+	if remote, _, err := op.GetStorageAndActualPath(d.RemotePath); err == nil {
+		rc := remote.Config()
+		cfg.OnlyProxy = rc.OnlyProxy
+		cfg.NoLinkURL = rc.NoLinkURL
+	}
+	return cfg
 }
 
 func (d *Cache) GetAddition() driver.Additional {
@@ -34,6 +40,7 @@ func (d *Cache) Init(ctx context.Context) error {
 		return errors.New("remote path must not be empty")
 	}
 	d.RemotePath = utils.FixAndCleanPath(d.RemotePath)
+	d.syncProxy()
 	if d.TTLHours <= 0 {
 		d.TTLHours = 24
 	}
@@ -56,8 +63,26 @@ func (d *Cache) Drop(ctx context.Context) error {
 	return nil
 }
 
+// 继承下游代理配置：代理判定（ShouldProxy/canProxy/webdav.go）读取的是
+// 请求命中存储的 Config().MustProxy() 与 Storage.WebdavPolicy/WebProxy 等字段，
+// 转发驱动不继承的话，下游的 native_proxy 等配置会被丢弃导致直链播放。
+func (d *Cache) syncProxy() {
+	if storage, _, err := op.GetStorageAndActualPath(d.RemotePath); err == nil {
+		rs := storage.GetStorage()
+		d.Storage.WebProxy = rs.WebProxy
+		d.Storage.WebdavPolicy = rs.WebdavPolicy
+		d.Storage.ProxyRange = rs.ProxyRange
+		d.Storage.DownProxyURL = rs.DownProxyURL
+		d.Storage.DisableProxySign = rs.DisableProxySign
+	}
+}
+
 func (d *Cache) remote() (driver.Driver, string, error) {
-	return op.GetStorageAndActualPath(d.RemotePath)
+	storage, actualPath, err := op.GetStorageAndActualPath(d.RemotePath)
+	if err == nil {
+		d.syncProxy()
+	}
+	return storage, actualPath, err
 }
 
 func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {

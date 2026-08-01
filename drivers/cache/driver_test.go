@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/chunk"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/local"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/cache"
@@ -59,6 +60,60 @@ func setup(t *testing.T) *cache.Cache {
 		t.Fatalf("get cache storage: %+v", err)
 	}
 	return d.(*cache.Cache)
+}
+
+// 挂载型驱动的代理配置必须继承下游（OnlyProxy/NoLinkURL 经 Config 动态继承；
+// WebdavPolicy/WebProxy/ProxyRange 等经 remote() 同步到自身 Storage），
+// 否则 HTTP/WebDAV 的代理判定（基于请求命中存储的字段）会把下游的
+// native_proxy 等配置丢失，导致直链播放而非代理播放。
+// chunk 驱动 Config.OnlyProxy=true（drivers/chunk/meta.go:24），
+// MustProxy 时 webdav_policy 默认 native_proxy。
+func TestProxyInheritanceFromDownstream(t *testing.T) {
+	tmp := t.TempDir()
+	localID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Local",
+		MountPath: "/local2",
+		Addition:  fmt.Sprintf(`{"root_folder_path":%q}`, tmp),
+	})
+	if err != nil {
+		t.Fatalf("create local storage: %+v", err)
+	}
+	chunkID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Chunk",
+		MountPath: "/chunk",
+		Proxy: model.Proxy{
+			WebdavPolicy: "native_proxy",
+		},
+		Addition: `{"remote_path":"/local2","part_size":1048576,"chunk_prefix":"[openlist_chunk]","num_list_workers":5}`,
+	})
+	if err != nil {
+		t.Fatalf("create chunk storage: %+v", err)
+	}
+	cacheID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache2",
+		Addition:  `{"remote_path":"/chunk","ttl_hours":24,"sync_interval_hours":0}`,
+	})
+	if err != nil {
+		t.Fatalf("create cache storage: %+v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.DeleteStorageById(context.Background(), localID)
+		_ = op.DeleteStorageById(context.Background(), chunkID)
+		_ = op.DeleteStorageById(context.Background(), cacheID)
+	})
+	d, err := op.GetStorageByMountPath("/cache2")
+	if err != nil {
+		t.Fatalf("get cache storage: %+v", err)
+	}
+	cd := d.(*cache.Cache)
+
+	if !cd.Config().MustProxy() {
+		t.Errorf("expected MustProxy inherited from chunk downstream (OnlyProxy=true), got false")
+	}
+	if cd.GetStorage().WebdavPolicy != "native_proxy" {
+		t.Errorf("expected webdav_policy native_proxy inherited from downstream, got %q", cd.GetStorage().WebdavPolicy)
+	}
 }
 
 func rootDir() model.Obj {
