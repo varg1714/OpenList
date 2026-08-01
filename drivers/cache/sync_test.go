@@ -366,3 +366,57 @@ func TestSyncAllSkipsNonWhitelistedRows(t *testing.T) {
 		t.Errorf("whitelisted row must be refreshed, got %v", names(fromCachedObjs(subRow.Data)))
 	}
 }
+
+func TestListWhitelistFiltersRoot(t *testing.T) {
+	d := setup(t)
+	d.SyncPaths = "/sub"
+
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list: %+v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != "sub" {
+		t.Errorf("expected only sub dir in root listing, got %v", names(objs))
+	}
+	item, err := GetCacheList(d.ID, "/")
+	if err != nil || item == nil {
+		t.Fatalf("expected cache row, got %v %v", item, err)
+	}
+	if !contains(names(fromCachedObjs(item.Data)), "a.txt") {
+		t.Errorf("cache row must keep full listing, got %v", names(fromCachedObjs(item.Data)))
+	}
+
+	objs, err = d.List(context.Background(), rootDir(), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list from cache: %+v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != "sub" {
+		t.Errorf("expected only sub dir from cache, got %v", names(objs))
+	}
+}
+
+func TestListWhitelistShowsSubtree(t *testing.T) {
+	d := setup(t)
+	d.SyncPaths = "/sub"
+
+	objs, err := d.List(context.Background(), &model.Object{Path: "/sub", Name: "sub", IsFolder: true}, model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list sub: %+v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != "b.txt" {
+		t.Errorf("expected b.txt in sub listing, got %v", names(objs))
+	}
+}
+
+func TestListWhitelistOutsideDirEmpty(t *testing.T) {
+	d := setup(t)
+	d.SyncPaths = "/sub"
+
+	objs, err := d.List(context.Background(), &model.Object{Path: "/other", Name: "other", IsFolder: true}, model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list other: %+v", err)
+	}
+	if len(objs) != 0 {
+		t.Errorf("expected empty listing outside whitelist, got %v", names(objs))
+	}
+}

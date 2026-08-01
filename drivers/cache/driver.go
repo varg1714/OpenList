@@ -92,16 +92,20 @@ func (d *Cache) remote() (driver.Driver, string, error) {
 
 func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	dirPath := dir.GetPath()
+	remoteStorage, remoteActualPath, err := d.remote()
+	if err != nil {
+		return nil, err
+	}
+	entries, whitelisted := d.syncPathEntries(remoteActualPath)
+	if whitelisted && dirPath != "/" && !withinSyncPaths(dirPath, entries) {
+		return nil, nil
+	}
 	if !args.Refresh {
 		if item, err := GetCacheList(d.ID, dirPath); err != nil {
 			log.Errorf("cache: get list %s: %+v", dirPath, err)
 		} else if item != nil {
-			return fromCachedObjs(item.Data), nil
+			return fromCachedObjs(filterCachedObjs(item.Data, entries, whitelisted)), nil
 		}
-	}
-	remoteStorage, remoteActualPath, err := d.remote()
-	if err != nil {
-		return nil, err
 	}
 	remoteObjs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), args)
 	if err != nil {
@@ -114,7 +118,22 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	if err := UpsertCacheList(d.ID, dirPath, snaps); err != nil {
 		log.Errorf("cache: upsert %s: %+v", dirPath, err)
 	}
-	return fromCachedObjs(snaps), nil
+	return fromCachedObjs(filterCachedObjs(snaps, entries, whitelisted)), nil
+}
+
+// filterCachedObjs 原地过滤快照列表：白名单启用时仅保留位于白名单子树内的条目。
+// 缓存行本身始终保存全量快照，过滤只是展示层行为。
+func filterCachedObjs(snaps []model.CachedObj, entries []string, enabled bool) []model.CachedObj {
+	if !enabled {
+		return snaps
+	}
+	kept := snaps[:0]
+	for _, s := range snaps {
+		if withinSyncPaths(s.Path, entries) {
+			kept = append(kept, s)
+		}
+	}
+	return kept
 }
 
 func fromCachedObjs(snaps []model.CachedObj) []model.Obj {
