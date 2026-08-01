@@ -40,3 +40,5 @@ opencode.jsonc
 
 # local codegraph index
 .codegraph/
+openlist
+migrate-media
