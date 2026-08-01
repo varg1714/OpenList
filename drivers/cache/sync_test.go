@@ -228,3 +228,29 @@ func TestWithinSyncPaths(t *testing.T) {
 		t.Errorf("root entry must match everything")
 	}
 }
+
+func TestSyncPathEntries(t *testing.T) {
+	d := setup(t)
+	cases := []struct {
+		raw     string
+		want    []string
+		enabled bool
+	}{
+		{"", nil, false},
+		{"/sub", []string{"/sub"}, true},
+		{"/sub\n/missing", []string{"/sub", "/missing"}, true},
+		{"..", nil, true},
+	}
+	for _, c := range cases {
+		d.SyncPaths = c.raw
+		got, enabled := d.syncPathEntries("/")
+		if enabled != c.enabled || !slices.Equal(got, c.want) {
+			t.Errorf("syncPathEntries(%q) = (%v, %v), want (%v, %v)", c.raw, got, enabled, c.want, c.enabled)
+		}
+	}
+	d.SyncPaths = "/sub"
+	got, enabled := d.syncPathEntries("/other")
+	if !enabled || len(got) != 0 {
+		t.Errorf("entries outside actualPath must be ignored, got (%v, %v)", got, enabled)
+	}
+}

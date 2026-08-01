@@ -47,6 +47,23 @@ func withinSyncPaths(relPath string, entries []string) bool {
 	return false
 }
 
+// syncPathEntries 解析白名单（下游实际路径坐标）并转换为驱动相对坐标。
+// enabled=false 表示未配置白名单（保持全量同步行为）。
+func (d *Cache) syncPathEntries(actualPath string) ([]string, bool) {
+	if strings.TrimSpace(d.SyncPaths) == "" {
+		return nil, false
+	}
+	var rel []string
+	for _, w := range parseSyncPaths(d.SyncPaths) {
+		if !utils.IsSubPath(actualPath, w) {
+			log.Warnf("cache: sync path %s is not under actual path %s, ignored", w, actualPath)
+			continue
+		}
+		rel = append(rel, utils.FixAndCleanPath(strings.TrimPrefix(w, actualPath)))
+	}
+	return rel, true
+}
+
 func (d *Cache) syncAll() {
 	rows, err := ListCacheLists(d.ID)
 	if err != nil {
