@@ -100,15 +100,15 @@ type CacheList struct {
 
 ```go
 type CachedObj struct {
-	ID        string
-	Path      string
-	Name      string
-	Size      int64
-	Modified  time.Time
-	Ctime     time.Time
-	IsFolder  bool
-	HashInfo  map[string]string // hash 类型名 → 值（序列化安全；utils.HashInfo 的 JSON 输出为 {}，不可直接持久化）
-	Thumbnail string
+	ID        string            `json:"id"`
+	Path      string            `json:"path"`
+	Name      string            `json:"name"`
+	Size      int64             `json:"size"`
+	Modified  time.Time         `json:"modified"`
+	Ctime     time.Time         `json:"ctime"`
+	IsFolder  bool              `json:"is_folder"`
+	HashInfo  map[string]string `json:"hash_info"` // hash 类型名 → 值（序列化安全；utils.HashInfo 的 JSON 输出为 {}，不可直接持久化）
+	Thumbnail string            `json:"thumbnail"`
 }
 ```
 
