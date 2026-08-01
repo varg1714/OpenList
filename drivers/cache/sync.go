@@ -9,6 +9,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/pkg/generic"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
@@ -90,38 +91,41 @@ func (d *Cache) syncAll() {
 	stale := func(dirPath string) bool {
 		return time.Since(rowsByDir[dirPath].UpdatedAt) >= ttl
 	}
-	queue := make([]string, 0)
+	seeds := make([]string, 0)
 	if !whitelisted {
 		for i := range rows {
 			if stale(rows[i].DirPath) {
-				queue = append(queue, rows[i].DirPath)
+				seeds = append(seeds, rows[i].DirPath)
 			}
 		}
 	} else {
 		for i := range rows {
 			if withinSyncPaths(rows[i].DirPath, entries) && stale(rows[i].DirPath) {
-				queue = append(queue, rows[i].DirPath)
+				seeds = append(seeds, rows[i].DirPath)
 			}
 		}
 		for _, e := range entries {
 			if row, ok := rowsByDir[e]; !ok || time.Since(row.UpdatedAt) >= ttl {
 				if !known[e] {
 					known[e] = true
-					queue = append(queue, e)
+					seeds = append(seeds, e)
 				}
 			}
 		}
 	}
-	if len(queue) == 0 {
+	if len(seeds) == 0 {
 		return
 	}
-	sort.Slice(queue, func(i, j int) bool {
-		return dirDepth(queue[i]) < dirDepth(queue[j])
+	sort.Slice(seeds, func(i, j int) bool {
+		return dirDepth(seeds[i]) < dirDepth(seeds[j])
 	})
+	queue := generic.NewQueue[string]()
+	for _, s := range seeds {
+		queue.Push(s)
+	}
 	ctx := context.Background()
-	for len(queue) > 0 {
-		dirPath := queue[0]
-		queue = queue[1:]
+	for !queue.IsEmpty() {
+		dirPath := queue.Pop()
 		objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), model.ListArgs{})
 		if err != nil {
 			// 保留既有缓存行，不删除：下游错误可能是暂时性故障（超时/5xx），
@@ -141,7 +145,7 @@ func (d *Cache) syncAll() {
 				child := stdpath.Join(dirPath, snaps[i].Name)
 				if !known[child] && (!whitelisted || withinSyncPaths(child, entries)) {
 					known[child] = true
-					queue = append(queue, child)
+					queue.Push(child)
 				}
 			}
 		}
