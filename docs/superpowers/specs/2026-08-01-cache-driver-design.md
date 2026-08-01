@@ -66,7 +66,7 @@ Link(path): 恒转发 op.Link(下游, 路径) → 下游重新解析真实对象
 |---|---|
 | `drivers/cache/driver.go` | `Cache` 结构体（embed `model.Storage` + `Addition`），`Init/Drop/Config/GetAddition/Get/List/Link` |
 | `drivers/cache/meta.go` | `Addition`（remote_path/ttl_hours/sync_interval_hours）、config、`RegisterDriver` |
-| `drivers/cache/snapshot.go` | `CachedObj` 快照结构、对象 ↔ 快照转换（快照化/反快照化） |
+| `drivers/cache/snapshot.go` | 对象 ↔ 快照转换（`toCachedObj`/`fromCachedObj`，基于 `model.CachedObj`） |
 | `drivers/cache/db.go` | `CacheList` GORM 读写/过期查询/清理 |
 | `drivers/cache/sync.go` | 定时同步 goroutine（`pkg/cron`） |
 | `internal/model/cache.go` | `CacheList` 模型定义（跨包共享） |
@@ -85,36 +85,36 @@ Link(path): 恒转发 op.Link(下游, 路径) → 下游重新解析真实对象
 
 ```go
 type CacheList struct {
-    ID        uint      `gorm:"primaryKey"`
-    StorageID uint      `gorm:"uniqueIndex:idx_cache_storage_dir"` // 缓存驱动自身 storage ID
-    DirPath   string    `gorm:"uniqueIndex:idx_cache_storage_dir"` // 相对 remote_path 的目录路径
-    Data      string    `gorm:"type:text"` // JSON 序列化的 []CachedObj 快照
-    UpdatedAt time.Time
+	ID        uint        `gorm:"primaryKey"`
+	StorageID uint        `gorm:"uniqueIndex:idx_cache_storage_dir"` // 缓存驱动自身 storage ID
+	DirPath   string      `gorm:"uniqueIndex:idx_cache_storage_dir"` // 相对 remote_path 的目录路径
+	Data      []CachedObj `gorm:"type:json;serializer:json"`         // JSON 对象直接存储（项目先例 film.go:89），整行覆盖 upsert
+	UpdatedAt time.Time
 }
 ```
 
 - 唯一索引 `(StorageID, DirPath)`：同一下游可被多个缓存挂载点引用，互不干扰
-- 单行存一个目录的完整快照 JSON（SQLite text 上限足够）
+- 单行存一个目录的完整快照（SQLite json 字段上限足够），整行覆盖天然实现增删同步，单行写入原子
 
 ### 4. 快照结构
 
 ```go
 type CachedObj struct {
-    ID        string
-    Path      string
-    Name      string
-    Size      int64
-    Modified  time.Time
-    Ctime     time.Time
-    IsFolder  bool
-    HashInfo  utils.HashInfo
-    Thumbnail string // 可选，原始对象带缩略图才存
+	ID        string
+	Path      string
+	Name      string
+	Size      int64
+	Modified  time.Time
+	Ctime     time.Time
+	IsFolder  bool
+	HashInfo  map[string]string // hash 类型名 → 值（序列化安全；utils.HashInfo 的 JSON 输出为 {}，不可直接持久化）
+	Thumbnail string
 }
 ```
 
 转换规则：
-- 快照化：从 `model.Obj` 接口方法提取基础字段；`model.GetThumb(obj)` 成功则带缩略图；`Path` 统一写相对 cache 挂载域路径（`stdpath.Join(dir.GetPath(), obj.GetName())`，覆盖下游返回的路径）
-- 反快照化：Thumbnail 非空 → `*model.ObjThumb`，否则 → `*model.Object`
+- 快照化：从 `model.Obj` 接口方法提取基础字段；`model.GetThumb(obj)` 成功则带缩略图；`Path` 统一写相对 cache 挂载域路径（`stdpath.Join(dir.GetPath(), obj.GetName())`，覆盖下游返回的路径）；HashInfo 经 `obj.GetHash().Export()` 转为 `map[string]string`
+- 反快照化：Thumbnail 非空 → `*model.ObjThumb`，否则 → `*model.Object`；HashInfo 经 `utils.GetHashByName` 逐个恢复为 `utils.NewHashInfoByMap`
 
 ### 5. 转发实现（chunk 驱动模式）
 

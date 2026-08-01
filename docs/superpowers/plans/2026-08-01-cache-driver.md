@@ -29,7 +29,9 @@
 
 **Interfaces:**
 - Consumes: `internal/db.AutoMigrate(dst ...interface{}) error`（db.go:21）
-- Produces: `model.CacheList` struct（字段：`ID uint`、`StorageID uint`、`DirPath string`、`Data string`、`UpdatedAt time.Time`）
+- Produces:
+  - `model.CachedObj` struct（字段：`ID string`、`Path string`、`Name string`、`Size int64`、`Modified/Ctime time.Time`、`IsFolder bool`、`HashInfo map[string]string`（hash 类型名→值，序列化安全）、`Thumbnail string`）
+  - `model.CacheList` struct（字段：`ID uint`、`StorageID uint`、`DirPath string`、`Data []CachedObj`、`UpdatedAt time.Time`；`Data` 用 `gorm:"type:json;serializer:json"`，DB 直接存 JSON 对象——项目先例 internal/model/film.go:89 `gorm:"type:json;serializer:json"`）
 
 - [ ] **Step 1: Write the failing test**
 
@@ -62,7 +64,10 @@ func TestCacheListModel(t *testing.T) {
 	item := model.CacheList{
 		StorageID: 1,
 		DirPath:   "/dir",
-		Data:      `[{"name":"a.txt"}]`,
+		Data: []model.CachedObj{
+			{Name: "a.txt", Size: 10, HashInfo: map[string]string{"sha1": "abc"}},
+			{Name: "b", IsFolder: true, Thumbnail: "https://example.com/t.jpg"},
+		},
 		UpdatedAt: time.Now(),
 	}
 	if err := db.GetDb().Create(&item).Error; err != nil {
@@ -72,8 +77,14 @@ func TestCacheListModel(t *testing.T) {
 	if err := db.GetDb().Where("storage_id = ? AND dir_path = ?", 1, "/dir").First(&got).Error; err != nil {
 		t.Fatalf("failed to find: %+v", err)
 	}
-	if got.Data != item.Data {
-		t.Errorf("expected data %q, got %q", item.Data, got.Data)
+	if len(got.Data) != 2 {
+		t.Fatalf("expected 2 data entries, got %d", len(got.Data))
+	}
+	if got.Data[0].Name != "a.txt" || got.Data[0].HashInfo["sha1"] != "abc" {
+		t.Errorf("data[0] mismatch: %+v", got.Data[0])
+	}
+	if !got.Data[1].IsFolder || got.Data[1].Thumbnail != "https://example.com/t.jpg" {
+		t.Errorf("data[1] mismatch: %+v", got.Data[1])
 	}
 }
 ```
@@ -92,11 +103,23 @@ package model
 
 import "time"
 
+type CachedObj struct {
+	ID        string
+	Path      string
+	Name      string
+	Size      int64
+	Modified  time.Time
+	Ctime     time.Time
+	IsFolder  bool
+	HashInfo  map[string]string // hash type name -> hash value
+	Thumbnail string
+}
+
 type CacheList struct {
-	ID        uint      `gorm:"primaryKey"`
-	StorageID uint      `gorm:"uniqueIndex:idx_cache_storage_dir"`
-	DirPath   string    `gorm:"uniqueIndex:idx_cache_storage_dir"`
-	Data      string    `gorm:"type:text"`
+	ID        uint        `gorm:"primaryKey"`
+	StorageID uint        `gorm:"uniqueIndex:idx_cache_storage_dir"`
+	DirPath   string      `gorm:"uniqueIndex:idx_cache_storage_dir"`
+	Data      []CachedObj `gorm:"type:json;serializer:json"`
 	UpdatedAt time.Time
 }
 ```
@@ -128,13 +151,10 @@ git commit -m "feat(model): add CacheList model for cache driver"
 - Test: `drivers/cache/snapshot_test.go`
 
 **Interfaces:**
-- Consumes: `model.Obj`（obj.go:22）、`model.Object`、`model.ObjThumb`、`model.GetThumb`（obj.go:162）、`utils.HashInfo`
+- Consumes: `model.Obj`（obj.go:22）、`model.Object`、`model.ObjThumb`、`model.GetThumb`（obj.go:162）、`model.CachedObj`（Task 1）、`utils.HashInfo`、`utils.HashType`、`utils.GetHashByName`（hash.go:60）、`utils.NewHashInfoByMap`（hash.go:193）
 - Produces:
-  - `type CachedObj struct { ID string; Path string; Name string; Size int64; Modified time.Time; Ctime time.Time; IsFolder bool; HashInfo utils.HashInfo; Thumbnail string }`
-  - `func toCachedObj(dirPath string, obj model.Obj) CachedObj` — Path 统一为 `stdpath.Join(dirPath, obj.GetName())`
-  - `func fromCachedObj(c CachedObj) model.Obj` — Thumbnail 非空 → `*model.ObjThumb`，否则 → `*model.Object`
-  - `func marshalObjs(snaps []CachedObj) (string, error)` — `utils.Json.Marshal`（项目用 json-iterator 别名 `utils.Json`，见 github/driver.go:683）
-  - `func unmarshalObjs(data string) ([]model.Obj, error)` — 反序列化后用 `fromCachedObj` 逐个转换
+  - `func toCachedObj(dirPath string, obj model.Obj) model.CachedObj` — Path 统一为 `stdpath.Join(dirPath, obj.GetName())`；HashInfo 通过 `obj.GetHash().Export()` 转为 `map[string]string`（hash 类型名→值；`utils.HashInfo` 的 JSON 序列化输出 `{}`，不可直接持久化，必须在快照层转换）
+  - `func fromCachedObj(c model.CachedObj) model.Obj` — Thumbnail 非空 → `*model.ObjThumb`，否则 → `*model.Object`；HashInfo 通过 `utils.GetHashByName` 逐个恢复为 `utils.NewHashInfoByMap`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -184,7 +204,7 @@ func TestToCachedObjWithThumb(t *testing.T) {
 }
 
 func TestFromCachedObjRoundTrip(t *testing.T) {
-	c := CachedObj{
+	c := model.CachedObj{
 		ID:        "id1",
 		Path:      "/dir/a.txt",
 		Name:      "a.txt",
@@ -192,7 +212,7 @@ func TestFromCachedObjRoundTrip(t *testing.T) {
 		Modified:  time.Unix(100, 0),
 		Ctime:     time.Unix(50, 0),
 		IsFolder:  false,
-		HashInfo:  utils.NewHashInfoByMap(map[*utils.HashType]string{utils.SHA1: "abc"}),
+		HashInfo:  map[string]string{"sha1": "abc"},
 		Thumbnail: "https://example.com/thumb.jpg",
 	}
 	obj := fromCachedObj(c)
@@ -211,7 +231,7 @@ func TestFromCachedObjRoundTrip(t *testing.T) {
 }
 
 func TestFromCachedObjNoThumb(t *testing.T) {
-	obj := fromCachedObj(CachedObj{Name: "x.txt", IsFolder: true})
+	obj := fromCachedObj(model.CachedObj{Name: "x.txt", IsFolder: true})
 	if _, ok := obj.(*model.Object); !ok {
 		t.Fatalf("expected *model.Object, got %T", obj)
 	}
@@ -220,56 +240,33 @@ func TestFromCachedObjNoThumb(t *testing.T) {
 	}
 }
 
-func TestMarshalUnmarshal(t *testing.T) {
-	snaps := []CachedObj{{Name: "a", Path: "/a"}, {Name: "b", IsFolder: true, Thumbnail: "t"}}
-	data, err := marshalObjs(snaps)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+func TestHashRoundTrip(t *testing.T) {
+	obj := &model.Object{
+		Name:     "h.txt",
+		HashInfo: utils.NewHashInfoByMap(map[*utils.HashType]string{utils.SHA1: "abc", utils.MD5: "def"}),
 	}
-	objs, err := unmarshalObjs(data)
-	if err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	c := toCachedObj("/", obj)
+	if c.HashInfo["sha1"] != "abc" || c.HashInfo["md5"] != "def" {
+		t.Errorf("hash not exported: %+v", c.HashInfo)
 	}
-	if len(objs) != 2 {
-		t.Fatalf("expected 2 objs, got %d", len(objs))
-	}
-	if objs[0].GetName() != "a" || !objs[1].IsDir() {
-		t.Errorf("bad unmarshal: %+v %+v", objs[0], objs[1])
+	obj2 := fromCachedObj(c)
+	if obj2.GetHash().GetHash(utils.SHA1) != "abc" || obj2.GetHash().GetHash(utils.MD5) != "def" {
+		t.Errorf("hash not restored: %s %s", obj2.GetHash().GetHash(utils.SHA1), obj2.GetHash().GetHash(utils.MD5))
 	}
 }
 
-func TestMarshalEmpty(t *testing.T) {
-	data, err := marshalObjs(nil)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	objs, err := unmarshalObjs(data)
-	if err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(objs) != 0 {
-		t.Errorf("expected 0 objs, got %d", len(objs))
-	}
-}
-
-func TestUnmarshalSpecialChars(t *testing.T) {
-	data, err := marshalObjs([]CachedObj{{Name: strings.Repeat("很", 50) + ".txt"}})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	objs, err := unmarshalObjs(data)
-	if err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if objs[0].GetName() != strings.Repeat("很", 50)+".txt" {
-		t.Errorf("special chars corrupted")
+func TestSpecialCharsName(t *testing.T) {
+	name := strings.Repeat("很", 50) + ".txt"
+	c := toCachedObj("/", &model.Object{Name: name})
+	if c.Name != name {
+		t.Errorf("special chars corrupted: %q", c.Name)
 	}
 }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `/Library/Go/sdk/go1.25.4/bin/go test ./drivers/cache/ -run 'TestToCachedObj|TestFromCachedObj|TestMarshal|TestUnmarshal' -v`
+Run: `/Library/Go/sdk/go1.25.4/bin/go test ./drivers/cache/ -run 'TestToCachedObj|TestFromCachedObj|TestHashRoundTrip|TestSpecialCharsName' -v`
 Expected: FAIL — `drivers/cache` 目录不存在，`no such file or directory`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -281,26 +278,13 @@ package cache
 
 import (
 	stdpath "path"
-	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
-type CachedObj struct {
-	ID        string
-	Path      string
-	Name      string
-	Size      int64
-	Modified  time.Time
-	Ctime     time.Time
-	IsFolder  bool
-	HashInfo  utils.HashInfo
-	Thumbnail string
-}
-
-func toCachedObj(dirPath string, obj model.Obj) CachedObj {
-	c := CachedObj{
+func toCachedObj(dirPath string, obj model.Obj) model.CachedObj {
+	c := model.CachedObj{
 		ID:       obj.GetID(),
 		Path:     stdpath.Join(dirPath, obj.GetName()),
 		Name:     obj.GetName(),
@@ -308,7 +292,13 @@ func toCachedObj(dirPath string, obj model.Obj) CachedObj {
 		Modified: obj.ModTime(),
 		Ctime:    obj.CreateTime(),
 		IsFolder: obj.IsDir(),
-		HashInfo: obj.GetHash(),
+	}
+	if hi := obj.GetHash().Export(); len(hi) > 0 {
+		hashMap := make(map[string]string, len(hi))
+		for ht, v := range hi {
+			hashMap[ht.Name] = v
+		}
+		c.HashInfo = hashMap
 	}
 	if thumb, ok := model.GetThumb(obj); ok {
 		c.Thumbnail = thumb
@@ -316,7 +306,7 @@ func toCachedObj(dirPath string, obj model.Obj) CachedObj {
 	return c
 }
 
-func fromCachedObj(c CachedObj) model.Obj {
+func fromCachedObj(c model.CachedObj) model.Obj {
 	obj := model.Object{
 		ID:       c.ID,
 		Path:     c.Path,
@@ -325,7 +315,15 @@ func fromCachedObj(c CachedObj) model.Obj {
 		Modified: c.Modified,
 		Ctime:    c.Ctime,
 		IsFolder: c.IsFolder,
-		HashInfo: c.HashInfo,
+	}
+	if len(c.HashInfo) > 0 {
+		hi := make(map[*utils.HashType]string, len(c.HashInfo))
+		for name, v := range c.HashInfo {
+			if ht, ok := utils.GetHashByName(name); ok {
+				hi[ht] = v
+			}
+		}
+		obj.HashInfo = utils.NewHashInfoByMap(hi)
 	}
 	if c.Thumbnail != "" {
 		return &model.ObjThumb{
@@ -335,27 +333,9 @@ func fromCachedObj(c CachedObj) model.Obj {
 	}
 	return &obj
 }
-
-func marshalObjs(snaps []CachedObj) (string, error) {
-	data, err := utils.Json.Marshal(snaps)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func unmarshalObjs(data string) ([]model.Obj, error) {
-	var snaps []CachedObj
-	if err := utils.Json.Unmarshal([]byte(data), &snaps); err != nil {
-		return nil, err
-	}
-	objs := make([]model.Obj, 0, len(snaps))
-	for i := range snaps {
-		objs = append(objs, fromCachedObj(snaps[i]))
-	}
-	return objs, nil
-}
 ```
+
+注意：`utils.HashInfo.Export()` 返回 `map[*utils.HashType]string`（hash.go:232），遍历取 `ht.Name` 作键；`utils.GetHashByName` 按名字恢复（hash.go:60）。本任务不再需要 marshal/unmarshal 函数——DB 层直接存取 `[]model.CachedObj`（GORM serializer:json）。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -381,7 +361,7 @@ git commit -m "feat(cache): add CachedObj snapshot conversion"
 - Consumes: `db.GetDb() *gorm.DB`（internal/db/db.go:31）、`model.CacheList`（Task 1）、`gorm.io/gorm.ErrRecordNotFound`
 - Produces:
   - `func GetCacheList(storageID uint, dirPath string) (*model.CacheList, error)` — 未找到返回 `(nil, nil)`
-  - `func UpsertCacheList(storageID uint, dirPath, data string) error` — 存在则更新 Data/UpdatedAt，不存在则创建
+  - `func UpsertCacheList(storageID uint, dirPath string, data []model.CachedObj) error` — 存在则更新 Data/UpdatedAt，不存在则创建
   - `func DeleteCacheList(storageID uint, dirPath string) error`
   - `func ListCacheLists(storageID uint) ([]model.CacheList, error)`
 
@@ -422,28 +402,28 @@ func TestGetCacheListNotFound(t *testing.T) {
 }
 
 func TestUpsertCreateThenUpdate(t *testing.T) {
-	if err := UpsertCacheList(1, "/dir", "[a]"); err != nil {
+	if err := UpsertCacheList(1, "/dir", []model.CachedObj{{Name: "a"}}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	item, err := GetCacheList(1, "/dir")
 	if err != nil || item == nil {
 		t.Fatalf("get after create: %v %+v", err, item)
 	}
-	if item.Data != "[a]" {
-		t.Errorf("expected [a], got %s", item.Data)
+	if len(item.Data) != 1 || item.Data[0].Name != "a" {
+		t.Errorf("expected a, got %+v", item.Data)
 	}
 	first := item.UpdatedAt
 
 	time.Sleep(2 * time.Millisecond)
-	if err := UpsertCacheList(1, "/dir", "[b]"); err != nil {
+	if err := UpsertCacheList(1, "/dir", []model.CachedObj{{Name: "b"}}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	item, err = GetCacheList(1, "/dir")
 	if err != nil || item == nil {
 		t.Fatalf("get after update: %v %+v", err, item)
 	}
-	if item.Data != "[b]" {
-		t.Errorf("expected [b], got %s", item.Data)
+	if len(item.Data) != 1 || item.Data[0].Name != "b" {
+		t.Errorf("expected b, got %+v", item.Data)
 	}
 	if !item.UpdatedAt.After(first) {
 		t.Errorf("expected UpdatedAt refreshed")
@@ -459,18 +439,18 @@ func TestUpsertCreateThenUpdate(t *testing.T) {
 
 func TestStorageIsolation(t *testing.T) {
 	_ = UpsertCacheList(1, "/dir", "[1]")
-	_ = UpsertCacheList(2, "/dir", "[2]")
+	_ = UpsertCacheList(2, "/dir", []model.CachedObj{{Name: "2"}})
 	item, err := GetCacheList(1, "/dir")
 	if err != nil || item == nil {
 		t.Fatalf("storage1: %v %+v", err, item)
 	}
-	if item.Data != "[1]" {
-		t.Errorf("storage1 polluted: %s", item.Data)
+	if len(item.Data) != 1 || item.Data[0].Name != "1" {
+		t.Errorf("storage1 polluted: %+v", item.Data)
 	}
 }
 
 func TestDeleteCacheList(t *testing.T) {
-	_ = UpsertCacheList(3, "/dir", "[a]")
+	_ = UpsertCacheList(3, "/dir", []model.CachedObj{{Name: "a"}})
 	if err := DeleteCacheList(3, "/dir"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -481,9 +461,9 @@ func TestDeleteCacheList(t *testing.T) {
 }
 
 func TestListCacheLists(t *testing.T) {
-	_ = UpsertCacheList(4, "/a", "[1]")
-	_ = UpsertCacheList(4, "/b", "[2]")
-	_ = UpsertCacheList(5, "/c", "[3]")
+	_ = UpsertCacheList(4, "/a", []model.CachedObj{{Name: "1"}})
+	_ = UpsertCacheList(4, "/b", []model.CachedObj{{Name: "2"}})
+	_ = UpsertCacheList(5, "/c", []model.CachedObj{{Name: "3"}})
 	rows, err := ListCacheLists(4)
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -529,7 +509,7 @@ func GetCacheList(storageID uint, dirPath string) (*model.CacheList, error) {
 	return nil, err
 }
 
-func UpsertCacheList(storageID uint, dirPath, data string) error {
+func UpsertCacheList(storageID uint, dirPath string, data []model.CachedObj) error {
 	item, err := GetCacheList(storageID, dirPath)
 	if err != nil {
 		return err
@@ -921,11 +901,7 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 		if item, err := GetCacheList(d.ID, dirPath); err != nil {
 			log.Errorf("cache: get list %s: %+v", dirPath, err)
 		} else if item != nil {
-			if objs, err := unmarshalObjs(item.Data); err == nil {
-				return objs, nil
-			} else {
-				log.Errorf("cache: unmarshal %s: %+v", dirPath, err)
-			}
+			return fromCachedObjs(item.Data), nil
 		}
 	}
 	remoteStorage, remoteActualPath, err := d.remote()
@@ -936,22 +912,22 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	if err != nil {
 		return nil, err
 	}
-	snaps := make([]CachedObj, 0, len(remoteObjs))
+	snaps := make([]model.CachedObj, 0, len(remoteObjs))
 	for _, o := range remoteObjs {
 		snaps = append(snaps, toCachedObj(dirPath, o))
 	}
-	data, err := marshalObjs(snaps)
-	if err != nil {
-		return nil, err
-	}
-	if err := UpsertCacheList(d.ID, dirPath, data); err != nil {
+	if err := UpsertCacheList(d.ID, dirPath, snaps); err != nil {
 		log.Errorf("cache: upsert %s: %+v", dirPath, err)
 	}
+	return fromCachedObjs(snaps), nil
+}
+
+func fromCachedObjs(snaps []model.CachedObj) []model.Obj {
 	objs := make([]model.Obj, 0, len(snaps))
 	for i := range snaps {
 		objs = append(objs, fromCachedObj(snaps[i]))
 	}
-	return objs, nil
+	return objs
 }
 
 func (d *Cache) Get(ctx context.Context, path string) (model.Obj, error) {
@@ -962,15 +938,11 @@ func (d *Cache) Get(ctx context.Context, path string) (model.Obj, error) {
 	if item, err := GetCacheList(d.ID, parentDir); err != nil {
 		log.Errorf("cache: get list %s: %+v", parentDir, err)
 	} else if item != nil {
-		if objs, err := unmarshalObjs(item.Data); err == nil {
-			name := stdpath.Base(path)
-			for _, o := range objs {
-				if o.GetName() == name {
-					return o, nil
-				}
+		name := stdpath.Base(path)
+		for _, c := range item.Data {
+			if c.Name == name {
+				return fromCachedObj(c), nil
 			}
-		} else {
-			log.Errorf("cache: unmarshal %s: %+v", parentDir, err)
 		}
 	}
 	remoteStorage, remoteActualPath, err := d.remote()
@@ -1010,7 +982,7 @@ func (d *Cache) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 var _ driver.Driver = (*Cache)(nil)
 ```
 
-提示：`op.DeleteStorage` 若不存在，测试中改为 `op.DeleteStorageById(mustLocalStorageID(d))`（internal/op/storage.go 有 `DeleteStorageById`，见 codegraph blast radius）。实施时先 grep 确认。
+提示：`op.DeleteStorageById`（internal/op/storage.go:260）已确认存在，测试中直接使用。
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1205,16 +1177,11 @@ func (d *Cache) syncAll() {
 			_ = DeleteCacheList(d.ID, dirPath)
 			continue
 		}
-		snaps := make([]CachedObj, 0, len(objs))
+		snaps := make([]model.CachedObj, 0, len(objs))
 		for _, o := range objs {
 			snaps = append(snaps, toCachedObj(dirPath, o))
 		}
-		data, err := marshalObjs(snaps)
-		if err != nil {
-			log.Errorf("cache: sync marshal %s: %+v", dirPath, err)
-			continue
-		}
-		if err := UpsertCacheList(d.ID, dirPath, data); err != nil {
+		if err := UpsertCacheList(d.ID, dirPath, snaps); err != nil {
 			log.Errorf("cache: sync upsert %s: %+v", dirPath, err)
 		}
 		for i := range snaps {
