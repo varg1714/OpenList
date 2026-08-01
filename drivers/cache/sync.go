@@ -49,6 +49,19 @@ func withinSyncPaths(relPath string, entries []string) bool {
 	return false
 }
 
+// visibleInSyncPaths 判断 relPath 是否可见：与任一白名单条目同链
+// （relPath 是条目的祖先/等于，或条目是 relPath 的祖先/等于）。
+// 祖先目录作为导航路径展示（如条目 /电影/邻居 的祖先 /电影），
+// 但同步范围仍由 withinSyncPaths（子树）限定。
+func visibleInSyncPaths(relPath string, entries []string) bool {
+	for _, e := range entries {
+		if utils.IsSubPath(e, relPath) || utils.IsSubPath(relPath, e) {
+			return true
+		}
+	}
+	return false
+}
+
 // syncPathEntries 解析白名单（下游实际路径坐标）并转换为驱动相对坐标。
 // enabled=false 表示未配置白名单（保持全量同步行为）。
 func (d *Cache) syncPathEntries(actualPath string) ([]string, bool) {

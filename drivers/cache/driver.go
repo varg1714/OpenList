@@ -97,7 +97,7 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 		return nil, err
 	}
 	entries, whitelisted := d.syncPathEntries(remoteActualPath)
-	if whitelisted && dirPath != "/" && !withinSyncPaths(dirPath, entries) {
+	if whitelisted && dirPath != "/" && !visibleInSyncPaths(dirPath, entries) {
 		return nil, nil
 	}
 	if !args.Refresh {
@@ -121,7 +121,8 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	return fromCachedObjs(filterCachedObjs(snaps, entries, whitelisted)), nil
 }
 
-// filterCachedObjs 原地过滤快照列表：白名单启用时仅保留位于白名单子树内的条目。
+// filterCachedObjs 原地过滤快照列表：白名单启用时仅保留可见条目
+// （与任一白名单条目同链：条目本身、其祖先或后代）。
 // 缓存行本身始终保存全量快照，过滤只是展示层行为。
 func filterCachedObjs(snaps []model.CachedObj, entries []string, enabled bool) []model.CachedObj {
 	if !enabled {
@@ -129,7 +130,7 @@ func filterCachedObjs(snaps []model.CachedObj, entries []string, enabled bool) [
 	}
 	kept := snaps[:0]
 	for _, s := range snaps {
-		if withinSyncPaths(s.Path, entries) {
+		if visibleInSyncPaths(s.Path, entries) {
 			kept = append(kept, s)
 		}
 	}

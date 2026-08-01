@@ -420,3 +420,37 @@ func TestListWhitelistOutsideDirEmpty(t *testing.T) {
 		t.Errorf("expected empty listing outside whitelist, got %v", names(objs))
 	}
 }
+
+func TestListWhitelistShowsAncestorDirs(t *testing.T) {
+	d := setup(t)
+	root := mustRootPath(d)
+	_ = os.MkdirAll(filepath.Join(root, "sub", "inner"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "sub", "inner", "c.txt"), []byte("c"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "other"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "other", "d.txt"), []byte("d"), 0o644)
+	d.SyncPaths = "/sub/inner"
+
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list root: %+v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != "sub" {
+		t.Errorf("expected sub dir (ancestor of whitelist entry) in root, got %v", names(objs))
+	}
+
+	objs, err = d.List(context.Background(), &model.Object{Path: "/sub", Name: "sub", IsFolder: true}, model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list sub: %+v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != "inner" {
+		t.Errorf("expected inner dir only in sub listing, got %v", names(objs))
+	}
+
+	objs, err = d.List(context.Background(), &model.Object{Path: "/sub/inner", Name: "inner", IsFolder: true}, model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list inner: %+v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != "c.txt" {
+		t.Errorf("expected c.txt in inner listing, got %v", names(objs))
+	}
+}
