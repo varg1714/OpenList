@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -179,5 +180,51 @@ func TestSyncAllKeepsRowOnFailure(t *testing.T) {
 	}
 	if len(row.Data) != len(oldData) {
 		t.Errorf("expected stale data kept unchanged, got %d entries, want %d", len(row.Data), len(oldData))
+	}
+}
+
+func TestParseSyncPaths(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want []string
+	}{
+		{"", nil},
+		{"   \n  ", nil},
+		{"..", nil},
+		{"/", nil},
+		{"/sub", []string{"/sub"}},
+		{"sub", []string{"/sub"}},
+		{"/sub\n/sub2", []string{"/sub", "/sub2"}},
+		{"/a,/b\n/c", []string{"/a", "/b", "/c"}},
+		{"/a\n/a,/b", []string{"/a", "/b"}},
+	}
+	for _, c := range cases {
+		if got := parseSyncPaths(c.raw); !slices.Equal(got, c.want) {
+			t.Errorf("parseSyncPaths(%q) = %v, want %v", c.raw, got, c.want)
+		}
+	}
+}
+
+func TestWithinSyncPaths(t *testing.T) {
+	entries := []string{"/movies", "/tv"}
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/movies", true},
+		{"/movies/2024", true},
+		{"/movies2", false},
+		{"/tv/series/a", true},
+		{"/tvx", false},
+		{"/", false},
+		{"/other", false},
+	}
+	for _, c := range cases {
+		if got := withinSyncPaths(c.path, entries); got != c.want {
+			t.Errorf("withinSyncPaths(%q) = %v, want %v", c.path, got, c.want)
+		}
+	}
+	if !withinSyncPaths("/a/b", []string{"/"}) {
+		t.Errorf("root entry must match everything")
 	}
 }

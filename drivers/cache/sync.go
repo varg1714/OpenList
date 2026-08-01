@@ -9,6 +9,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -17,6 +18,33 @@ func dirDepth(dirPath string) int {
 		return 0
 	}
 	return strings.Count(strings.Trim(dirPath, "/"), "/") + 1
+}
+
+// parseSyncPaths 解析白名单字符串（换行/逗号分隔），返回清理后的下游实际路径列表。
+// 无有效条目时返回 nil。
+func parseSyncPaths(raw string) []string {
+	raw = strings.ReplaceAll(raw, ",", "\n")
+	seen := make(map[string]bool)
+	var res []string
+	for _, line := range strings.Split(raw, "\n") {
+		p := utils.FixAndCleanPath(strings.TrimSpace(line))
+		if p == "/" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		res = append(res, p)
+	}
+	return res
+}
+
+// withinSyncPaths 判断 relPath（驱动相对坐标）是否位于任一白名单条目的子树内。
+func withinSyncPaths(relPath string, entries []string) bool {
+	for _, e := range entries {
+		if utils.IsSubPath(e, relPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Cache) syncAll() {
