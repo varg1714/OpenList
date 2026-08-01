@@ -19,11 +19,12 @@
 | 实现路径 | 独立驱动（方案 A） | 隔离性好、按挂载点选择性启用、不动核心缓存逻辑 |
 | 缓存内容 | 对象基础字段快照（name/path/size/modified/ctime/is_folder/hash/id）+ 可选缩略图 | Obj 接口方法全集即可提取，任何驱动对象都适用 |
 | 快照判定 | 全部缓存，无需类型判定 | 见"为何全量可行" |
-| 新鲜度 | TTL + stale-if-error + 定时任务刷新 | 下游不稳定时仍可浏览 |
-| 定时任务 | `pkg/cron`（`NewCron(d).Do(fn)` + `Stop()`，项目已有 15+ 驱动使用） | 复用现有模式，driver Init 启动、Drop 停止 |
+| 新鲜度 | 定时任务刷新 + 手动强制刷新；List 命中即返回不判 TTL | 浏览时 0 次下游访问，新鲜度由后台保证 |
+| 定时任务 | `pkg/cron`（`NewCron(d).Do(fn)` + `Stop()`，项目已有 15+ 驱动使用） | 复用现有模式，driver Init 启动、Drop 停止（不清数据） |
 | 强制刷新 | 消费 `ListArgs.Refresh`，透传链路已存在 | 前端 refresh=true → fs.List → op.List → 驱动 List |
 | Get | 实现 `driver.Getter`，查 DB 快照按名匹配，miss 回源单文件 | 避免每次 Get 都 List 父目录 |
 | Link | 纯转发 `op.Link(下游, path)` | 内部重新解析真实对象 |
+| DB 写入 | 每目录一行，整行 JSON 完整覆盖（upsert） | 覆盖天然实现增删同步，单行写入原子 |
 
 ## 为何全量快照可行（不破坏下游驱动功能）
 
@@ -40,10 +41,9 @@
    │
    ▼
 List(path):  查 DB 快照（CacheList 行）
-  ├─ 命中且未过期 → 返回快照对象（0 次下游访问）
-  ├─ 命中已过期 → op.List(下游) 回源：成功 → 写回 DB 并返回；失败 → 返回过期快照（stale-if-error）
+  ├─ 命中 → 返回快照对象（0 次下游访问；不判 TTL，新鲜度由定时任务保证）
   └─ 未命中 → op.List(下游) 回源：成功 → 写 DB 并返回；失败 → 报错
-  注：args.Refresh=true 时跳过命中分支，强制回源
+  注：args.Refresh=true 时跳过命中分支，强制回源并更新 DB
 
 Get(path):  查 DB 父目录快照
   ├─ 命中（含过期，不判 TTL）→ 按 name 匹配返回（0 次下游访问）
@@ -52,7 +52,10 @@ Get(path):  查 DB 父目录快照
 
 Link(path): 恒转发 op.Link(下游, 路径) → 下游重新解析真实对象 → 返回链接
 
-后台定时任务: 每 sync_interval_hours 遍历 DB 已知目录树（用快照中的子目录发现子目录，不访问下游发现结构），刷新 TTL 过期的目录
+后台定时任务: 每 sync_interval_hours 遍历 DB 已知目录树
+  - 遍历结构来自 DB 快照（快照中的子目录即待刷新对象，不访问下游发现结构）
+  - 对 UpdatedAt 超过 TTL 的目录调用下游 op.List 回源
+  - 回源成功 → 完整覆盖 DB 行（覆盖天然实现：删除缺失项、新增新项、改名）
 ```
 
 ## 组件设计
@@ -122,10 +125,10 @@ func (d *Cache) remote() (driver.Driver, string, error) {
 
 func (d *Cache) List(ctx, dir, args) ([]model.Obj, error) {
     // 1. DB 查询 (StorageID, dir.GetPath())
-    // 2. 命中且未过期且 !args.Refresh → 反快照化返回
+    // 2. 命中且 !args.Refresh → 反快照化返回（不判 TTL）
     // 3. 回源：op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dir.GetPath()), args)
-    //    成功 → 快照化写 DB（upsert）；返回统一反快照化对象（标准 Object/ObjThumb，缩略图保留）
-    //    失败且有过期快照 → 返回过期快照
+    //    成功 → 快照化写 DB（整行覆盖 upsert）；返回统一反快照化对象（标准 Object/ObjThumb，缩略图保留）
+    //    失败 → 报错（无缓存可用，原样返回下游错误）
     // 注意：两种路径（缓存命中/回源）返回对象类型一致，均为快照反序列化的标准对象，
     // 不暴露下游驱动特有类型；快照中 Path 存相对 cache 挂载域的路径
 }
@@ -146,21 +149,25 @@ func (d *Cache) Link(ctx, file, args) (*model.Link, error) {
 - `Init` 时若 `sync_interval_hours > 0`：`cron.NewCron(interval).Do(d.syncAll)`，`Drop` 时 `Stop()`
 - `syncAll`：
   1. 查询该 storage 的全部 `CacheList` 行
-  2. 按目录深度升序（先父后子），对 `UpdatedAt` 超过 TTL 的目录回源刷新
-  3. 刷新后发现的子目录（快照中 IsFolder）若不在 DB → 加入待刷新队列（用缓存快照发现结构，不访问下游发现结构）
-  4. 回源失败（下游错误/目录已删除）→ 保留过期快照（stale-if-error）；已删除 → 删除 DB 行
+  2. 按目录深度升序（先父后子），选出 `UpdatedAt` 超过 TTL 的目录作为待刷新集合
+  3. 对待刷新目录**调用下游** `op.List` 回源：
+     - 成功 → 以最新结果**完整覆盖** DB 行（覆盖天然实现：删除缺失项、新增新项、改名）
+     - 失败/目录已不存在 → 删除该 DB 行（下次访问回源重建）
+  4. 刷新后的快照中发现的新子目录（快照中 IsFolder 且不在 DB）→ 加入待刷新队列，直至无新目录
+- 遍历结构（哪个目录需要刷新）来自 DB 快照，不访问下游发现结构；**刷新内容必须来自下游**
 - 防重入：单 goroutine 串行执行，无需额外锁
 
 ### 7. 失效与清理
 
-- TTL 过期：定时任务刷新；浏览时过期回源失败返回 stale
-- `Drop()`：`cron.Stop()` + 删除该 storage 全部 CacheList 行
-- 惰性清理：访问时顺带删除过期行（可选优化，首个版本可省略，由 Drop 兜底）
+- TTL 过期：仅由定时任务判断并刷新（List 命中不判 TTL）
+- `Drop()`：仅 `cron.Stop()`，**不删除 DB 记录**——重启后缓存继续有效（持久化意义所在）
+- 删除行的唯一时机：定时任务回源失败/目录已消失
+- 存储被删除后残留的孤儿行：接受（数据量小，每目录一行；重新挂载同 remote_path 可复用）
 
 ### 8. 错误处理
 
 - 回源失败 + 无缓存 → 原样返回下游错误
-- 回源失败 + 有过期缓存 → 返回过期快照（stale-if-error），不报错
+- 定时任务回源失败 → 删除该目录 DB 行（下次访问回源重建），不阻塞后续目录
 - `remote_path` 无效 → Init 时校验并报错（参照 chunk 驱动 Init 校验模式）
 - 下游存储未初始化（Status != WORK）→ `op.List` 自身会拒绝（op/fs.go:27），缓存命中路径不受影响
 
@@ -174,17 +181,19 @@ func (d *Cache) Link(ctx, file, args) (*model.Link, error) {
 - 单元测试（`drivers/cache/`）：
   - 快照化/反快照化往返（含缩略图、空目录、特殊字符文件名）
   - List 命中缓存（下游零调用，用 mock driver 计数）
-  - List 过期回源成功 → 写回 DB
-  - List 过期回源失败 → 返回 stale
-  - args.Refresh 强制回源
+  - List miss 回源成功 → 写 DB 且返回快照对象
+  - List miss 回源失败 → 报错
+  - args.Refresh 强制回源并更新 DB
   - Get 命中父目录快照按名匹配 / miss 回源
   - Link 转发调用下游 op.Link
+  - 定时任务：过期目录被下游回源覆盖（含删除缺失项/新增项），失败目录行被删除
 - 集成测试基建：参照 `internal/op/storage_test.go` 的 setupDB 模式
-- 定时任务测试：缩短 TTL/interval 触发同步，验证只刷新过期目录
+- 定时任务测试：缩短 TTL/interval 触发同步，验证只刷新过期目录、覆盖语义正确
 
 ## 边界与已知限制
 
-- 下游目录变更最迟 TTL 后可见；手动刷新（Refresh）立即可见
+- 下游目录变更最迟在下一次定时任务刷新后可见；手动刷新（Refresh）立即可见
 - 大目录单行 JSON 存储，超宽目录（数十万文件）需实测 SQLite 行大小
 - 缓存快照中的缩略图 URL 可能有时效（签名 URL），过期仅影响图片显示
 - 挂载媒体元数据驱动（javdb/fc2）时附加字段不暴露，媒体墙/emby 功能退化（已确认接受）
+- `sync_interval_hours=0` 且无手动刷新时，列表保持静态（DB 有即返回）
