@@ -454,3 +454,65 @@ func TestListWhitelistShowsAncestorDirs(t *testing.T) {
 		t.Errorf("expected c.txt in inner listing, got %v", names(objs))
 	}
 }
+
+func TestVisibleInSyncPaths(t *testing.T) {
+	entries := []string{"/电影/邻居", "/剧集"}
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/", true},           // 根是任何条目的祖先
+		{"/电影", true},         // 条目的祖先
+		{"/电影/邻居", true},      // 等于条目
+		{"/电影/邻居/2024", true}, // 条目的后代
+		{"/剧集", true},
+		{"/剧集/2024/aaa", true},
+		{"/电影2", false},    // 前缀兄弟
+		{"/电影/邻居2", false}, // 后缀兄弟
+		{"/电影/其他", false},  // 同父兄弟
+		{"/其他", false},     // 完全无关
+	}
+	for _, c := range cases {
+		if got := visibleInSyncPaths(c.path, entries); got != c.want {
+			t.Errorf("visibleInSyncPaths(%q) = %v, want %v", c.path, got, c.want)
+		}
+	}
+	if visibleInSyncPaths("/a", nil) {
+		t.Errorf("empty entries must not be visible")
+	}
+}
+
+func TestSyncAllSeedsDeepWhitelistEntry(t *testing.T) {
+	d := setup(t)
+	root := mustRootPath(d)
+	_ = os.MkdirAll(filepath.Join(root, "sub", "inner"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "sub", "inner", "c.txt"), []byte("c"), 0o644)
+	d.SyncPaths = "/sub/inner"
+
+	d.syncAll()
+
+	innerRow, err := GetCacheList(d.ID, "/sub/inner")
+	if err != nil || innerRow == nil {
+		t.Fatalf("expected seeded /sub/inner row, got %v %v", innerRow, err)
+	}
+	if !contains(names(fromCachedObjs(innerRow.Data)), "c.txt") {
+		t.Errorf("expected c.txt seeded, got %v", names(fromCachedObjs(innerRow.Data)))
+	}
+	subRow, err := GetCacheList(d.ID, "/sub")
+	if err != nil || subRow != nil {
+		t.Errorf("expected no /sub row (ancestor not in whitelist), got %v %v", subRow, err)
+	}
+}
+
+func TestListWhitelistRefreshStillFilters(t *testing.T) {
+	d := setup(t)
+	d.SyncPaths = "/sub"
+
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list refresh: %+v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != "sub" {
+		t.Errorf("expected only sub dir after refresh, got %v", names(objs))
+	}
+}
