@@ -1020,21 +1020,111 @@ git commit -m "feat(cache): add Cache driver with list cache and link forwarding
 
 - [ ] **Step 1: Write the failing test**
 
-`drivers/cache/sync_test.go`（`package cache_test`，复用 driver_test.go 的 init/setup/helpers；导入 model、db、time）：
+`drivers/cache/sync_test.go`（`package cache` **内部测试包**——调用未导出的 `d.syncAll()`，Go 禁止外部测试包引用未导出方法；与 snapshot_test.go/db_test.go 同约定，自包含 init/setup/helpers，不得与同包测试文件函数重名）：
 
 ```go
-package cache_test
+package cache
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/local"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
+
+func init() {
+	dB, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		panic("failed to connect database")
+	}
+	conf.Conf = conf.DefaultConfig("data")
+	db.Init(dB)
+}
+
+func setup(t *testing.T) *Cache {
+	t.Helper()
+	tmp := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tmp, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(tmp, "a.txt"), []byte("hello"), 0o644)
+	_ = os.WriteFile(filepath.Join(tmp, "sub", "b.txt"), []byte("world"), 0o644)
+	localID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Local",
+		MountPath: "/local",
+		Addition:  fmt.Sprintf(`{"root_folder_path":%q}`, tmp),
+	})
+	if err != nil {
+		t.Fatalf("create local storage: %+v", err)
+	}
+	cacheID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache",
+		Addition:  `{"remote_path":"/local","ttl_hours":24,"sync_interval_hours":0}`,
+	})
+	if err != nil {
+		t.Fatalf("create cache storage: %+v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.DeleteStorageById(context.Background(), localID)
+		_ = op.DeleteStorageById(context.Background(), cacheID)
+	})
+	d, err := op.GetStorageByMountPath("/cache")
+	if err != nil {
+		t.Fatalf("get cache storage: %+v", err)
+	}
+	return d.(*Cache)
+}
+
+func rootDir() model.Obj {
+	return &model.Object{Path: "/", Name: "Root", IsFolder: true}
+}
+
+func names(objs []model.Obj) []string {
+	var res []string
+	for _, o := range objs {
+		res = append(res, o.GetName())
+	}
+	return res
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func mustRootPath(d *Cache) string {
+	storage, _, err := op.GetStorageAndActualPath(d.RemotePath)
+	if err != nil {
+		panic(err)
+	}
+	if r, ok := storage.(driver.IRootPath); ok {
+		return r.GetRootPath()
+	}
+	panic("downstream storage does not expose a root path")
+}
+
+func mustLocalStorageID(d *Cache) uint {
+	storage, _, err := op.GetStorageAndActualPath(d.RemotePath)
+	if err != nil {
+		panic(err)
+	}
+	return storage.GetStorage().ID
+}
 
 func TestSyncAllRefreshesExpired(t *testing.T) {
 	d := setup(t)
@@ -1045,7 +1135,7 @@ func TestSyncAllRefreshesExpired(t *testing.T) {
 	_ = os.Remove(filepath.Join(root, "a.txt"))
 	_ = os.MkdirAll(filepath.Join(root, "newdir"), 0o755)
 
-	item, err := db.GetCacheList(d.ID, "/")
+	item, err := GetCacheList(d.ID, "/")
 	if err != nil || item == nil {
 		t.Fatalf("get cache row: %v %v", item, err)
 	}
@@ -1095,9 +1185,9 @@ func TestSyncAllSkipsFresh(t *testing.T) {
 func TestSyncAllDeletesRowOnFailure(t *testing.T) {
 	d := setup(t)
 	_, _ = d.List(context.Background(), rootDir(), model.ListArgs{})
-	_ = op.DeleteStorageById(mustLocalStorageID(d))
+	_ = os.RemoveAll(mustRootPath(d))
 
-	item, err := db.GetCacheList(d.ID, "/")
+	item, err := GetCacheList(d.ID, "/")
 	if err != nil || item == nil {
 		t.Fatalf("get cache row: %v %v", item, err)
 	}
@@ -1107,25 +1197,17 @@ func TestSyncAllDeletesRowOnFailure(t *testing.T) {
 
 	d.syncAll()
 
-	row, err := db.GetCacheList(d.ID, "/")
+	row, err := GetCacheList(d.ID, "/")
 	if err != nil || row != nil {
 		t.Errorf("expected row deleted after sync failure, got %v %v", row, err)
 	}
 }
 ```
 
-注意：
-- `TestSyncAllDeletesRowOnFailure` 需要 import `op`（已在 driver_test.go 中，但 sync_test.go 独立文件需自行 import `"github.com/OpenListTeam/OpenList/v4/internal/op"`）
-- helper（`setup`/`rootDir`/`names`/`contains`/`mustRootPath`/`mustLocalStorageID`）与 driver_test.go 同包共享，最终版以 Task 4 代码块为准；`mustRootPath` 返回 Local 的 `root_folder_path`（tmp），文件操作直接基于它
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `/Library/Go/sdk/go1.25.4/bin/go test ./drivers/cache/ -run TestSyncAll -v`
-Expected: FAIL — 编译错误 `d.syncAll undefined`
-
-- [ ] **Step 3: Write minimal implementation**
-
-`drivers/cache/sync.go`：
+注意（实施期已实证的修正，最终版以本代码块为准）：
+- `sync_test.go` 为 `package cache` **内部测试包**（否则无法调用未导出的 `d.syncAll`；Go 禁止外部测试包引用未导出方法），init/setup/helpers 自包含，不得与同包测试文件函数重名；`setup` 内用同包 `GetCacheList`（无 `db.` 前缀）；`mustRootPath` 返回 Local 的 `root_folder_path` 即 tmp
+- `TestSyncAllDeletesRowOnFailure` 触发方式：`os.RemoveAll(mustRootPath(d))` 删除下游文件系统使 `op.List` 失败（**不要**用 `op.DeleteStorageById`——它会让 `GetStorageAndActualPath` 先失败走 continue 分支，测不到删行逻辑）
+- `op.DeleteStorageById(ctx, id)` 签名带 ctx 参数
 
 ```go
 package cache
