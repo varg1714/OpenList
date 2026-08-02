@@ -4,6 +4,7 @@ import (
 	"context"
 	stdpath "path"
 	"sort"
+	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -37,8 +38,16 @@ func (d *ScheduledSync) scan() {
 		return syncpaths.DirDepth(seeds[i]) < syncpaths.DirDepth(seeds[j])
 	})
 	queue := generic.NewQueue[string]()
+	seen := make(map[string]bool)
+	push := func(p string) {
+		if seen[p] {
+			return
+		}
+		seen[p] = true
+		queue.Push(p)
+	}
 	for _, s := range seeds {
-		queue.Push(s)
+		push(s)
 	}
 	ctx := context.Background()
 	for !queue.IsEmpty() {
@@ -52,9 +61,13 @@ func (d *ScheduledSync) scan() {
 			if !o.IsDir() {
 				continue
 			}
-			child := stdpath.Join(dirPath, o.GetName())
+			name := o.GetName()
+			if name == "." || name == ".." || strings.ContainsRune(name, '/') {
+				continue
+			}
+			child := stdpath.Join(dirPath, name)
 			if !whitelisted || syncpaths.WithinSyncPaths(child, entries) {
-				queue.Push(child)
+				push(child)
 			}
 		}
 	}

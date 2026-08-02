@@ -203,6 +203,52 @@ func TestScanContinuesOnListError(t *testing.T) {
 	}
 }
 
+func TestScanNestedWhitelistVisitsOnce(t *testing.T) {
+	resetFake()
+	registerFake(t)
+	tree = map[string][]string{
+		"/":              {"movies"},
+		"/movies":        {"2024", "x"},
+		"/movies/2024":   {"y"},
+		"/movies/x":      nil,
+		"/movies/2024/y": nil,
+	}
+	d := schedWith(Addition{RemotePath: "/fake", SyncCronExpr: "0 3 * * *", SyncPaths: "/movies\n/movies/2024"})
+	d.scan()
+	want := []string{"/movies", "/movies/2024", "/movies/x", "/movies/2024/y"}
+	var got []string
+	mu.Lock()
+	for _, c := range calls {
+		got = append(got, c.path)
+	}
+	mu.Unlock()
+	if !slices.Equal(got, want) {
+		t.Errorf("nested whitelist walk = %v, want %v (each dir must be listed once)", got, want)
+	}
+}
+
+func TestScanSkipsDangerousChildNames(t *testing.T) {
+	resetFake()
+	registerFake(t)
+	tree = map[string][]string{
+		"/":      {"sub"},
+		"/sub":   {"..", "x"},
+		"/sub/x": nil,
+	}
+	d := schedWith(Addition{RemotePath: "/fake", SyncCronExpr: "0 3 * * *", SyncPaths: "/sub"})
+	d.scan()
+	want := []string{"/sub", "/sub/x"}
+	var got []string
+	mu.Lock()
+	for _, c := range calls {
+		got = append(got, c.path)
+	}
+	mu.Unlock()
+	if !slices.Equal(got, want) {
+		t.Errorf("dangerous-name walk = %v, want %v (.. child must not revisit /)", got, want)
+	}
+}
+
 func TestScanSkipsWhenDownstreamMissing(t *testing.T) {
 	resetFake()
 	d := schedWith(Addition{RemotePath: "/ghost", SyncCronExpr: "0 3 * * *"})
