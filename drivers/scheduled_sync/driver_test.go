@@ -13,6 +13,7 @@ import (
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/alias"
 	"github.com/OpenListTeam/OpenList/v4/drivers/cache"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/local"
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/strm"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -418,4 +419,111 @@ func TestScanThroughAliasRespectsCacheTTL(t *testing.T) {
 	if slices.Contains(names, "new.txt") {
 		t.Errorf("fresh row must be served from cache through alias chain, got %v", names)
 	}
+}
+
+// 复现完整链路 定时→strm→别名(多根)→缓存→网盘：所有缓存行都新鲜时，
+// 定时扫描不得触达任何网盘——ScheduleScan 必须穿透 strm 与别名两层转发，
+// 缓存才能按 TTL 门控（行新鲜 = serve 缓存，不回源）。
+func TestScanFullChainHitsNoNetdiskWhenRowsFresh(t *testing.T) {
+	resetFake()
+	registerFake(t)
+	tree = map[string][]string{
+		"/":     {"a", "b"},
+		"/a":    {"f1"},
+		"/b":    {"f2"},
+		"/a/f1": nil,
+		"/b/f2": nil,
+	}
+	cacheID1, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache1",
+		Addition:  `{"remote_path":"/fake"}`,
+	})
+	if err != nil {
+		t.Fatalf("create cache1: %+v", err)
+	}
+	cacheID2, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache2",
+		Addition:  `{"remote_path":"/fake"}`,
+	})
+	if err != nil {
+		t.Fatalf("create cache2: %+v", err)
+	}
+	aliasID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Alias",
+		MountPath: "/alias",
+		Addition:  "{\"paths\":\"电视:/cache1\\n电影:/cache2\"}",
+	})
+	if err != nil {
+		t.Fatalf("create alias: %+v", err)
+	}
+	strmID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Strm",
+		MountPath: "/strm",
+		Addition:  `{"paths":"/alias"}`,
+	})
+	if err != nil {
+		t.Fatalf("create strm: %+v", err)
+	}
+	schedID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "ScheduledSync",
+		MountPath: "/sched",
+		Addition:  `{"remote_path":"/strm","sync_cron_expr":"0 3 * * *","refresh":true}`,
+	})
+	if err != nil {
+		t.Fatalf("create sched: %+v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.DeleteStorageById(context.Background(), schedID)
+		_ = op.DeleteStorageById(context.Background(), strmID)
+		_ = op.DeleteStorageById(context.Background(), aliasID)
+		_ = op.DeleteStorageById(context.Background(), cacheID2)
+		_ = op.DeleteStorageById(context.Background(), cacheID1)
+	})
+	cd1 := mustCache(t, "/cache1")
+	cd2 := mustCache(t, "/cache2")
+
+	// 两个缓存各自补齐全部目录行（新鲜，未超过 TTL）
+	ctx := context.Background()
+	for _, p := range []string{"/", "/a", "/b", "/a/f1", "/b/f2"} {
+		dir := &model.Object{Path: p, Name: p, IsFolder: true}
+		if _, err := cd1.List(ctx, dir, model.ListArgs{}); err != nil {
+			t.Fatalf("prime cd1 %s: %+v", p, err)
+		}
+		if _, err := cd2.List(ctx, dir, model.ListArgs{}); err != nil {
+			t.Fatalf("prime cd2 %s: %+v", p, err)
+		}
+	}
+
+	// 清空网盘访问记录后触发扫描
+	mu.Lock()
+	calls = nil
+	mu.Unlock()
+	sched := mustSched(t)
+	sched.scan()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 0 {
+		t.Errorf("scan must not touch netdisks when all cache rows fresh, got %d calls: %v", len(calls), calls)
+	}
+}
+
+func mustCache(t *testing.T, mount string) *cache.Cache {
+	t.Helper()
+	d, err := op.GetStorageByMountPath(mount)
+	if err != nil {
+		t.Fatalf("get %s: %+v", mount, err)
+	}
+	return d.(*cache.Cache)
+}
+
+func mustSched(t *testing.T) *ScheduledSync {
+	t.Helper()
+	d, err := op.GetStorageByMountPath("/sched")
+	if err != nil {
+		t.Fatalf("get sched: %+v", err)
+	}
+	return d.(*ScheduledSync)
 }
