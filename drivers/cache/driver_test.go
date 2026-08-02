@@ -333,6 +333,22 @@ func TestCronExprScheduleInit(t *testing.T) {
 	if err := cd.Drop(context.Background()); err != nil {
 		t.Fatalf("drop with cron schedule: %+v", err)
 	}
+	// 更新路径（真实用户改配置的主入口）：换成新的合法表达式必须成功，
+	// 且存储仍可用——更新会先持久化再 Drop+re-init，不能把存储弄坏。
+	if err := op.UpdateStorage(context.Background(), model.Storage{
+		ID:        cd.GetStorage().ID,
+		Driver:    "Cache",
+		MountPath: "/cache3",
+		Addition:  `{"remote_path":"/local3","ttl_hours":24,"sync_interval_hours":0,"sync_cron_expr":"@every 12h"}`,
+	}); err != nil {
+		t.Fatalf("update with new valid cron expr: %+v", err)
+	}
+	if cd.SyncCronExpr != "@every 12h" {
+		t.Fatalf("update should re-unmarshal addition, got %q", cd.SyncCronExpr)
+	}
+	if _, err := cd.List(context.Background(), rootDir(), model.ListArgs{}); err != nil {
+		t.Fatalf("list after update: %+v", err)
+	}
 }
 
 // 非法表达式必须在创建/加载时失败并指明字段名——不能静默回退到 interval。
@@ -359,5 +375,67 @@ func TestInvalidCronExprRejected(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "sync_cron_expr") {
 		t.Fatalf("expected error mentioning sync_cron_expr, got %v", err)
+	}
+
+	// 更新路径是真实用户的主入口：合法的存储改成非法表达式必须同样失败并指明字段名。
+	cacheID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache6",
+		Addition:  `{"remote_path":"/local4","ttl_hours":24,"sync_interval_hours":0}`,
+	})
+	if err != nil {
+		t.Fatalf("create working cache storage: %+v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.DeleteStorageById(context.Background(), cacheID)
+	})
+	err = op.UpdateStorage(context.Background(), model.Storage{
+		ID:        cacheID,
+		Driver:    "Cache",
+		MountPath: "/cache6",
+		Addition:  `{"remote_path":"/local4","ttl_hours":24,"sync_interval_hours":0,"sync_cron_expr":"60 * * * *"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "sync_cron_expr") {
+		t.Fatalf("expected update error mentioning sync_cron_expr, got %v", err)
+	}
+}
+
+// 已初始化（带 cron 表达式）的存储再次 Init 必须幂等：先 Stop 旧 cron 再重建，
+// 不报错不 panic；原始（未 trim 的）表达式保持原样，trim 只发生在解析时。
+func TestReInitKeepsSchedule(t *testing.T) {
+	tmp := t.TempDir()
+	localID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Local",
+		MountPath: "/local5",
+		Addition:  fmt.Sprintf(`{"root_folder_path":%q}`, tmp),
+	})
+	if err != nil {
+		t.Fatalf("create local storage: %+v", err)
+	}
+	cacheID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache5",
+		Addition:  `{"remote_path":"/local5","ttl_hours":24,"sync_interval_hours":0,"sync_cron_expr":" 0 3 * * * "}`,
+	})
+	if err != nil {
+		t.Fatalf("create cache storage: %+v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.DeleteStorageById(context.Background(), cacheID)
+		_ = op.DeleteStorageById(context.Background(), localID)
+	})
+	d, err := op.GetStorageByMountPath("/cache5")
+	if err != nil {
+		t.Fatalf("get cache storage: %+v", err)
+	}
+	cd := d.(*cache.Cache)
+	if err := cd.Init(context.Background()); err != nil {
+		t.Fatalf("second init: %+v", err)
+	}
+	if cd.SyncCronExpr != " 0 3 * * * " {
+		t.Fatalf("raw expr should be preserved across re-init, got %q", cd.SyncCronExpr)
+	}
+	if _, err := cd.List(context.Background(), rootDir(), model.ListArgs{}); err != nil {
+		t.Fatalf("list after re-init: %+v", err)
 	}
 }
