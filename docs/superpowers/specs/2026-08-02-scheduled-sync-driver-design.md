@@ -66,12 +66,23 @@ type Addition struct {
 - `Addition`：`SyncIntervalHours`、`SyncCronExpr`（drivers/cache/meta.go）
 - `Cache` 结构体 `cron` 字段、`buildSyncCron`（driver.go:42-50）、`Init`/`Drop` 中的 cron 启停
 - `syncAll`（sync.go:82-166）、`ListCacheLists`（db.go:46，唯一调用方是 syncAll）
-- `TTLHours`：唯一使用方是 syncAll 的 staleness 判断（sync.go:93-106），浏览/读取路径从不检查 TTL，syncAll 移除后是死字段
 
-### 保留
+### 保留 / 调整
 
-- `sync_paths`（浏览展示过滤职责）、`filterCachedObjs`/`visibleInSyncPaths`/`syncPathEntries`
+- `sync_paths`（浏览展示过滤职责）、`filterCachedObjs`/`visibleInSyncPaths`
+- `TTLHours`：保留并重新承担"定时扫描的过期门控"职责（见下）
 - `List`/`Get`/`UpsertCacheList`/`snapshot.go` 全部逻辑——这是 ScheduledSync 驱动"安全跟随"的根基
+
+### 定时扫描的 TTL 门控（后续修订）
+
+定时驱动的 `Refresh` 参数是二元的，单靠它无法表达旧 `syncAll` 的"过期才拉"语义：
+`refresh=false` 时 Cache.List 永远 serve 缓存行（扫描不产生任何回源），`refresh=true` 时每 tick 全量回源（TTL 形同虚设）。修订方案：
+
+- `model.ListArgs` 新增 `ScheduleScan bool`：标记该次 List 来自后台定时扫描
+- `Cache.List` 的 serve 判断扩展为：`item != nil && (!Refresh || (ScheduleScan && 行未过期))` 时直接 serve 缓存行；定时扫描只对**超过 TTL 的过期行**回源 + upsert
+- 手动刷新（`Refresh=true` 且无 `ScheduleScan`）保持总是回源，行为不回归
+- ScheduledSync 遍历时始终置 `ScheduleScan: true`
+- 效果：每个 tick 全树走一遍（新鲜行只是 DB 读），只有过期目录才访问下游——与旧 `syncAll` 语义一致
 
 ### 共享代码（新建 internal/syncpaths 包）
 
@@ -88,15 +99,16 @@ type Addition struct {
 ```
 cron 触发
   → ScheduledSync 解析下游（remote_path）
-  → BFS: op.List(downstream, dir, Refresh)
-      ├─ Cache 下游: List 白名单过滤 + Refresh=true 回源 upsert 缓存行
+  → BFS: op.List(downstream, dir, Refresh, ScheduleScan=true)
+      ├─ Cache 下游: List 白名单过滤 + ScheduleScan 按 TTL 门控回源（过期才 upsert）
       └─ 普通下游: 直接调远程 API（预热驱动内部缓存）
   → 仅对返回的 IsFolder 且白名单内子目录继续
 ```
 
 ## 行为差异与迁移影响
 
-- 存量 Cache 配置中的 `sync_interval_hours`/`sync_cron_expr`/`ttl_hours` 在 unmarshal 时被静默丢弃（JSON 反序列化忽略未知字段），老用户的定时刷新停止；需新建 ScheduledSync 存储指向其 Cache 挂载路径
+- 存量 Cache 配置中的 `sync_interval_hours`/`sync_cron_expr` 在 unmarshal 时被静默丢弃（JSON 反序列化忽略未知字段），老用户的定时刷新停止；需新建 ScheduledSync 存储指向其 Cache 挂载路径
+- `ttl_hours` 字段保留（默认 24），语义从"后台同步的过期门槛"变为"定时扫描的过期门槛"：扫描每个 tick 遍历全树但只回源刷新过期目录
 - `refresh=true` 时每次触发刷新所有访问到的目录，不再有 TTL 过期门槛；用户可通过 `refresh` 配置选择行为
 - ScheduledSync 白名单为空 + Cache 下游：从根遍历，但根 List 已被 Cache 自身白名单过滤，实际扫描范围仍受控
 - ScheduledSync 白名单非空 + 普通下游：等价于 Cache 旧的 whitelist 扫描范围语义（子树遍历）
