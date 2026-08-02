@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/chunk"
@@ -16,6 +17,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -277,4 +279,85 @@ func mustLocalStorageID(d *cache.Cache) uint {
 		panic(err)
 	}
 	return storage.GetStorage().ID
+}
+
+// 旧版 Addition JSON（仅 interval，无 cron 字段）必须无错误反序列化，
+// 且新字段取零值——字段类型未改动，这是向后兼容的回归保护。
+func TestLegacyAdditionUnmarshal(t *testing.T) {
+	var a cache.Addition
+	if err := utils.Json.UnmarshalFromString(`{"remote_path":"/local","ttl_hours":24,"sync_interval_hours":2}`, &a); err != nil {
+		t.Fatalf("legacy addition unmarshal: %+v", err)
+	}
+	if a.SyncIntervalHours != 2 {
+		t.Errorf("expected interval 2, got %d", a.SyncIntervalHours)
+	}
+	if a.SyncCronExpr != "" {
+		t.Errorf("expected empty cron expr, got %q", a.SyncCronExpr)
+	}
+}
+
+// cron 表达式（含前后空格）配置的存储必须初始化成功并可用。
+func TestCronExprScheduleInit(t *testing.T) {
+	tmp := t.TempDir()
+	localID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Local",
+		MountPath: "/local3",
+		Addition:  fmt.Sprintf(`{"root_folder_path":%q}`, tmp),
+	})
+	if err != nil {
+		t.Fatalf("create local storage: %+v", err)
+	}
+	cacheID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache3",
+		Addition:  `{"remote_path":"/local3","ttl_hours":24,"sync_interval_hours":0,"sync_cron_expr":" 0 3 * * * "}`,
+	})
+	if err != nil {
+		t.Fatalf("create cache storage with cron expr: %+v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.DeleteStorageById(context.Background(), localID)
+		_ = op.DeleteStorageById(context.Background(), cacheID)
+	})
+	d, err := op.GetStorageByMountPath("/cache3")
+	if err != nil {
+		t.Fatalf("get cache storage: %+v", err)
+	}
+	cd := d.(*cache.Cache)
+	if cd.SyncCronExpr != " 0 3 * * * " {
+		t.Fatalf("raw field should be preserved (trim only at parse), got %q", cd.SyncCronExpr)
+	}
+	if _, err := cd.List(context.Background(), rootDir(), model.ListArgs{}); err != nil {
+		t.Fatalf("list with cron schedule: %+v", err)
+	}
+	if err := cd.Drop(context.Background()); err != nil {
+		t.Fatalf("drop with cron schedule: %+v", err)
+	}
+}
+
+// 非法表达式必须在创建/加载时失败并指明字段名——不能静默回退到 interval。
+func TestInvalidCronExprRejected(t *testing.T) {
+	tmp := t.TempDir()
+	localID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Local",
+		MountPath: "/local4",
+		Addition:  fmt.Sprintf(`{"root_folder_path":%q}`, tmp),
+	})
+	if err != nil {
+		t.Fatalf("create local storage: %+v", err)
+	}
+	t.Cleanup(func() {
+		if d, err := op.GetStorageByMountPath("/cache4"); err == nil {
+			_ = op.DeleteStorageById(context.Background(), d.GetStorage().ID)
+		}
+		_ = op.DeleteStorageById(context.Background(), localID)
+	})
+	_, err = op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache4",
+		Addition:  `{"remote_path":"/local4","ttl_hours":24,"sync_interval_hours":0,"sync_cron_expr":"60 * * * *"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "sync_cron_expr") {
+		t.Fatalf("expected error mentioning sync_cron_expr, got %v", err)
+	}
 }

@@ -35,6 +35,18 @@ func (d *Cache) GetAddition() driver.Additional {
 	return &d.Addition
 }
 
+// buildSyncCron selects the background sync schedule: a non-empty cron
+// expression wins over the legacy interval; both empty disables sync.
+func buildSyncCron(expr string, intervalHours int) (*cron.Cron, error) {
+	if expr != "" {
+		return cron.NewCronExpr(expr)
+	}
+	if intervalHours > 0 {
+		return cron.NewCron(time.Duration(intervalHours) * time.Hour), nil
+	}
+	return nil, nil
+}
+
 func (d *Cache) Init(ctx context.Context) error {
 	if strings.TrimSpace(d.RemotePath) == "" {
 		return errors.New("remote path must not be empty")
@@ -53,8 +65,12 @@ func (d *Cache) Init(ctx context.Context) error {
 		d.cron.Stop()
 		d.cron = nil
 	}
-	if d.SyncIntervalHours > 0 {
-		d.cron = cron.NewCron(time.Duration(d.SyncIntervalHours) * time.Hour)
+	c, err := buildSyncCron(strings.TrimSpace(d.SyncCronExpr), d.SyncIntervalHours)
+	if err != nil {
+		return errors.Wrapf(err, "cache: invalid sync_cron_expr %q", d.SyncCronExpr)
+	}
+	if c != nil {
+		d.cron = c
 		d.cron.Do(d.syncAll)
 	}
 	return nil
