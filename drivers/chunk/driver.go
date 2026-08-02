@@ -144,8 +144,9 @@ func (d *Chunk) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	}
 	remoteActualDir := stdpath.Join(remoteActualPath, dir.GetPath())
 	remoteObjs, err := op.List(ctx, remoteStorage, remoteActualDir, model.ListArgs{
-		ReqPath: args.ReqPath,
-		Refresh: args.Refresh,
+		ReqPath:      args.ReqPath,
+		Refresh:      args.Refresh,
+		ScheduleScan: args.ScheduleScan,
 	})
 	if err != nil {
 		return nil, err
@@ -163,8 +164,9 @@ func (d *Chunk) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 				result = append(result, nil)
 				listG.Go(func(ctx context.Context) error {
 					chunkObjs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualDir, rawName), model.ListArgs{
-						ReqPath: stdpath.Join(args.ReqPath, rawName),
-						Refresh: args.Refresh,
+						ReqPath:      stdpath.Join(args.ReqPath, rawName),
+						Refresh:      args.Refresh,
+						ScheduleScan: args.ScheduleScan,
 					})
 					if err != nil {
 						return err

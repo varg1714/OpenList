@@ -143,6 +143,7 @@ func (d *Alias) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 			NoLog:              true,
 			Refresh:            args.Refresh,
 			WithStorageDetails: args.WithStorageDetails && d.DetailsPassThrough,
+			ScheduleScan:       args.ScheduleScan,
 		})
 		if err == nil {
 			tmp, err = utils.SliceConvert(tmp, func(obj model.Obj) (model.Obj, error) {

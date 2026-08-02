@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/alias"
 	"github.com/OpenListTeam/OpenList/v4/drivers/cache"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/local"
 
@@ -339,5 +340,82 @@ func TestScanOnCacheDownstreamRefreshesRows(t *testing.T) {
 	}
 	if slices.Contains(names, "a.txt") {
 		t.Errorf("cache row still has a.txt after scan: %v", names)
+	}
+}
+
+// 定时扫描穿过转发层（定时→别名→缓存→本地）时 ScheduleScan 必须透传，
+// 缓存才能按 TTL 门控：行新鲜时扫描不回源，new.txt 不应出现在缓存行中。
+// 若别名重建参数时丢掉 ScheduleScan，这里会退化为手动刷新语义全量回源。
+func TestScanThroughAliasRespectsCacheTTL(t *testing.T) {
+	tmp := t.TempDir()
+	_ = os.WriteFile(filepath.Join(tmp, "a.txt"), []byte("hello"), 0o644)
+	_ = os.MkdirAll(filepath.Join(tmp, "sub"), 0o755)
+	localID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Local",
+		MountPath: "/local",
+		Addition:  fmt.Sprintf(`{"root_folder_path":%q}`, tmp),
+	})
+	if err != nil {
+		t.Fatalf("create local storage: %+v", err)
+	}
+	cacheID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Cache",
+		MountPath: "/cache",
+		Addition:  `{"remote_path":"/local"}`,
+	})
+	if err != nil {
+		t.Fatalf("create cache storage: %+v", err)
+	}
+	aliasID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "Alias",
+		MountPath: "/alias",
+		Addition:  `{"paths":"/cache"}`,
+	})
+	if err != nil {
+		t.Fatalf("create alias storage: %+v", err)
+	}
+	schedID, err := op.CreateStorage(context.Background(), model.Storage{
+		Driver:    "ScheduledSync",
+		MountPath: "/sched",
+		Addition:  `{"remote_path":"/alias","sync_cron_expr":"0 3 * * *","refresh":true}`,
+	})
+	if err != nil {
+		t.Fatalf("create sched storage: %+v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.DeleteStorageById(context.Background(), schedID)
+		_ = op.DeleteStorageById(context.Background(), aliasID)
+		_ = op.DeleteStorageById(context.Background(), cacheID)
+		_ = op.DeleteStorageById(context.Background(), localID)
+	})
+	cacheDriver, err := op.GetStorageByMountPath("/cache")
+	if err != nil {
+		t.Fatalf("get cache storage: %+v", err)
+	}
+	cd := cacheDriver.(*cache.Cache)
+	root := &model.Object{Path: "/", Name: "Root", IsFolder: true}
+	if _, err := cd.List(context.Background(), root, model.ListArgs{}); err != nil {
+		t.Fatalf("prime cache root: %+v", err)
+	}
+
+	// 行保持新鲜（未超过 TTL），扫描穿过别名层后必须仍被 TTL 门控
+	_ = os.WriteFile(filepath.Join(tmp, "new.txt"), []byte("x"), 0o644)
+
+	schedDriver, err := op.GetStorageByMountPath("/sched")
+	if err != nil {
+		t.Fatalf("get sched storage: %+v", err)
+	}
+	schedDriver.(*ScheduledSync).scan()
+
+	objs, err := cd.List(context.Background(), root, model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list cache after scan: %+v", err)
+	}
+	var names []string
+	for _, o := range objs {
+		names = append(names, o.GetName())
+	}
+	if slices.Contains(names, "new.txt") {
+		t.Errorf("fresh row must be served from cache through alias chain, got %v", names)
 	}
 }

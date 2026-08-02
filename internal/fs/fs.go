@@ -22,6 +22,9 @@ type ListArgs struct {
 	Refresh            bool
 	NoLog              bool
 	WithStorageDetails bool
+	// ScheduleScan 标记该次 List 来自后台定时扫描（如 ScheduledSync 驱动），
+	// 与 model.ListArgs.ScheduleScan 同语义，转发驱动需原样透传。
+	ScheduleScan bool
 }
 
 func List(ctx context.Context, path string, args *ListArgs) ([]model.Obj, error) {

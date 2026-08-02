@@ -27,6 +27,7 @@ func list(ctx context.Context, path string, args *ListArgs) ([]model.Obj, error)
 			ReqPath:            path,
 			Refresh:            args.Refresh,
 			WithStorageDetails: args.WithStorageDetails,
+			ScheduleScan:       args.ScheduleScan,
 		})
 		if err != nil {
 			if !args.NoLog {
