@@ -44,7 +44,7 @@ func setup(t *testing.T) *Cache {
 	cacheID, err := op.CreateStorage(context.Background(), model.Storage{
 		Driver:    "Cache",
 		MountPath: "/cache",
-		Addition:  `{"remote_path":"/local","ttl_hours":24,"sync_interval_hours":0}`,
+		Addition:  `{"remote_path":"/local"}`,
 	})
 	if err != nil {
 		t.Fatalf("create cache storage: %+v", err)
