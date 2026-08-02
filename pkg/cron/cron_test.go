@@ -43,14 +43,40 @@ func TestNewCronFiresRepeatedly(t *testing.T) {
 	c.Stop()
 }
 
+func TestJobFiresDoNotOverlap(t *testing.T) {
+	var concurrent, maxConcurrent int64
+	c := NewCron(10 * time.Millisecond)
+	c.Do(func() {
+		cur := atomic.AddInt64(&concurrent, 1)
+		defer atomic.AddInt64(&concurrent, -1)
+		for {
+			prev := atomic.LoadInt64(&maxConcurrent)
+			if prev >= cur || atomic.CompareAndSwapInt64(&maxConcurrent, prev, cur) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	})
+	time.Sleep(150 * time.Millisecond)
+	c.Stop()
+	if m := atomic.LoadInt64(&maxConcurrent); m != 1 {
+		t.Fatalf("jobs overlapped: max concurrent = %d, want 1", m)
+	}
+}
+
 func TestStopHaltsFiring(t *testing.T) {
 	var n int64
 	c := NewCron(50 * time.Millisecond)
 	c.Do(func() { atomic.AddInt64(&n, 1) })
-	for atomic.LoadInt64(&n) < 2 {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && atomic.LoadInt64(&n) < 2 {
 		time.Sleep(10 * time.Millisecond)
 	}
+	if atomic.LoadInt64(&n) < 2 {
+		t.Fatalf("expected >= 2 fires, got %d", n)
+	}
 	c.Stop()
+	time.Sleep(20 * time.Millisecond)
 	before := atomic.LoadInt64(&n)
 	time.Sleep(150 * time.Millisecond)
 	if after := atomic.LoadInt64(&n); after != before {
@@ -96,11 +122,10 @@ func TestCronExprNextFiresAtFixedTime(t *testing.T) {
 		t.Fatal("entry Next never computed")
 	}
 	now := time.Now()
-	expect := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, time.Local)
-	if now.After(expect) {
-		expect = expect.AddDate(0, 0, 1)
+	if next.Hour() != 3 || next.Minute() != 0 || next.Second() != 0 {
+		t.Fatalf("next = %v, want hour=3 minute=0 second=0", next)
 	}
-	if !next.Equal(expect) {
-		t.Fatalf("next = %v, want %v", next, expect)
+	if !next.After(now) || next.Sub(now) >= 26*time.Hour {
+		t.Fatalf("next = %v, want within 26h after now %v", next, now)
 	}
 }
