@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/local"
 
@@ -217,5 +218,69 @@ func TestListWhitelistRefreshStillFilters(t *testing.T) {
 	}
 	if len(objs) != 1 || objs[0].GetName() != "sub" {
 		t.Errorf("expected only sub dir after refresh, got %v", names(objs))
+	}
+}
+
+// 定时扫描（ScheduleScan=true + Refresh=true）只回源刷新超过 TTL 的过期行：
+// 行还新鲜时直接 serve 缓存，不访问下游。
+func TestListScheduleScanServesFreshRow(t *testing.T) {
+	d := setup(t)
+	d.TTLHours = 1
+	if _, err := d.List(context.Background(), rootDir(), model.ListArgs{}); err != nil {
+		t.Fatalf("prime cache root: %+v", err)
+	}
+	root := mustRootPath(d)
+	_ = os.WriteFile(filepath.Join(root, "new.txt"), []byte("x"), 0o644)
+
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{Refresh: true, ScheduleScan: true})
+	if err != nil {
+		t.Fatalf("schedule scan list: %+v", err)
+	}
+	if contains(names(objs), "new.txt") {
+		t.Errorf("fresh row should be served from cache without downstream fetch, got %v", names(objs))
+	}
+}
+
+// 行超过 TTL（stale）时定时扫描必须回源刷新。
+func TestListScheduleScanRefreshesStaleRow(t *testing.T) {
+	d := setup(t)
+	d.TTLHours = 1
+	if _, err := d.List(context.Background(), rootDir(), model.ListArgs{}); err != nil {
+		t.Fatalf("prime cache root: %+v", err)
+	}
+	item, err := GetCacheList(d.ID, "/")
+	if err != nil || item == nil {
+		t.Fatalf("get cache row: %v %v", item, err)
+	}
+	if err := db.GetDb().Model(&model.CacheList{}).Where("id = ?", item.ID).Update("updated_at", time.Now().Add(-2*time.Hour)).Error; err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+	root := mustRootPath(d)
+	_ = os.WriteFile(filepath.Join(root, "new.txt"), []byte("x"), 0o644)
+
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{Refresh: true, ScheduleScan: true})
+	if err != nil {
+		t.Fatalf("schedule scan list: %+v", err)
+	}
+	if !contains(names(objs), "new.txt") {
+		t.Errorf("stale row should be refetched from downstream, got %v", names(objs))
+	}
+}
+
+// 手动刷新（Refresh=true 但不带 ScheduleScan）不受 TTL 门控：行新鲜也总是回源。
+func TestListManualRefreshAlwaysFetches(t *testing.T) {
+	d := setup(t)
+	if _, err := d.List(context.Background(), rootDir(), model.ListArgs{}); err != nil {
+		t.Fatalf("prime cache root: %+v", err)
+	}
+	root := mustRootPath(d)
+	_ = os.WriteFile(filepath.Join(root, "new.txt"), []byte("x"), 0o644)
+
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("manual refresh list: %+v", err)
+	}
+	if !contains(names(objs), "new.txt") {
+		t.Errorf("manual refresh must always fetch from downstream, got %v", names(objs))
 	}
 }

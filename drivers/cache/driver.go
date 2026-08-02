@@ -4,6 +4,7 @@ import (
 	"context"
 	stdpath "path"
 	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -38,6 +39,9 @@ func (d *Cache) Init(ctx context.Context) error {
 		return errors.New("remote path must not be empty")
 	}
 	d.RemotePath = utils.FixAndCleanPath(d.RemotePath)
+	if d.TTLHours <= 0 {
+		d.TTLHours = 24
+	}
 	d.syncProxy()
 	if _, actualPath, err := op.GetStorageAndActualPath(d.RemotePath); err == nil {
 		syncpaths.ToRelEntries(actualPath, d.SyncPaths)
@@ -83,12 +87,13 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	if whitelisted && dirPath != "/" && !visibleInSyncPaths(dirPath, entries) {
 		return nil, nil
 	}
-	if !args.Refresh {
-		if item, err := GetCacheList(d.ID, dirPath); err != nil {
-			log.Errorf("cache: get list %s: %+v", dirPath, err)
-		} else if item != nil {
-			return fromCachedObjs(filterCachedObjs(item.Data, entries, whitelisted)), nil
-		}
+	// 定时扫描（ScheduleScan）按 TTL 门控回源：行新鲜时直接 serve 缓存，
+	// 过期或缺失才回源刷新；手动刷新（无 ScheduleScan）总是回源。
+	ttl := time.Duration(d.TTLHours) * time.Hour
+	if item, err := GetCacheList(d.ID, dirPath); err != nil {
+		log.Errorf("cache: get list %s: %+v", dirPath, err)
+	} else if item != nil && (!args.Refresh || (args.ScheduleScan && time.Since(item.UpdatedAt) < ttl)) {
+		return fromCachedObjs(filterCachedObjs(item.Data, entries, whitelisted)), nil
 	}
 	remoteObjs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), args)
 	if err != nil {

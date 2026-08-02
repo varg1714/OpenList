@@ -52,7 +52,7 @@ func (d *ScheduledSync) scan() {
 	ctx := context.Background()
 	for !queue.IsEmpty() {
 		dirPath := queue.Pop()
-		objs, err := op.List(ctx, remoteStorage, stdpath.Join(actualPath, dirPath), model.ListArgs{Refresh: d.Refresh})
+		objs, err := op.List(ctx, remoteStorage, stdpath.Join(actualPath, dirPath), model.ListArgs{Refresh: d.Refresh, ScheduleScan: true})
 		if err != nil {
 			log.Errorf("scheduled_sync: list %s: %+v", dirPath, err)
 			continue

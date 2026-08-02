@@ -15,6 +15,10 @@ type ListArgs struct {
 	S3ShowPlaceholder  bool
 	Refresh            bool
 	WithStorageDetails bool
+	// ScheduleScan 标记该次 List 来自后台定时扫描（如 ScheduledSync 驱动），
+	// 供带缓存语义的驱动（如 Cache）按 TTL 门控回源：行新鲜时直接 serve 缓存。
+	// 手动刷新（Refresh=true 但不带该标记）保持总是回源。
+	ScheduleScan bool
 }
 
 type LinkArgs struct {

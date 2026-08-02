@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/cache"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/local"
@@ -62,7 +63,7 @@ func (d *fakeDownstream) Get(ctx context.Context, path string) (model.Obj, error
 func (d *fakeDownstream) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	calls = append(calls, listCall{path: dir.GetPath(), refresh: args.Refresh})
+	calls = append(calls, listCall{path: dir.GetPath(), refresh: args.Refresh, scheduleScan: args.ScheduleScan})
 	if errPaths[dir.GetPath()] {
 		return nil, fmt.Errorf("scripted error for %s", dir.GetPath())
 	}
@@ -78,8 +79,9 @@ func (d *fakeDownstream) Link(ctx context.Context, file model.Obj, args model.Li
 }
 
 type listCall struct {
-	path    string
-	refresh bool
+	path         string
+	refresh      bool
+	scheduleScan bool
 }
 
 var (
@@ -176,6 +178,9 @@ func TestScanPassesRefreshFlag(t *testing.T) {
 	for _, c := range calls {
 		if !c.refresh {
 			t.Errorf("expected Refresh=true for %s", c.path)
+		}
+		if !c.scheduleScan {
+			t.Errorf("expected ScheduleScan=true (background scan marker) for %s", c.path)
 		}
 	}
 }
@@ -301,6 +306,13 @@ func TestScanOnCacheDownstreamRefreshesRows(t *testing.T) {
 	root := &model.Object{Path: "/", Name: "Root", IsFolder: true}
 	if _, err := cd.List(context.Background(), root, model.ListArgs{}); err != nil {
 		t.Fatalf("prime cache root: %+v", err)
+	}
+
+	// 把缓存行老化到超过 TTL（默认 24h）：定时扫描只回源刷新过期行
+	if err := db.GetDb().Model(&model.CacheList{}).
+		Where("storage_id = ?", cacheDriver.GetStorage().ID).
+		Update("updated_at", time.Now().Add(-25*time.Hour)).Error; err != nil {
+		t.Fatalf("age cache rows: %v", err)
 	}
 
 	// 修改下游文件系统：新增 new.txt、删除 a.txt
