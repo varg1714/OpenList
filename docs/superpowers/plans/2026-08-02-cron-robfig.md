@@ -4,7 +4,7 @@
 
 **Goal:** 用 `github.com/robfig/cron/v3` 重写 `pkg/cron`，保持现有 `NewCron(duration)`/`Do(f)`/`Stop()` 语义不变（17 处调用方零改动），新增 `NewCronExpr(expr string) (*Cron, error)` 支持 Linux 风格 5/6 段 cron 表达式。
 
-**Architecture:** `pkg/cron` 从自研 ticker 改为 robfig 调度器的薄封装。每个 `Cron` 实例持有一个 robfig 调度器和一个 entryID。`NewCron(d)` 内部转成 `@every <d>` 描述符；解析器配置 `SecondOptional` 使 5 段和 6 段表达式均可解析。旧 API 签名与行为语义保持，新增构造函数返回 `(*Cron, error)`。
+**Architecture:** `pkg/cron` 从自研 ticker 改为 robfig 调度器的薄封装。每个 `Cron` 实例持有一个 robfig 调度器和一个 entryID。`NewCron(d)` 内部使用自定义 `everySchedule`（`Next = t + d`）固定间隔调度，绕开 `@every` 描述符的 1 秒粒度舍入；解析器配置 `SecondOptional` 使 5 段和 6 段表达式均可解析。调度器统一配置 `WithChain(SkipIfStillRunning, Recover)`：job 串行执行不重叠（保持旧 ticker 语义），panic 记录日志后继续。旧 API 签名与行为语义保持，新增构造函数返回 `(*Cron, error)`。
 
 **Tech Stack:** Go 1.23.4（go.mod）、`github.com/robfig/cron/v3 v3.0.1`、标准库 `testing`/`time`。
 
@@ -60,7 +60,7 @@ git commit -m "deps(cron): add robfig/cron v3.0.1"
   func (c *Cron) Do(f func())
   func (c *Cron) Stop()
   ```
-  `Cron` 结构体私有字段：`expr string`、`s *cron.Cron`（robfig）、`entryID cron.EntryID`、`mu sync.Mutex`。
+  `Cron` 结构体私有字段：`expr string`、`s *cron.Cron`（robfig）、`entryID cron.EntryID`、`mu sync.Mutex`、`sched cron.Schedule`（`NewCron` 路径的 `everySchedule`；`NewCronExpr` 路径为 nil）。
   语义约定：`Do` 每实例最多生效一次（entryID 非 0 后再次调用为 no-op）；`Stop` 幂等，Do 之前调用不阻塞；Stop 后实例不复用（与旧实现一致，调用方模式为 Stop 后置 nil 重建）。
 
 - [ ] **Step 1: 先写测试（替换整个 cron_test.go）**
@@ -199,25 +199,49 @@ type Cron struct {
 	s       *robfig.Cron
 	entryID robfig.EntryID
 	mu      sync.Mutex
+	sched   robfig.Schedule
 }
 
+// everySchedule fires at fixed intervals without robfig's 1-second granularity.
+type everySchedule struct{ d time.Duration }
+
+func (e everySchedule) Next(t time.Time) time.Time { return t.Add(e.d) }
+
+var parser = robfig.NewParser(robfig.SecondOptional | robfig.Minute | robfig.Hour |
+	robfig.Dom | robfig.Month | robfig.Dow | robfig.Descriptor)
+
+// chain serializes job runs and recovers panics, restoring the old ticker's
+// non-overlapping execution and adding panic safety.
+var chain = robfig.WithChain(
+	robfig.SkipIfStillRunning(robfig.DefaultLogger),
+	robfig.Recover(robfig.DefaultLogger),
+)
+
+// NewCron returns a Cron that invokes f at fixed intervals of d, starting when
+// Do is called.
 func NewCron(d time.Duration) *Cron {
-	c, err := NewCronExpr("@every " + d.String())
-	if err != nil {
-		panic(err)
+	if d <= 0 {
+		// Prevent a zero-interval busy loop: with d = 0, robfig would
+		// compute Next(t) = t and spin forever.
+		d = time.Second
 	}
-	return c
+	return &Cron{
+		expr:  "", // schedule path routes via c.sched, never AddFunc
+		s:     robfig.New(robfig.WithParser(parser), chain),
+		sched: everySchedule{d},
+	}
 }
 
+// NewCronExpr returns a Cron that invokes f per the cron expression expr. Note
+// that robfig's @every descriptor truncates sub-second durations to 1 second;
+// use NewCron for sub-second intervals.
 func NewCronExpr(expr string) (*Cron, error) {
-	parser := robfig.NewParser(robfig.SecondOptional | robfig.Minute | robfig.Hour |
-		robfig.Dom | robfig.Month | robfig.Dow | robfig.Descriptor)
 	if _, err := parser.Parse(expr); err != nil {
 		return nil, err
 	}
 	return &Cron{
 		expr: expr,
-		s:    robfig.New(robfig.WithParser(parser)),
+		s:    robfig.New(robfig.WithParser(parser), chain),
 	}, nil
 }
 
@@ -227,11 +251,15 @@ func (c *Cron) Do(f func()) {
 	if c.entryID != 0 {
 		return
 	}
-	id, err := c.s.AddFunc(c.expr, f)
-	if err != nil {
-		panic(err)
+	if c.sched != nil {
+		c.entryID = c.s.Schedule(c.sched, robfig.FuncJob(f))
+	} else {
+		id, err := c.s.AddFunc(c.expr, f)
+		if err != nil {
+			panic(err)
+		}
+		c.entryID = id
 	}
-	c.entryID = id
 	c.s.Start()
 }
 
