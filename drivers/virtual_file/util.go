@@ -23,7 +23,7 @@ func List(storageId uint, dir model.Obj, fileFunc func(virtualFile model.Virtual
 	results := make([]model.Obj, 0)
 
 	dirName := dir.GetName()
-	utils.Log.Infof("list file:[%s]", dirName)
+	utils.Log.Infof("list file:[%s] path:[%s]", dirName, dir.GetPath())
 
 	parent := ""
 	dbQuery := false

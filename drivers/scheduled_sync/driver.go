@@ -10,12 +10,14 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/pkg/errors"
+	"golang.org/x/time/rate"
 )
 
 type ScheduledSync struct {
 	model.Storage
 	Addition
-	cron *cron.Cron
+	cron    *cron.Cron
+	limiter *rate.Limiter
 }
 
 func (d *ScheduledSync) Config() driver.Config { return config }
@@ -34,6 +36,11 @@ func (d *ScheduledSync) Init(ctx context.Context) error {
 	if d.cron != nil {
 		d.cron.Stop()
 		d.cron = nil
+	}
+	d.limiter = nil
+	if d.ListRateLimit > 0 {
+		// burst=1：严格按速率放行，每个 List 调用等待令牌
+		d.limiter = rate.NewLimiter(rate.Limit(d.ListRateLimit), 1)
 	}
 	c, err := cron.NewCronExpr(expr)
 	if err != nil {

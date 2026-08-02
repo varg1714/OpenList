@@ -56,3 +56,23 @@ func TestReInitRestartsCron(t *testing.T) {
 		t.Fatal("expected cron rebuilt after re-init")
 	}
 }
+
+func TestInitBuildsRateLimiter(t *testing.T) {
+	d := schedWith(Addition{RemotePath: "/fake", SyncCronExpr: "0 3 * * *", ListRateLimit: 10})
+	if err := d.Init(context.Background()); err != nil {
+		t.Fatalf("init: %+v", err)
+	}
+	if d.limiter == nil {
+		t.Fatal("expected limiter when list_rate_limit > 0")
+	}
+}
+
+func TestInitSkipsRateLimiterWhenZero(t *testing.T) {
+	d := schedWith(Addition{RemotePath: "/fake", SyncCronExpr: "0 3 * * *"})
+	if err := d.Init(context.Background()); err != nil {
+		t.Fatalf("init: %+v", err)
+	}
+	if d.limiter != nil {
+		t.Fatal("expected no limiter when list_rate_limit is 0")
+	}
+}

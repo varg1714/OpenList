@@ -5,6 +5,7 @@ import (
 	stdpath "path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -19,6 +20,13 @@ import (
 // 即使出现（普通驱动场景）也由 WithinSyncPaths 拦截，不会入队。
 // 单目录失败仅记日志继续——保留下游已产生的数据，不删除。
 func (d *ScheduledSync) scan() {
+	log.Infof("scheduled_sync: scan start: remote=%s", d.RemotePath)
+	start := time.Now()
+	listed := 0
+	defer func() {
+		log.Infof("scheduled_sync: scan end: remote=%s, listed=%d, elapsed=%s", d.RemotePath, listed, time.Since(start))
+	}()
+
 	remoteStorage, actualPath, err := op.GetStorageAndActualPath(d.RemotePath)
 	if err != nil {
 		log.Errorf("scheduled_sync: resolve remote %s: %+v", d.RemotePath, err)
@@ -52,11 +60,18 @@ func (d *ScheduledSync) scan() {
 	ctx := context.Background()
 	for !queue.IsEmpty() {
 		dirPath := queue.Pop()
+		if d.limiter != nil {
+			if err := d.limiter.Wait(ctx); err != nil {
+				log.Errorf("scheduled_sync: rate limit wait: %+v", err)
+				return
+			}
+		}
 		objs, err := op.List(ctx, remoteStorage, stdpath.Join(actualPath, dirPath), model.ListArgs{Refresh: d.Refresh, ScheduleScan: true})
 		if err != nil {
 			log.Errorf("scheduled_sync: list %s: %+v", dirPath, err)
 			continue
 		}
+		listed++
 		for _, o := range objs {
 			if !o.IsDir() {
 				continue
