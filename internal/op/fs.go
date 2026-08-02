@@ -71,34 +71,36 @@ func List(ctx context.Context, storage driver.Driver, path string, args model.Li
 		model.ExtractFolder(files, storage.GetStorage().ExtractFolder)
 
 		if !storage.Config().NoCache {
-			if len(files) > 0 {
-				log.Debugf("set cache: %s => %+v", key, files)
+			ttl := storage.GetStorage().CacheExpiration
 
-				ttl := storage.GetStorage().CacheExpiration
-
-				customCachePolicies := storage.GetStorage().CustomCachePolicies
-				if len(customCachePolicies) > 0 {
-					configPolicies := strings.Split(customCachePolicies, "\n")
-					for _, configPolicy := range configPolicies {
-						policy := strings.Split(configPolicy, ":")
-						if len(policy) != 2 {
-							continue
-						}
-						if match, _ := doublestar.Match(policy[0], path); !match {
-							continue
-						}
-						if configTtl, err1 := strconv.ParseInt(policy[1], 10, 64); err1 == nil {
-							ttl = int(configTtl)
-							break
-						}
+			customCachePolicies := storage.GetStorage().CustomCachePolicies
+			if len(customCachePolicies) > 0 {
+				configPolicies := strings.Split(customCachePolicies, "\n")
+				for _, configPolicy := range configPolicies {
+					policy := strings.Split(configPolicy, ":")
+					if len(policy) != 2 {
+						continue
+					}
+					if match, _ := doublestar.Match(policy[0], path); !match {
+						continue
+					}
+					if configTtl, err1 := strconv.ParseInt(policy[1], 10, 64); err1 == nil {
+						ttl = int(configTtl)
+						break
 					}
 				}
+			}
 
-				duration := time.Minute * time.Duration(ttl)
+			duration := time.Minute * time.Duration(ttl)
+			if len(files) > 0 {
+				log.Debugf("set cache: %s => %+v", key, files)
 				Cache.dirCache.SetWithTTL(key, newDirectoryCache(files), duration)
 			} else {
-				log.Debugf("del cache: %s", key)
-				Cache.deleteDirectoryTree(key)
+				// 空结果也缓存：list 成功即缓存，避免空目录被反复回源；
+				// 目录已空，其所有子目录的缓存随之失效
+				log.Debugf("set empty cache: %s", key)
+				Cache.invalidateDirectoryDescendants(key)
+				Cache.dirCache.SetWithTTL(key, newDirectoryCache(files), duration)
 			}
 		}
 		return files, nil

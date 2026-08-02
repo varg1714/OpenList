@@ -74,6 +74,18 @@ func (cm *CacheManager) DeleteDirectoryTree(storage driver.Driver, dirPath strin
 	}
 	cm.deleteDirectoryTree(Key(storage, dirPath))
 }
+
+// invalidateDirectoryDescendants 清除 key 下所有子目录的 dirCache 条目，
+// 但保留 key 本身（调用方随后会写入新的缓存结果，如空目录）。
+func (cm *CacheManager) invalidateDirectoryDescendants(key string) {
+	if dirCache, exists := cm.dirCache.Get(key); exists {
+		for _, obj := range dirCache.objs {
+			if obj.IsDir() {
+				cm.deleteDirectoryTree(stdpath.Join(key, obj.GetName()))
+			}
+		}
+	}
+}
 func (cm *CacheManager) deleteDirectoryTree(key string) {
 	if dirCache, exists := cm.dirCache.Take(key); exists {
 		for _, obj := range dirCache.objs {

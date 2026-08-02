@@ -44,7 +44,7 @@ type fakeDownstream struct {
 }
 
 func (d *fakeDownstream) Config() driver.Config {
-	return driver.Config{Name: "FakeDownstream", NoCache: true}
+	return driver.Config{Name: "FakeDownstream", NoCache: false}
 }
 
 func (d *fakeDownstream) GetAddition() driver.Additional { return &struct{}{} }
@@ -97,14 +97,16 @@ func resetFake() {
 	calls = nil
 	tree = make(map[string][]string)
 	errPaths = make(map[string]bool)
+	op.Cache.ClearAll()
 }
 
 func registerFake(t *testing.T) uint {
 	t.Helper()
 	id, err := op.CreateStorage(context.Background(), model.Storage{
-		Driver:    "FakeDownstream",
-		MountPath: "/fake",
-		Addition:  "{}",
+		Driver:          "FakeDownstream",
+		MountPath:       "/fake",
+		CacheExpiration: 30,
+		Addition:        "{}",
 	})
 	if err != nil {
 		t.Fatalf("create fake storage: %+v", err)
@@ -519,6 +521,35 @@ func mustCache(t *testing.T, mount string) *cache.Cache {
 	return d.(*cache.Cache)
 }
 
+// op 层 dirCache 必须缓存空结果：空目录二次 List（无 refresh）不得再回源。
+func TestOpListCachesEmptyResult(t *testing.T) {
+	resetFake()
+	registerFake(t)
+	tree = map[string][]string{"/": nil}
+	storage, err := op.GetStorageByMountPath("/fake")
+	if err != nil {
+		t.Fatalf("get fake storage: %+v", err)
+	}
+	objs, err := op.List(context.Background(), storage, "/", model.ListArgs{})
+	if err != nil {
+		t.Fatalf("first list: %+v", err)
+	}
+	if len(objs) != 0 {
+		t.Fatalf("expected empty listing, got %d objs", len(objs))
+	}
+	mu.Lock()
+	calls = nil
+	mu.Unlock()
+	if _, err := op.List(context.Background(), storage, "/", model.ListArgs{}); err != nil {
+		t.Fatalf("second list: %+v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 0 {
+		t.Errorf("empty result must be cached by op dirCache, got %d calls: %v", len(calls), calls)
+	}
+}
+
 func mustSched(t *testing.T) *ScheduledSync {
 	t.Helper()
 	d, err := op.GetStorageByMountPath("/sched")
@@ -526,4 +557,31 @@ func mustSched(t *testing.T) *ScheduledSync {
 		t.Fatalf("get sched: %+v", err)
 	}
 	return d.(*ScheduledSync)
+}
+
+// 限流生效：rate=4/s、burst=1、3 个目录 → 第 1 个立即、后 2 个各等 250ms，
+// 总耗时 ≥ 400ms（Wait 精确阻塞，只可能更长）。
+func TestScanPacesByRateLimit(t *testing.T) {
+	resetFake()
+	registerFake(t)
+	tree = map[string][]string{
+		"/":  {"a", "b"},
+		"/a": nil,
+		"/b": nil,
+	}
+	d := schedWith(Addition{RemotePath: "/fake", SyncCronExpr: "0 3 * * *", ListRateLimit: 4})
+	if err := d.Init(context.Background()); err != nil {
+		t.Fatalf("init: %+v", err)
+	}
+	start := time.Now()
+	d.scan()
+	elapsed := time.Since(start)
+	if elapsed < 400*time.Millisecond {
+		t.Errorf("rate limit should pace the walk, elapsed=%s", elapsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 3 {
+		t.Errorf("expected 3 list calls, got %d: %v", len(calls), calls)
+	}
 }
