@@ -4,12 +4,11 @@ import (
 	"context"
 	stdpath "path"
 	"strings"
-	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
-	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
+	"github.com/OpenListTeam/OpenList/v4/internal/syncpaths"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -18,7 +17,6 @@ import (
 type Cache struct {
 	model.Storage
 	Addition
-	cron *cron.Cron
 }
 
 func (d *Cache) Config() driver.Config {
@@ -35,20 +33,6 @@ func (d *Cache) GetAddition() driver.Additional {
 	return &d.Addition
 }
 
-// buildSyncCron selects the background sync schedule: a non-empty cron
-// expression wins over the legacy interval; both empty disables sync.
-// expr must already be trimmed by the caller — a whitespace-only expr
-// is treated as empty (falling back to interval or disabling sync).
-func buildSyncCron(expr string, intervalHours int) (*cron.Cron, error) {
-	if expr != "" {
-		return cron.NewCronExpr(expr)
-	}
-	if intervalHours > 0 {
-		return cron.NewCron(time.Duration(intervalHours) * time.Hour), nil
-	}
-	return nil, nil
-}
-
 func (d *Cache) Init(ctx context.Context) error {
 	if strings.TrimSpace(d.RemotePath) == "" {
 		return errors.New("remote path must not be empty")
@@ -56,33 +40,14 @@ func (d *Cache) Init(ctx context.Context) error {
 	d.RemotePath = utils.FixAndCleanPath(d.RemotePath)
 	d.syncProxy()
 	if _, actualPath, err := op.GetStorageAndActualPath(d.RemotePath); err == nil {
-		d.syncPathEntries(actualPath)
+		syncpaths.ToRelEntries(actualPath, d.SyncPaths)
 	} else {
 		log.Warnf("cache: resolve remote for sync paths %s: %+v", d.RemotePath, err)
-	}
-	if d.TTLHours <= 0 {
-		d.TTLHours = 24
-	}
-	if d.cron != nil {
-		d.cron.Stop()
-		d.cron = nil
-	}
-	c, err := buildSyncCron(strings.TrimSpace(d.SyncCronExpr), d.SyncIntervalHours)
-	if err != nil {
-		return errors.Wrapf(err, "cache: invalid sync_cron_expr %q", utils.SanitizeHTML(d.SyncCronExpr))
-	}
-	if c != nil {
-		d.cron = c
-		d.cron.Do(d.syncAll)
 	}
 	return nil
 }
 
 func (d *Cache) Drop(ctx context.Context) error {
-	if d.cron != nil {
-		d.cron.Stop()
-		d.cron = nil
-	}
 	return nil
 }
 
@@ -114,7 +79,7 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	if err != nil {
 		return nil, err
 	}
-	entries, whitelisted := d.syncPathEntries(remoteActualPath)
+	entries, whitelisted := syncpaths.ToRelEntries(remoteActualPath, d.SyncPaths)
 	if whitelisted && dirPath != "/" && !visibleInSyncPaths(dirPath, entries) {
 		return nil, nil
 	}

@@ -88,16 +88,3 @@ func TestDeleteCacheList(t *testing.T) {
 		t.Errorf("expected nil after delete, got %v %v", item, err)
 	}
 }
-
-func TestListCacheLists(t *testing.T) {
-	_ = UpsertCacheList(4, "/a", []model.CachedObj{{Name: "1"}})
-	_ = UpsertCacheList(4, "/b", []model.CachedObj{{Name: "2"}})
-	_ = UpsertCacheList(5, "/c", []model.CachedObj{{Name: "3"}})
-	rows, err := ListCacheLists(4)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Errorf("expected 2 rows for storage 4, got %d", len(rows))
-	}
-}

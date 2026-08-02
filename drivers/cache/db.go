@@ -42,9 +42,3 @@ func UpsertCacheList(storageID uint, dirPath string, data []model.CachedObj) err
 func DeleteCacheList(storageID uint, dirPath string) error {
 	return db.GetDb().Where("storage_id = ? AND dir_path = ?", storageID, dirPath).Delete(&model.CacheList{}).Error
 }
-
-func ListCacheLists(storageID uint) ([]model.CacheList, error) {
-	var rows []model.CacheList
-	err := db.GetDb().Where("storage_id = ?", storageID).Find(&rows).Error
-	return rows, err
-}
