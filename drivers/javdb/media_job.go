@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
@@ -206,10 +207,10 @@ func (d *Javdb) scanMediaMetadataAndMagnets() {
 		for _, actor := range actors {
 			seenActors[actor] = true
 		}
-		for _, actor := range meta.Actors {
-			if actor.Name != "" && !seenActors[actor.Name] {
-				actors = append(actors, actor.Name)
-				seenActors[actor.Name] = true
+		for _, actor := range mapScrapedActors(work.StorageID, meta.Actors) {
+			if !seenActors[actor] {
+				actors = append(actors, actor)
+				seenActors[actor] = true
 			}
 		}
 		if err := db.UpdateMediaWorkActors(work.ID, actors); err != nil {
@@ -237,6 +238,30 @@ func (d *Javdb) scanMediaMetadataAndMagnets() {
 			utils.Log.Warnf("failed to update tags for %s: %s", work.Code, err)
 		}
 	}
+}
+
+func mapScrapedActors(storageID uint, scraped []av.Actor) []string {
+	existActors := db.QueryActor(strconv.FormatUint(uint64(storageID), 10))
+	mapping := make(map[string]string, len(existActors))
+	for _, actor := range existActors {
+		if actor.Url != "" {
+			mapping[actor.Url] = actor.Name
+		}
+	}
+	actors := make([]string, 0, len(scraped))
+	seen := make(map[string]bool, len(scraped))
+	for _, actor := range scraped {
+		name := actor.Name
+		if mapped := mapping[actor.Id]; mapped != "" {
+			name = mapped
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		actors = append(actors, name)
+	}
+	return actors
 }
 
 func sourceMagnetsFromMeta(meta av.Meta) []model.SourceMagnet {

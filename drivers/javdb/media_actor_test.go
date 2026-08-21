@@ -2,6 +2,7 @@ package javdb
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -77,5 +78,50 @@ func TestMetadataScanMarksEmptyActorResultComplete(t *testing.T) {
 	}
 	if updated.ActorScanAt == nil || updated.ActorNextRetryAt != nil || updated.ActorLastError != "" {
 		t.Fatalf("actor stage = (scan=%v retry=%v error=%q), want completed empty result", updated.ActorScanAt, updated.ActorNextRetryAt, updated.ActorLastError)
+	}
+}
+
+func TestMetadataScanRewritesMatchedActorIdToLocalFolderName(t *testing.T) {
+	// Given: a pending work whose scraped actor names differ from the local folder name.
+	resetJavdbMediaWorks(t)
+	if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.Actor{}).Error; err != nil {
+		t.Fatalf("reset actors: %v", err)
+	}
+	work := model.FilmWork{
+		StorageID: 86, Source: DriverName, Code: "ABP-861", SourceRef: "https://javdb.test/v/861",
+		SourceURL: "https://javdb.test/v/861", PrimaryDir: "MyFolder",
+	}
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatalf("seed work: %v", err)
+	}
+	if err := db.CreateActor("99", "WrongFolder", "abc123"); err != nil {
+		t.Fatalf("seed other-storage actor: %v", err)
+	}
+	if err := db.CreateActor("86", "MyFolder", "abc123"); err != nil {
+		t.Fatalf("seed local actor: %v", err)
+	}
+	oldFetch := getJavdbMeta
+	t.Cleanup(func() { getJavdbMeta = oldFetch })
+	getJavdbMeta = func(string) (av.Meta, error) {
+		return av.Meta{
+			Actors: []av.Actor{
+				{Id: "abc123", Name: "Mikami Yua"},
+				{Id: "other", Name: "Someone Else"},
+			},
+			Magnets: []av.Magnet{javdbMetadataTestMagnet{uri: "magnet:mapped-actors"}},
+		}, nil
+	}
+
+	// When: metadata scan runs on a driver whose ID is not the work storage.
+	(&Javdb{Addition: Addition{MatchFilmTagLimit: 1}}).scanMediaMetadataAndMagnets()
+
+	// Then: matched actorId uses the local folder name; unmatched keeps the JavDB name.
+	updated, err := db.GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatalf("get scanned work: %v", err)
+	}
+	want := model.StringArray{"MyFolder", "Someone Else"}
+	if !slices.Equal([]string(updated.Actors), []string(want)) {
+		t.Fatalf("actors = %#v, want %#v", updated.Actors, want)
 	}
 }
