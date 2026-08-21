@@ -428,11 +428,11 @@ func TestQuerySubtitleMediaWorksIncludesDueRetriesOnly(t *testing.T) {
 	futureRetry := now.Add(time.Hour)
 	dueRetry := now.Add(-time.Hour)
 	works := []model.FilmWork{
-		{StorageID: 1, Source: "javdb", Code: "NEW", PrimaryDir: "actor"},
-		{StorageID: 1, Source: "javdb", Code: "KNOWN", PrimaryDir: "actor"},
-		{StorageID: 1, Source: "javdb", Code: "DONE", PrimaryDir: "actor", SubtitleScanAt: &completedAt},
-		{StorageID: 1, Source: "javdb", Code: "DUE", PrimaryDir: "actor", SubtitleScanAt: &completedAt, SubtitleNextRetryAt: &dueRetry},
-		{StorageID: 1, Source: "javdb", Code: "WAIT", PrimaryDir: "actor", SubtitleScanAt: &completedAt, SubtitleNextRetryAt: &futureRetry},
+		{StorageID: 1, Source: "javdb", Code: "NEW", SourceURL: "https://javdb.test/v/new", PrimaryDir: "actor"},
+		{StorageID: 1, Source: "javdb", Code: "KNOWN", SourceURL: "https://javdb.test/v/known", PrimaryDir: "actor"},
+		{StorageID: 1, Source: "javdb", Code: "DONE", SourceURL: "https://javdb.test/v/done", PrimaryDir: "actor", SubtitleScanAt: &completedAt},
+		{StorageID: 1, Source: "javdb", Code: "DUE", SourceURL: "https://javdb.test/v/due", PrimaryDir: "actor", SubtitleScanAt: &completedAt, SubtitleNextRetryAt: &dueRetry},
+		{StorageID: 1, Source: "javdb", Code: "WAIT", SourceURL: "https://javdb.test/v/wait", PrimaryDir: "actor", SubtitleScanAt: &completedAt, SubtitleNextRetryAt: &futureRetry},
 	}
 	for index := range works {
 		if err := db.Create(&works[index]).Error; err != nil {

@@ -223,6 +223,13 @@ func resetJavdbMediaWorks(t *testing.T) {
 	}
 }
 
+func resetJavdbMissedFilms(t *testing.T) {
+	t.Helper()
+	if err := db.GetDb().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.MissedFilm{}).Error; err != nil {
+		t.Fatalf("reset missed films: %v", err)
+	}
+}
+
 type mediaJobRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn mediaJobRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

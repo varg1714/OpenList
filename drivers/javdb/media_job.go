@@ -40,11 +40,17 @@ func (d *Javdb) scanUnresolvedSources() {
 		films, searchErr := searchJavdbFilms(d, work.Code)
 		if searchErr != nil || !javdbSearchMatchesCode(work.Code, films) {
 			if searchErr == nil {
-				searchErr = fmt.Errorf("影片:%s未查询到", work.Code)
+				if err := dropMissingJavdbStar(work); err != nil {
+					utils.Log.Warnf("failed to drop missing JavDB star %s: %s", work.Code, err)
+				}
+				continue
 			}
 			next := time.Now().Add(6 * time.Hour)
 			if err := db.UpdateMediaWorkSourceRetry(work.ID, next, searchErr.Error()); err != nil {
 				utils.Log.Warnf("failed to update source retry for %s: %s", work.Code, err)
+			}
+			if isTransientJavdbSearchError(searchErr) {
+				return
 			}
 			continue
 		}

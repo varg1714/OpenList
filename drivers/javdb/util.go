@@ -136,7 +136,10 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 			existing.Tags = mergedTags
 		}
 		if existing.SourceURL == "" {
-			existing = resolveExistingStar(d, existing, code)
+			existing, err = resolveExistingStar(d, existing, code)
+			if err != nil {
+				return model.EmbyFileObj{}, err
+			}
 		}
 		file, err := db.EnsureSingleFilmFile(existing.ID)
 		if err != nil {
@@ -155,32 +158,49 @@ func (d *Javdb) addStar(code string, tags []string) (model.EmbyFileObj, error) {
 	}
 
 	if !javdbSearchMatchesCode(canonical, javFilms) {
-		return model.EmbyFileObj{}, errors.New(fmt.Sprintf("影片:%s未查询到", code))
+		return model.EmbyFileObj{}, javdbFilmNotFoundError(code)
 	}
 
 	return persistDiscoveredStar(d, canonical, tags, javFilms[0])
 
 }
 
-func resolveExistingStar(d *Javdb, existing model.FilmWork, code string) model.FilmWork {
+func resolveExistingStar(d *Javdb, existing model.FilmWork, code string) (model.FilmWork, error) {
 	films, err := searchJavdbFilms(d, code)
-	if err != nil || !javdbSearchMatchesCode(existing.Code, films) {
-		return existing
+	if err != nil {
+		return existing, nil
+	}
+	if !javdbSearchMatchesCode(existing.Code, films) {
+		if dropErr := dropMissingJavdbStar(existing); dropErr != nil {
+			return existing, dropErr
+		}
+		return model.FilmWork{}, javdbFilmNotFoundError(existing.Code)
 	}
 	discovered, err := buildDiscoveredWork(existing.StorageID, existing.PrimaryDir, films[0])
 	if err != nil {
-		return existing
+		return existing, nil
 	}
 	discovered.Tags = existing.Tags
 	if err := db.UpsertDiscoveredWork(&discovered); err != nil {
 		utils.Log.Warnf("failed to resolve JavDB star %s: %s", existing.Code, err)
-		return existing
+		return existing, nil
 	}
 	stored, err := db.GetFilmWork(existing.ID)
 	if err != nil {
-		return existing
+		return existing, nil
 	}
-	return stored
+	return stored, nil
+}
+
+func dropMissingJavdbStar(work model.FilmWork) error {
+	if err := virtual_file.DeleteMediaWork(work.ID); err != nil {
+		return err
+	}
+	return db.CreateMissedFilms([]string{work.Code})
+}
+
+func javdbFilmNotFoundError(code string) error {
+	return errors.New(fmt.Sprintf("影片:%s未查询到", code))
 }
 
 func javdbSearchMatchesCode(code string, films []model.EmbyFileObj) bool {

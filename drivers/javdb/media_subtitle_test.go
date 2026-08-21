@@ -18,8 +18,8 @@ func TestSubtitleScanRetriesRecentEmptyResultAndCompletesOldEmptyResult(t *testi
 	}
 	now := time.Now()
 	works := []model.FilmWork{
-		{StorageID: 87, Source: DriverName, Code: "ABP-870", SourceRef: "recent", PrimaryDir: "actor", ReleaseDate: now.AddDate(0, -1, 0)},
-		{StorageID: 87, Source: DriverName, Code: "ABP-871", SourceRef: "old", PrimaryDir: "actor", ReleaseDate: now.AddDate(-2, 0, 0)},
+		{StorageID: 87, Source: DriverName, Code: "ABP-870", SourceRef: "recent", SourceURL: "https://javdb.test/v/870", PrimaryDir: "actor", ReleaseDate: now.AddDate(0, -1, 0)},
+		{StorageID: 87, Source: DriverName, Code: "ABP-871", SourceRef: "old", SourceURL: "https://javdb.test/v/871", PrimaryDir: "actor", ReleaseDate: now.AddDate(-2, 0, 0)},
 	}
 	if err := db.GetDb().Create(&works).Error; err != nil {
 		t.Fatalf("seed subtitle works: %v", err)

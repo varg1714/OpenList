@@ -579,6 +579,7 @@ func QuerySubtitleMediaWorks(source string, limit int) ([]model.FilmWork, error)
 	now := time.Now()
 	subtitleWorks := db.Model(&model.SourceMagnet{}).Select("work_id").Where("subtitle = ?", true)
 	query := db.Where("source = ? AND ((subtitle_scan_at IS NULL AND subtitle_next_retry_at IS NULL) OR (subtitle_next_retry_at IS NOT NULL AND subtitle_next_retry_at <= ?))", source, now).
+		Where("source_url IS NOT NULL AND source_url <> ?", "").
 		Where("id NOT IN (?)", subtitleWorks).
 		Order("id ASC")
 	if limit > 0 {

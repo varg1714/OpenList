@@ -46,6 +46,25 @@ func TestQueryTranslationMediaWorksSkipsEmptyRawTitle(t *testing.T) {
 	}
 }
 
+func TestQuerySubtitleMediaWorksSkipsWorksWithoutSourceURL(t *testing.T) {
+	setupMediaRepositoryTestDB(t)
+	works := []model.FilmWork{
+		{StorageID: 1, Source: "javdb", Code: "ABP-231", SourceRef: "https://javdb.test/v/231", SourceURL: "https://javdb.test/v/231", PrimaryDir: "个人收藏"},
+		{StorageID: 1, Source: "javdb", Code: "ABP-232", SourceRef: "ABP-232", PrimaryDir: "个人收藏"},
+	}
+	if err := db.Create(&works).Error; err != nil {
+		t.Fatalf("seed works: %v", err)
+	}
+
+	selected, err := QuerySubtitleMediaWorks("javdb", 0)
+	if err != nil {
+		t.Fatalf("query subtitle works: %v", err)
+	}
+	if len(selected) != 1 || selected[0].ID != works[0].ID {
+		t.Fatalf("selected IDs = %v, want only %d", selectedWorkIDs(selected), works[0].ID)
+	}
+}
+
 func TestQueryUnresolvedSourceMediaWorksSelectsDuePlaceholders(t *testing.T) {
 	setupMediaRepositoryTestDB(t)
 	now := time.Now()
