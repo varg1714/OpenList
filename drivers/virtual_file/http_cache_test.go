@@ -148,6 +148,16 @@ func TestCacheHTTPFileReturnsTypedStatusErrorAndClosesBody(t *testing.T) {
 	if statusErr.StatusCode != http.StatusBadGateway {
 		t.Fatalf("StatusCode = %d, want %d", statusErr.StatusCode, http.StatusBadGateway)
 	}
+	if statusErr.URL != "https://cache.test/file" {
+		t.Fatalf("URL = %q, want https://cache.test/file", statusErr.URL)
+	}
+	if got := statusErr.Headers.Get("Authorization"); got != "Bearer token" {
+		t.Fatalf("Authorization header = %q, want Bearer token", got)
+	}
+	message := statusErr.Error()
+	if !strings.Contains(message, "https://cache.test/file") || !strings.Contains(message, "Authorization: Bearer token") {
+		t.Fatalf("Error() = %q, want url and request headers", message)
+	}
 	if !body.closed.Load() {
 		t.Fatal("response body was not closed")
 	}
