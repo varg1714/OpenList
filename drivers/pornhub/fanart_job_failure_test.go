@@ -86,6 +86,28 @@ func TestScanFilmFanartTransientExtractFailureUpdatesScanTime(t *testing.T) {
 	}
 }
 
+func TestScanFilmFanartMarksDisabledVideoComplete(t *testing.T) {
+	setupPornhubFanartTest(t)
+	videoCalls := 0
+	driver := newFanartDriver(&mockFanartMedia{}, func(_ context.Context, _ string) (string, error) {
+		videoCalls++
+		return "", ErrVideoDisabled
+	})
+	film := createFanartWork(t, "disabled-video", "view-disabled", 0, time.Time{})
+
+	driver.scanFilmFanart(context.Background(), &film)
+
+	stored := loadFanartWork(t, film.ID)
+	if !stored.SampleImageComplete {
+		t.Fatalf("complete = %t, want true for disabled video", stored.SampleImageComplete)
+	}
+
+	driver.scanFanart(context.Background())
+	if videoCalls != 1 {
+		t.Fatalf("video resolution calls = %d, want 1", videoCalls)
+	}
+}
+
 func TestScanFilmFanartCancellationDoesNotDelayRetry(t *testing.T) {
 	setupPornhubFanartTest(t)
 	driver := newFanartDriver(&mockFanartMedia{}, func(_ context.Context, _ string) (string, error) {

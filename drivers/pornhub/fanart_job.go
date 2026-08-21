@@ -200,7 +200,8 @@ func (d *Pornhub) updateSampleImageScanAt(ctx context.Context, work *model.FilmW
 	if errors.Is(scanErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 		return
 	}
-	if err := db.UpdateMediaWorkSampleScan(work.ID, false); err != nil {
+	complete := errors.Is(scanErr, ErrVideoDisabled)
+	if err := db.UpdateMediaWorkSampleScan(work.ID, complete); err != nil {
 		utils.Log.Warnf("failed to update sample-image scan time for work %s: %s", work.Code, err.Error())
 	}
 }

@@ -14,6 +14,12 @@ import (
 	"github.com/robertkrimen/otto"
 )
 
+var ErrVideoDisabled = errors.New("pornhub video disabled")
+
+func isPornhubVideoDisabled(html string) bool {
+	return strings.Contains(strings.ToLower(html), "video disabled")
+}
+
 func (d *Pornhub) getVideoLink(ctx context.Context, viewKey string) (string, error) {
 	client := resty.New().SetTimeout(30 * time.Second)
 	res, err := client.R().SetContext(ctx).SetQueryParam("viewkey", viewKey).Get(fmt.Sprintf("%s/view_video.php", d.ServerUrl))
@@ -23,6 +29,9 @@ func (d *Pornhub) getVideoLink(ctx context.Context, viewKey string) (string, err
 	}
 
 	html := res.String()
+	if isPornhubVideoDisabled(html) {
+		return "", ErrVideoDisabled
+	}
 	scriptRegexp := regexp.MustCompile(`<script\b[^>]*>([\s\S]*?)</script>`)
 	matchers := scriptRegexp.FindAllStringSubmatch(html, -1)
 	var encryptedScript string
