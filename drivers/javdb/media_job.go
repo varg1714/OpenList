@@ -25,6 +25,44 @@ var (
 	matchMediaSubtitles         = MatchSubtitleCatSubtitles
 )
 
+func (d *Javdb) scanUnresolvedSources() {
+	utils.Log.Info("start scanning unresolved JavDB sources")
+	defer utils.Log.Info("finish scanning unresolved JavDB sources")
+
+	works, err := db.QueryUnresolvedSourceMediaWorks(DriverName, 20)
+	if err != nil {
+		utils.Log.Warnf("failed to query unresolved JavDB sources: %s", err)
+		return
+	}
+	utils.Log.Infof("found %d unresolved JavDB sources, ids: %v", len(works), mediaWorkIDs(works))
+	for index := range works {
+		work := works[index]
+		films, searchErr := searchJavdbFilms(d, work.Code)
+		if searchErr != nil || !javdbSearchMatchesCode(work.Code, films) {
+			if searchErr == nil {
+				searchErr = fmt.Errorf("影片:%s未查询到", work.Code)
+			}
+			next := time.Now().Add(6 * time.Hour)
+			if err := db.UpdateMediaWorkSourceRetry(work.ID, next, searchErr.Error()); err != nil {
+				utils.Log.Warnf("failed to update source retry for %s: %s", work.Code, err)
+			}
+			continue
+		}
+		discovered, buildErr := buildDiscoveredWork(work.StorageID, work.PrimaryDir, films[0])
+		if buildErr != nil {
+			next := time.Now().Add(6 * time.Hour)
+			if err := db.UpdateMediaWorkSourceRetry(work.ID, next, buildErr.Error()); err != nil {
+				utils.Log.Warnf("failed to update source retry for %s: %s", work.Code, err)
+			}
+			continue
+		}
+		discovered.Tags = work.Tags
+		if err := db.UpsertDiscoveredWork(&discovered); err != nil {
+			utils.Log.Warnf("failed to resolve JavDB source %s: %s", work.Code, err)
+		}
+	}
+}
+
 func (d *Javdb) scanTranslations() {
 	utils.Log.Info("start scanning JavDB translations")
 	defer utils.Log.Info("finish scanning JavDB translations")

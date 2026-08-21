@@ -37,6 +37,8 @@ func (d *Javdb) filterFilms() error {
 	return errors.Join(deleteErrors...)
 }
 
+var errUnresolvedJavdbSource = errors.New("unresolved javdb source")
+
 func (d *Javdb) fetchJavTopFilms() {
 	utils.Log.Infof("start to fetch javdb top films")
 	defer utils.Log.Infof("finish fetch javdb top films")
@@ -50,33 +52,40 @@ func (d *Javdb) fetchJavTopFilms() {
 		}
 	}()
 
-	addFilmFunc := func(codes, tags []string) error {
-		unMissedFilms := db.QueryUnMissedFilms(codes)
-		for _, code := range unMissedFilms {
-			if strings.HasPrefix(code, "FC2-") {
-				continue
-			}
-			_, err := d.addStar(code, tags)
-			if err != nil {
-				if strings.Contains(err.Error(), "未查询到") {
-					missedFilms = append(missedFilms, code)
-				} else {
-					utils.Log.Warnf("failed to add film for code: %s, error: %s", code, err.Error())
-					return err
-				}
-			}
-		}
-		return nil
-	}
-
 	year := time.Now().Year()
 	for currentYear := d.MatchTopFilmsStarter; currentYear <= year; currentYear++ {
 		codes := av.QueryJavSql(d.SpiderServer, fmt.Sprintf("SELECT SUBSTR(name, 0, 40) FROM ranks WHERE note = 'JavDB %d TOP250'", currentYear), d.SpiderMaxWaitTime)
-		if err := addFilmFunc(codes, []string{fmt.Sprintf("JavDB-TOP250-%d", currentYear)}); err != nil {
+		missed, err := d.addFavoriteFilms(codes, []string{fmt.Sprintf("JavDB-TOP250-%d", currentYear)})
+		missedFilms = append(missedFilms, missed...)
+		if err != nil {
 			return
 		}
 	}
 
 	codes := av.QueryJavSql(d.SpiderServer, "SELECT SUBSTR(name, 0, 40) FROM ranks WHERE note = 'JavDB TOP250'", d.SpiderMaxWaitTime)
-	_ = addFilmFunc(codes, []string{"JavDB-TOP250"})
+	missed, _ := d.addFavoriteFilms(codes, []string{"JavDB-TOP250"})
+	missedFilms = append(missedFilms, missed...)
+}
+
+func (d *Javdb) addFavoriteFilms(codes, tags []string) ([]string, error) {
+	var missed []string
+	for _, code := range db.QueryUnMissedFilms(codes) {
+		if strings.HasPrefix(code, "FC2-") {
+			continue
+		}
+		file, err := d.addStar(code, tags)
+		if err != nil {
+			if strings.Contains(err.Error(), "未查询到") {
+				missed = append(missed, code)
+				continue
+			}
+			utils.Log.Warnf("failed to add film for code: %s, error: %s", code, err.Error())
+			return missed, err
+		}
+		if strings.TrimSpace(file.SourceURL) == "" {
+			utils.Log.Warnf("unresolved JavDB source for %s, stopping batch add", code)
+			return missed, errUnresolvedJavdbSource
+		}
+	}
+	return missed, nil
 }

@@ -16,15 +16,15 @@ func TestQueryPendingMediaWorksReturnsRequestedUnscannedAndDueStages(t *testing.
 	past := now.Add(-time.Hour)
 	future := now.Add(time.Hour)
 	works := []model.FilmWork{
-		{StorageID: 1, Source: "javdb", Code: "ABP-101", SourceRef: "1", PrimaryDir: "actor", Actors: model.StringArray{"legacy actor"}, Tags: model.StringArray{"legacy"}},
-		{StorageID: 1, Source: "javdb", Code: "ABP-102", SourceRef: "2", PrimaryDir: "actor", TagScanAt: &now, ActorScanAt: &now},
-		{StorageID: 1, Source: "javdb", Code: "ABP-103", SourceRef: "3", PrimaryDir: "actor"},
-		{StorageID: 1, Source: "javdb", Code: "ABP-104", SourceRef: "4", PrimaryDir: "actor", Actors: model.StringArray{"actor"}, Tags: model.StringArray{"partial"}, TagScanAt: &now, TagNextRetryAt: &past},
-		{StorageID: 1, Source: "javdb", Code: "ABP-105", SourceRef: "5", PrimaryDir: "actor", TagScanAt: &now, TagNextRetryAt: &future, ActorScanAt: &now},
-		{StorageID: 2, Source: "pornhub", Code: "view-key", SourceRef: "6", PrimaryDir: "actor"},
-		{StorageID: 1, Source: "javdb", Code: "ABP-106", SourceRef: "7", PrimaryDir: "actor", Tags: model.StringArray{"tagged"}, TagScanAt: &now},
-		{StorageID: 1, Source: "javdb", Code: "ABP-107", SourceRef: "8", PrimaryDir: "actor", Actors: model.StringArray{"partial actor"}, Tags: model.StringArray{"tagged"}, TagScanAt: &now, ActorScanAt: &now, ActorNextRetryAt: &past},
-		{StorageID: 2, Source: "pornhub", Code: "completed-key", SourceRef: "9", PrimaryDir: "actor", Tags: model.StringArray{"tagged"}, TagScanAt: &now},
+		{StorageID: 1, Source: "javdb", Code: "ABP-101", SourceRef: "1", SourceURL: "https://javdb.test/v/101", PrimaryDir: "actor", Actors: model.StringArray{"legacy actor"}, Tags: model.StringArray{"legacy"}},
+		{StorageID: 1, Source: "javdb", Code: "ABP-102", SourceRef: "2", SourceURL: "https://javdb.test/v/102", PrimaryDir: "actor", TagScanAt: &now, ActorScanAt: &now},
+		{StorageID: 1, Source: "javdb", Code: "ABP-103", SourceRef: "3", SourceURL: "https://javdb.test/v/103", PrimaryDir: "actor"},
+		{StorageID: 1, Source: "javdb", Code: "ABP-104", SourceRef: "4", SourceURL: "https://javdb.test/v/104", PrimaryDir: "actor", Actors: model.StringArray{"actor"}, Tags: model.StringArray{"partial"}, TagScanAt: &now, TagNextRetryAt: &past},
+		{StorageID: 1, Source: "javdb", Code: "ABP-105", SourceRef: "5", SourceURL: "https://javdb.test/v/105", PrimaryDir: "actor", TagScanAt: &now, TagNextRetryAt: &future, ActorScanAt: &now},
+		{StorageID: 2, Source: "pornhub", Code: "view-key", SourceRef: "6", SourceURL: "https://pornhub.test/view-key", PrimaryDir: "actor"},
+		{StorageID: 1, Source: "javdb", Code: "ABP-106", SourceRef: "7", SourceURL: "https://javdb.test/v/106", PrimaryDir: "actor", Tags: model.StringArray{"tagged"}, TagScanAt: &now},
+		{StorageID: 1, Source: "javdb", Code: "ABP-107", SourceRef: "8", SourceURL: "https://javdb.test/v/107", PrimaryDir: "actor", Actors: model.StringArray{"partial actor"}, Tags: model.StringArray{"tagged"}, TagScanAt: &now, ActorScanAt: &now, ActorNextRetryAt: &past},
+		{StorageID: 2, Source: "pornhub", Code: "completed-key", SourceRef: "9", SourceURL: "https://pornhub.test/completed-key", PrimaryDir: "actor", Tags: model.StringArray{"tagged"}, TagScanAt: &now},
 	}
 	if err := db.Create(&works).Error; err != nil {
 		t.Fatalf("seed tag scan works: %v", err)

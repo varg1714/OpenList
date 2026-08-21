@@ -281,10 +281,32 @@ func ReplaceFilmFiles(workID uint, files []model.FilmFile) error {
 	})
 }
 
+func QueryUnresolvedSourceMediaWorks(source string, limit int) ([]model.FilmWork, error) {
+	var works []model.FilmWork
+	now := time.Now()
+	query := db.Where("source = ?", source).
+		Where("source_url IS NULL OR source_url = ?", "").
+		Where("source_next_retry_at IS NULL OR source_next_retry_at <= ?", now).
+		Order("id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	return works, query.Find(&works).Error
+}
+
+func UpdateMediaWorkSourceRetry(workID uint, nextRetryAt time.Time, lastError string) error {
+	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(map[string]interface{}{
+		"source_scan_at":       time.Now(),
+		"source_next_retry_at": nextRetryAt,
+		"source_last_error":    lastError,
+	}).Error
+}
+
 func QueryTranslationMediaWorks(source string, translationVersion uint, limit int) ([]model.FilmWork, error) {
 	var works []model.FilmWork
 	now := time.Now()
 	query := db.Where("source = ?", source).
+		Where("raw_title IS NOT NULL AND raw_title <> ?", "").
 		Where("translation_version < ? OR translated_title = '' OR translated_title IS NULL", translationVersion).
 		Where("translation_next_retry_at IS NULL OR translation_next_retry_at <= ?", now).
 		Where("translation_status IS NULL OR translation_status <> ?", "success").
@@ -395,6 +417,7 @@ func QueryPendingMediaWorks(source string, stages MediaWorkScanStages, limit int
 		}
 	}
 	query := db.Where("source = ?", source).
+		Where("source_url IS NOT NULL AND source_url <> ?", "").
 		Where(pendingStages).
 		Order("id DESC")
 	if limit > 0 {

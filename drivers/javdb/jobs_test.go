@@ -1,8 +1,10 @@
 package javdb
 
 import (
+	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,6 +85,196 @@ func TestAddStarReusesFilmWorkWithoutLegacyMagnetCache(t *testing.T) {
 	}
 	if legacyCount != 0 {
 		t.Fatalf("addStar wrote %d legacy magnet caches", legacyCount)
+	}
+}
+
+func TestAddStarPersistsPlaceholderWhenJavDBSearchForbidden(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	oldSearch := searchJavdbFilms
+	t.Cleanup(func() { searchJavdbFilms = oldSearch })
+	searchJavdbFilms = func(*Javdb, string) ([]model.EmbyFileObj, error) {
+		return nil, errors.New("Forbidden")
+	}
+
+	file, err := (&Javdb{Storage: model.Storage{ID: 81}}).addStar("abp-999", []string{"favorite"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Code != "ABP-999" || file.WorkID == 0 || file.FilmFileID == 0 {
+		t.Fatalf("placeholder identity = %+v", file)
+	}
+	if file.Title != "ABP-999" || file.SourceURL != "" {
+		t.Fatalf("placeholder projection = %+v", file)
+	}
+	stored, err := db.GetFilmWork(file.WorkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Code != "ABP-999" || stored.SourceURL != "" || stored.SourceRef != "ABP-999" || stored.PrimaryDir != "个人收藏" {
+		t.Fatalf("placeholder work = %+v", stored)
+	}
+	if !reflect.DeepEqual(stored.Tags, model.StringArray{"favorite"}) {
+		t.Fatalf("placeholder tags = %#v", stored.Tags)
+	}
+}
+
+func TestAddStarDoesNotPersistWhenFilmIsNotFound(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	oldSearch := searchJavdbFilms
+	t.Cleanup(func() { searchJavdbFilms = oldSearch })
+	searchJavdbFilms = func(*Javdb, string) ([]model.EmbyFileObj, error) {
+		return nil, nil
+	}
+
+	_, err := (&Javdb{Storage: model.Storage{ID: 81}}).addStar("abp-998", nil)
+	if err == nil || !strings.Contains(err.Error(), "未查询到") {
+		t.Fatalf("addStar error = %v, want 未查询到", err)
+	}
+	var count int64
+	if err := db.GetDb().Model(&model.FilmWork{}).Where("code = ?", "ABP-998").Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("persisted %d works for missing film", count)
+	}
+}
+
+func TestAddStarResolvesExistingPlaceholderWhenSearchSucceeds(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	placeholder := model.FilmWork{
+		StorageID: 81, Source: DriverName, Code: "ABP-997", SourceRef: "ABP-997", PrimaryDir: "个人收藏",
+		Tags: model.StringArray{"favorite"},
+	}
+	if err := db.GetDb().Create(&placeholder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnsureSingleFilmFile(placeholder.ID); err != nil {
+		t.Fatal(err)
+	}
+	oldSearch := searchJavdbFilms
+	t.Cleanup(func() { searchJavdbFilms = oldSearch })
+	searchJavdbFilms = func(*Javdb, string) ([]model.EmbyFileObj, error) {
+		return []model.EmbyFileObj{{
+			ObjThumb: model.ObjThumb{
+				Object:    model.Object{Name: "ABP-997 Original title"},
+				Thumbnail: model.Thumbnail{Thumbnail: "https://jdbstatic.com/covers/abp-997.jpg"},
+			},
+			Url: "https://javdb.com/v/abp-997",
+		}}, nil
+	}
+
+	file, err := (&Javdb{Storage: model.Storage{ID: 81}}).addStar("abp-997", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.WorkID != placeholder.ID || file.SourceURL != "https://javdb.com/v/abp-997" {
+		t.Fatalf("resolved projection = %+v", file)
+	}
+	stored, err := db.GetFilmWork(placeholder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.SourceURL != "https://javdb.com/v/abp-997" || stored.RawTitle != "Original title" || stored.ImageURL != "https://jdbstatic.com/covers/abp-997.jpg" {
+		t.Fatalf("resolved work = %+v", stored)
+	}
+}
+
+func TestAddFavoriteFilmsStopsAfterUnresolvedSource(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	oldSearch := searchJavdbFilms
+	t.Cleanup(func() { searchJavdbFilms = oldSearch })
+	var searched []string
+	searchJavdbFilms = func(_ *Javdb, code string) ([]model.EmbyFileObj, error) {
+		searched = append(searched, code)
+		return nil, errors.New("Forbidden")
+	}
+
+	missed, err := (&Javdb{Storage: model.Storage{ID: 83}}).addFavoriteFilms([]string{"ABP-401", "ABP-402"}, []string{"JavDB-TOP250"})
+	if !errors.Is(err, errUnresolvedJavdbSource) {
+		t.Fatalf("addFavoriteFilms error = %v, want errUnresolvedJavdbSource", err)
+	}
+	if len(missed) != 0 {
+		t.Fatalf("missed = %v", missed)
+	}
+	if !reflect.DeepEqual(searched, []string{"ABP-401"}) {
+		t.Fatalf("searched = %#v, want only the first code", searched)
+	}
+	var count int64
+	if err := db.GetDb().Model(&model.FilmWork{}).Where("storage_id = ?", 83).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("persisted %d works, want 1 placeholder", count)
+	}
+}
+
+func TestScanUnresolvedSourcesFillsDiscoveryFields(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	work := model.FilmWork{
+		StorageID: 82, Source: DriverName, Code: "ABP-996", SourceRef: "ABP-996", PrimaryDir: "个人收藏",
+		Tags: model.StringArray{"favorite"},
+	}
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldSearch := searchJavdbFilms
+	t.Cleanup(func() { searchJavdbFilms = oldSearch })
+	searchJavdbFilms = func(*Javdb, string) ([]model.EmbyFileObj, error) {
+		return []model.EmbyFileObj{{
+			ObjThumb: model.ObjThumb{
+				Object:    model.Object{Name: "ABP-996 Original title"},
+				Thumbnail: model.Thumbnail{Thumbnail: "https://jdbstatic.com/covers/abp-996.jpg"},
+			},
+			Url: "https://javdb.com/v/abp-996",
+		}}, nil
+	}
+
+	(&Javdb{Storage: model.Storage{ID: 82}}).scanUnresolvedSources()
+
+	stored, err := db.GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.SourceURL != "https://javdb.com/v/abp-996" || stored.RawTitle != "Original title" || stored.ImageURL != "https://jdbstatic.com/covers/abp-996.jpg" {
+		t.Fatalf("resolved work = %+v", stored)
+	}
+	if !reflect.DeepEqual(stored.Tags, model.StringArray{"favorite"}) {
+		t.Fatalf("resolved tags = %#v", stored.Tags)
+	}
+}
+
+func TestScanUnresolvedSourcesDefersRetryWhenSearchForbidden(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	work := model.FilmWork{
+		StorageID: 82, Source: DriverName, Code: "ABP-995", SourceRef: "ABP-995", PrimaryDir: "个人收藏",
+	}
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldSearch := searchJavdbFilms
+	t.Cleanup(func() { searchJavdbFilms = oldSearch })
+	searchCalls := 0
+	searchJavdbFilms = func(*Javdb, string) ([]model.EmbyFileObj, error) {
+		searchCalls++
+		return nil, errors.New("Forbidden")
+	}
+	scanStartedAt := time.Now()
+
+	(&Javdb{Storage: model.Storage{ID: 82}}).scanUnresolvedSources()
+	(&Javdb{Storage: model.Storage{ID: 82}}).scanUnresolvedSources()
+
+	stored, err := db.GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.SourceScanAt == nil || stored.SourceNextRetryAt == nil || !stored.SourceNextRetryAt.After(scanStartedAt) || stored.SourceLastError != "Forbidden" {
+		t.Fatalf("source stage = (scan=%v retry=%v error=%q)", stored.SourceScanAt, stored.SourceNextRetryAt, stored.SourceLastError)
+	}
+	if stored.SourceURL != "" {
+		t.Fatalf("placeholder SourceURL = %q", stored.SourceURL)
+	}
+	if searchCalls != 1 {
+		t.Fatalf("search calls = %d, want 1 across immediate repeated scans", searchCalls)
 	}
 }
 

@@ -105,6 +105,9 @@ type FilmWork struct {
 	MagnetScanAt        *time.Time
 	MagnetNextRetryAt   *time.Time
 	MagnetLastError     string
+	SourceScanAt        *time.Time
+	SourceNextRetryAt   *time.Time `gorm:"index"`
+	SourceLastError     string
 
 	SampleImageCount    int
 	SampleImageComplete bool

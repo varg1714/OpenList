@@ -56,6 +56,7 @@ func (d *Javdb) Init(ctx context.Context) error {
 		if err := d.filterFilms(); err != nil {
 			utils.Log.Warnf("failed to filter normalized JavDB works: %s", err)
 		}
+		d.scanUnresolvedSources()
 		d.scanTranslations()
 		d.scanMediaSynopsis()
 		d.scanMediaMetadataAndMagnets()
