@@ -284,3 +284,71 @@ func TestListManualRefreshAlwaysFetches(t *testing.T) {
 		t.Errorf("manual refresh must always fetch from downstream, got %v", names(objs))
 	}
 }
+
+// 空结果也必须缓存：list 没报错就建行，后续 List 从空行服务、不再回源。
+func TestListCachesEmptyResult(t *testing.T) {
+	d := setup(t)
+	root := mustRootPath(d)
+	_ = os.RemoveAll(filepath.Join(root, "sub"))
+	_ = os.Remove(filepath.Join(root, "a.txt"))
+
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list empty dir: %+v", err)
+	}
+	if len(objs) != 0 {
+		t.Fatalf("expected empty listing, got %v", names(objs))
+	}
+	item, err := GetCacheList(d.ID, "/")
+	if err != nil {
+		t.Fatalf("get cache row: %+v", err)
+	}
+	if item == nil {
+		t.Fatal("empty result must create a cache row")
+	}
+
+	// 下游新增文件后再次 List：必须命中空行，new.txt 不应出现
+	_ = os.WriteFile(filepath.Join(root, "new.txt"), []byte("x"), 0o644)
+	objs, err = d.List(context.Background(), rootDir(), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("second list: %+v", err)
+	}
+	if len(objs) != 0 {
+		t.Errorf("second list must be served from empty row, got %v", names(objs))
+	}
+}
+
+// 行从非空更新为空也必须持久化：下游清空目录后刷新，行必须变成空。
+func TestListUpdatesRowToEmpty(t *testing.T) {
+	d := setup(t)
+	root := mustRootPath(d)
+	if _, err := d.List(context.Background(), rootDir(), model.ListArgs{}); err != nil {
+		t.Fatalf("prime root: %+v", err)
+	}
+	_ = os.RemoveAll(filepath.Join(root, "sub"))
+	_ = os.Remove(filepath.Join(root, "a.txt"))
+
+	if _, err := d.List(context.Background(), rootDir(), model.ListArgs{Refresh: true}); err != nil {
+		t.Fatalf("refresh empty dir: %+v", err)
+	}
+	item, err := GetCacheList(d.ID, "/")
+	if err != nil {
+		t.Fatalf("get cache row: %+v", err)
+	}
+	if item == nil {
+		t.Fatal("row must exist after refresh")
+	}
+	if len(item.Data) != 0 {
+		t.Errorf("row data must be empty after downstream emptied, got %d entries", len(item.Data))
+	}
+
+	// 空行必须被服务：下游再加文件也不应出现在缓存结果中
+	_ = os.WriteFile(filepath.Join(root, "new.txt"), []byte("x"), 0o644)
+	objs, err := d.List(context.Background(), rootDir(), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list after empty update: %+v", err)
+	}
+	if len(objs) != 0 {
+		t.Errorf("empty row must be served, got %v", names(objs))
+	}
+}
