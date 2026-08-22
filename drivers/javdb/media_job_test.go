@@ -214,6 +214,78 @@ func TestScanMediaSampleImagesRetriesWhenPromotionRecoveryFails(t *testing.T) {
 	}
 }
 
+func TestScanMediaSampleImagesIncrementsRetryOnFirstImageForbidden(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	previousDataDir := flags.DataDir
+	flags.DataDir = t.TempDir()
+	t.Cleanup(func() { flags.DataDir = previousDataDir })
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	work := model.FilmWork{
+		StorageID: 91, Source: DriverName, Code: "MIDV-171", SourceRef: "midv-171",
+		SourceURL: "https://javdb.test/v/midv-171", PrimaryDir: "Actor A",
+		ImageURL: "https://jdbstatic.com/covers/midv-171.jpg",
+	}
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	newMediaJobDriver(t, server).scanMediaSampleImages()
+
+	stored, err := db.GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.SampleImageRetryCount != 1 {
+		t.Fatalf("retry count = %d, want 1 after first-image forbidden", stored.SampleImageRetryCount)
+	}
+	if stored.SampleImageScanAt == nil {
+		t.Fatal("scan must be recorded after first-image forbidden")
+	}
+	if stored.SampleImageComplete {
+		t.Fatal("work must stay incomplete until retry limit is reached")
+	}
+}
+
+func TestScanMediaSampleImagesSkipsRetryExhaustedWork(t *testing.T) {
+	resetJavdbMediaWorks(t)
+	previousDataDir := flags.DataDir
+	flags.DataDir = t.TempDir()
+	t.Cleanup(func() { flags.DataDir = previousDataDir })
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		t.Error("request must not be issued for retry-exhausted work")
+		response.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	work := model.FilmWork{
+		StorageID: 91, Source: DriverName, Code: "MIDV-172", SourceRef: "midv-172",
+		SourceURL: "https://javdb.test/v/midv-172", PrimaryDir: "Actor A",
+		ImageURL: "https://jdbstatic.com/covers/midv-172.jpg", SampleImageRetryCount: 3,
+	}
+	if err := db.GetDb().Create(&work).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	newMediaJobDriver(t, server).scanMediaSampleImages()
+
+	stored, err := db.GetFilmWork(work.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.SampleImageRetryCount != 3 {
+		t.Fatalf("retry count = %d, want 3 unchanged", stored.SampleImageRetryCount)
+	}
+	if stored.SampleImageScanAt != nil {
+		t.Fatalf("scan must not run for retry-exhausted work, scan_at = %v", stored.SampleImageScanAt)
+	}
+}
+
 func resetJavdbMediaWorks(t *testing.T) {
 	t.Helper()
 	for _, value := range []any{&model.SourceMagnet{}, &model.FilmFile{}, &model.FilmWork{}} {

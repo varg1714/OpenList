@@ -109,14 +109,15 @@ type FilmWork struct {
 	SourceNextRetryAt   *time.Time `gorm:"index"`
 	SourceLastError     string
 
-	SampleImageCount    int
-	SampleImageComplete bool
-	SampleImageScanAt   *time.Time
-	DMMPosterStatus     string `gorm:"index"`
-	DMMPosterScanAt     *time.Time
-	SubtitleScanAt      *time.Time
-	SubtitleNextRetryAt *time.Time
-	SubtitleLastError   string
+	SampleImageCount      int
+	SampleImageRetryCount uint `gorm:"not null;default:0"`
+	SampleImageComplete   bool
+	SampleImageScanAt     *time.Time
+	DMMPosterStatus       string `gorm:"index"`
+	DMMPosterScanAt       *time.Time
+	SubtitleScanAt        *time.Time
+	SubtitleNextRetryAt   *time.Time
+	SubtitleLastError     string
 
 	MetadataVersion uint `gorm:"not null;default:1"`
 	NfoVersion      uint `gorm:"not null;default:0"`

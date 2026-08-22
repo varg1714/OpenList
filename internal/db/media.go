@@ -525,17 +525,27 @@ func UpdateMediaWorkReleaseRetry(workID uint, nextRetryAt time.Time, lastError s
 	}).Error
 }
 
+const sampleImageRetryLimit = 3
+
 func QuerySampleImageMediaWorks(source string, scanInterval time.Duration, limit int) ([]model.FilmWork, error) {
 	var works []model.FilmWork
 	query := db.Where("source = ?", source).
 		Where("image_url IS NOT NULL AND image_url <> ''").
 		Where("sample_image_complete = ?", false).
+		Where("sample_image_retry_count < ?", sampleImageRetryLimit).
 		Where("sample_image_scan_at IS NULL OR sample_image_scan_at < ?", time.Now().Add(-scanInterval)).
 		Order("release_date DESC, id DESC")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
 	return works, query.Find(&works).Error
+}
+
+func IncrementMediaWorkSampleRetry(workID uint) error {
+	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(map[string]interface{}{
+		"sample_image_retry_count": gorm.Expr("sample_image_retry_count + 1"),
+		"sample_image_scan_at":     time.Now(),
+	}).Error
 }
 
 func UpdateMediaWorkSampleProgress(workID uint, count int, complete bool) error {

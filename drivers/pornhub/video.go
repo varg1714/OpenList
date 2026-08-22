@@ -17,7 +17,8 @@ import (
 var ErrVideoDisabled = errors.New("pornhub video disabled")
 
 func isPornhubVideoDisabled(html string) bool {
-	return strings.Contains(strings.ToLower(html), "video disabled")
+	return strings.Contains(strings.ToLower(html), "video disabled") ||
+		strings.Contains(html, "此视频已下架")
 }
 
 func (d *Pornhub) getVideoLink(ctx context.Context, viewKey string) (string, error) {

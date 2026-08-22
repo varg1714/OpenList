@@ -47,7 +47,7 @@ func (d *Javdb) scanMediaSampleImages() {
 							markMediaSampleRetry(work, err)
 						}
 					} else {
-						markMediaSampleRetry(work, cacheErr)
+						markMediaSampleFirstImageForbidden(work, cacheErr)
 					}
 				} else {
 					markMediaSampleRetry(work, cacheErr)
@@ -85,6 +85,13 @@ func completeMediaSamples(work model.FilmWork, count int) error {
 		}
 	}
 	return db.UpdateMediaWorkSampleProgress(work.ID, count, true)
+}
+
+func markMediaSampleFirstImageForbidden(work model.FilmWork, cause error) {
+	utils.Log.Warnf("first sample image forbidden for work %s (no samples on remote): %s", work.Code, cause)
+	if err := db.IncrementMediaWorkSampleRetry(work.ID); err != nil {
+		utils.Log.Warnf("failed to update sample retry for %s: %s", work.Code, err)
+	}
 }
 
 func markMediaSampleRetry(work model.FilmWork, cause error) {
