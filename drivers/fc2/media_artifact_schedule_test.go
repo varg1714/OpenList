@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -115,6 +116,37 @@ func TestScanMediaArtifactsMarksDownloadFailureTransient(t *testing.T) {
 	stored, err := db.GetFilmWork(work.ID)
 	require.NoError(t, err)
 	require.Equal(t, model.DMMPosterStatusTransientError, stored.DMMPosterStatus)
+	require.Equal(t, uint(1), stored.DMMPosterRetryCount)
+	require.NotNil(t, stored.DMMPosterScanAt)
+}
+
+func TestScanMediaArtifactsSkipsRetryExhaustedWork(t *testing.T) {
+	// Given
+	resetFC2PosterWorks(t)
+	oldDataDir := flags.DataDir
+	flags.DataDir = t.TempDir()
+	t.Cleanup(func() { flags.DataDir = oldDataDir })
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		t.Error("request must not be issued for retry-exhausted work")
+	}))
+	t.Cleanup(server.Close)
+	oldScan := time.Now().Add(-73 * time.Hour)
+	work := model.FilmWork{
+		StorageID: 93, Source: "fc2", Code: "FC2-PPV-993", PrimaryDir: "actor",
+		ImageURL:            server.URL + "/poster.jpg",
+		DMMPosterStatus:     model.DMMPosterStatusTransientError,
+		DMMPosterScanAt:     &oldScan,
+		DMMPosterRetryCount: 3,
+	}
+	require.NoError(t, db.GetDb().Create(&work).Error)
+
+	// When
+	require.NoError(t, (&FC2{Storage: model.Storage{ID: work.StorageID}}).scanMediaArtifacts())
+
+	// Then
+	stored, err := db.GetFilmWork(work.ID)
+	require.NoError(t, err)
+	require.Equal(t, uint(3), stored.DMMPosterRetryCount)
 	require.NotNil(t, stored.DMMPosterScanAt)
 }
 

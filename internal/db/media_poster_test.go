@@ -56,3 +56,54 @@ func TestQueryPendingMediaPosterWorksSelectsInitialAndExpiredRetryRows(t *testin
 	require.Len(t, selected, 3)
 	require.Equal(t, []uint{works[0].ID, works[1].ID, works[2].ID}, []uint{selected[0].ID, selected[1].ID, selected[2].ID})
 }
+
+func TestQueryPendingMediaPosterWorksExcludesRetryExhaustedWorks(t *testing.T) {
+	// Given
+	setupMediaRepositoryTestDB(t)
+	oldScan := time.Now().Add(-73 * time.Hour)
+	exhausted := model.FilmWork{
+		StorageID: 11, Source: "fc2", Code: "FC2-PPV-EXH", PrimaryDir: "actor",
+		ImageURL:            "https://image.test/exh.jpg",
+		DMMPosterStatus:     model.DMMPosterStatusTransientError,
+		DMMPosterScanAt:     &oldScan,
+		DMMPosterRetryCount: posterRetryLimit,
+	}
+	retryable := model.FilmWork{
+		StorageID: 11, Source: "fc2", Code: "FC2-PPV-OK", PrimaryDir: "actor",
+		ImageURL:            "https://image.test/ok.jpg",
+		DMMPosterStatus:     model.DMMPosterStatusTransientError,
+		DMMPosterScanAt:     &oldScan,
+		DMMPosterRetryCount: posterRetryLimit - 1,
+	}
+	require.NoError(t, db.Create(&exhausted).Error)
+	require.NoError(t, db.Create(&retryable).Error)
+
+	// When
+	selected, err := QueryPendingMediaPosterWorks(11, "fc2", 72*time.Hour)
+
+	// Then
+	require.NoError(t, err)
+	require.Len(t, selected, 1)
+	require.Equal(t, retryable.ID, selected[0].ID)
+}
+
+func TestIncrementMediaWorkDMMPosterRetryRecordsScanAndStatus(t *testing.T) {
+	// Given
+	setupMediaRepositoryTestDB(t)
+	work := model.FilmWork{
+		StorageID: 12, Source: "fc2", Code: "FC2-PPV-960", PrimaryDir: "actor",
+		ImageURL:            "https://image.test/960.jpg",
+		DMMPosterRetryCount: 1,
+	}
+	require.NoError(t, db.Create(&work).Error)
+
+	// When
+	require.NoError(t, IncrementMediaWorkDMMPosterRetry(work.ID))
+
+	// Then
+	stored, err := GetFilmWork(work.ID)
+	require.NoError(t, err)
+	require.Equal(t, uint(2), stored.DMMPosterRetryCount)
+	require.Equal(t, model.DMMPosterStatusTransientError, stored.DMMPosterStatus)
+	require.NotNil(t, stored.DMMPosterScanAt)
+}

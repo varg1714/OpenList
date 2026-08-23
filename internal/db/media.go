@@ -585,6 +585,14 @@ func UpdateMediaWorkDMMPosterStatus(workID uint, status string) error {
 	}).Error
 }
 
+func IncrementMediaWorkDMMPosterRetry(workID uint) error {
+	return db.Model(&model.FilmWork{}).Where("id = ?", workID).Updates(map[string]interface{}{
+		"dmm_poster_retry_count": gorm.Expr("dmm_poster_retry_count + 1"),
+		"dmm_poster_status":      model.DMMPosterStatusTransientError,
+		"dmm_poster_scan_at":     time.Now(),
+	}).Error
+}
+
 func QuerySubtitleMediaWorks(source string, limit int) ([]model.FilmWork, error) {
 	now := time.Now()
 	subtitleWorks := db.Model(&model.SourceMagnet{}).Select("work_id").Where("subtitle = ?", true)

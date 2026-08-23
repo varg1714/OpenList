@@ -36,18 +36,18 @@ func (d *FC2) scanMediaArtifacts() error {
 			Actors:   []string(work.Actors),
 			Tags:     []string(work.Tags),
 		})
-		status := model.DMMPosterStatusSuccess
-		if result != virtual_file.Exist && result != virtual_file.CreatedSuccess {
-			status = model.DMMPosterStatusTransientError
+		failed := result != virtual_file.Exist && result != virtual_file.CreatedSuccess
+		if failed || cacheErr != nil {
 			if cacheErr == nil {
 				cacheErr = fmt.Errorf("unexpected poster cache result %d", result)
 			}
-		}
-		if cacheErr != nil {
-			status = model.DMMPosterStatusTransientError
 			utils.Log.Warnf("failed to cache FC2 poster for %s: %s", work.Code, cacheErr)
+			if err := db.IncrementMediaWorkDMMPosterRetry(work.ID); err != nil {
+				return fmt.Errorf("update FC2 poster retry for %s: %w", work.Code, err)
+			}
+			continue
 		}
-		if err := db.UpdateMediaWorkDMMPosterStatus(work.ID, status); err != nil {
+		if err := db.UpdateMediaWorkDMMPosterStatus(work.ID, model.DMMPosterStatusSuccess); err != nil {
 			return fmt.Errorf("update FC2 poster status for %s: %w", work.Code, err)
 		}
 	}

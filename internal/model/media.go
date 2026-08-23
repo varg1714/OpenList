@@ -115,6 +115,7 @@ type FilmWork struct {
 	SampleImageScanAt     *time.Time
 	DMMPosterStatus       string `gorm:"index"`
 	DMMPosterScanAt       *time.Time
+	DMMPosterRetryCount   uint `gorm:"not null;default:0"`
 	SubtitleScanAt        *time.Time
 	SubtitleNextRetryAt   *time.Time
 	SubtitleLastError     string
