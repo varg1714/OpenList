@@ -21,3 +21,11 @@ type CacheList struct {
 	Data      []CachedObj `gorm:"type:json;serializer:json"`
 	UpdatedAt time.Time
 }
+
+// CacheDirSetting 某个目录的缓存 TTL 覆盖。TTLHours=0 表示使用存储全局 TTL。
+type CacheDirSetting struct {
+	ID        uint   `gorm:"primaryKey"`
+	StorageID uint   `gorm:"uniqueIndex:idx_cache_dir_setting"`
+	DirPath   string `gorm:"uniqueIndex:idx_cache_dir_setting"`
+	TTLHours  int
+}

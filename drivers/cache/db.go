@@ -42,3 +42,46 @@ func UpsertCacheList(storageID uint, dirPath string, data []model.CachedObj) err
 func DeleteCacheList(storageID uint, dirPath string) error {
 	return db.GetDb().Where("storage_id = ? AND dir_path = ?", storageID, dirPath).Delete(&model.CacheList{}).Error
 }
+
+func GetCacheDirSetting(storageID uint, dirPath string) (*model.CacheDirSetting, error) {
+	var item model.CacheDirSetting
+	err := db.GetDb().Where("storage_id = ? AND dir_path = ?", storageID, dirPath).First(&item).Error
+	if err == nil {
+		return &item, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return nil, err
+}
+
+func ListCacheDirSettings(storageID uint) (map[string]int, error) {
+	var items []model.CacheDirSetting
+	if err := db.GetDb().Where("storage_id = ?", storageID).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(items))
+	for _, item := range items {
+		out[item.DirPath] = item.TTLHours
+	}
+	return out, nil
+}
+
+func UpsertCacheDirSetting(storageID uint, dirPath string, ttlHours int) error {
+	if ttlHours <= 0 {
+		return db.GetDb().Where("storage_id = ? AND dir_path = ?", storageID, dirPath).Delete(&model.CacheDirSetting{}).Error
+	}
+	item, err := GetCacheDirSetting(storageID, dirPath)
+	if err != nil {
+		return err
+	}
+	if item != nil {
+		item.TTLHours = ttlHours
+		return db.GetDb().Save(item).Error
+	}
+	return db.GetDb().Create(&model.CacheDirSetting{
+		StorageID: storageID,
+		DirPath:   dirPath,
+		TTLHours:  ttlHours,
+	}).Error
+}

@@ -88,3 +88,68 @@ func TestDeleteCacheList(t *testing.T) {
 		t.Errorf("expected nil after delete, got %v %v", item, err)
 	}
 }
+
+func TestGetCacheDirSettingNotFound(t *testing.T) {
+	item, err := GetCacheDirSetting(99, "/nope")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if item != nil {
+		t.Errorf("expected nil, got %+v", item)
+	}
+}
+
+func TestUpsertCacheDirSettingCreateThenUpdate(t *testing.T) {
+	if err := UpsertCacheDirSetting(1, "/movies", 48); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	item, err := GetCacheDirSetting(1, "/movies")
+	if err != nil || item == nil {
+		t.Fatalf("get after create: %v %+v", err, item)
+	}
+	if item.TTLHours != 48 {
+		t.Errorf("expected 48, got %d", item.TTLHours)
+	}
+	if err := UpsertCacheDirSetting(1, "/movies", 6); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	item, err = GetCacheDirSetting(1, "/movies")
+	if err != nil || item == nil {
+		t.Fatalf("get after update: %v %+v", err, item)
+	}
+	if item.TTLHours != 6 {
+		t.Errorf("expected 6, got %d", item.TTLHours)
+	}
+	var count int64
+	if err := db.GetDb().Model(&model.CacheDirSetting{}).Where("storage_id = ? AND dir_path = ?", 1, "/movies").Count(&count).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 row after upsert, got %d", count)
+	}
+}
+
+func TestUpsertCacheDirSettingZeroDeletes(t *testing.T) {
+	if err := UpsertCacheDirSetting(4, "/tv", 12); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := UpsertCacheDirSetting(4, "/tv", 0); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	item, err := GetCacheDirSetting(4, "/tv")
+	if err != nil || item != nil {
+		t.Errorf("expected nil after ttl=0, got %v %v", item, err)
+	}
+}
+
+func TestCacheDirSettingStorageIsolation(t *testing.T) {
+	_ = UpsertCacheDirSetting(1, "/same", 2)
+	_ = UpsertCacheDirSetting(2, "/same", 9)
+	item, err := GetCacheDirSetting(1, "/same")
+	if err != nil || item == nil {
+		t.Fatalf("storage1: %v %+v", err, item)
+	}
+	if item.TTLHours != 2 {
+		t.Errorf("storage1 polluted: %+v", item)
+	}
+}

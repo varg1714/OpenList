@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -89,11 +90,12 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	}
 	// 定时扫描（ScheduleScan）按 TTL 门控回源：行新鲜时直接 serve 缓存，
 	// 过期或缺失才回源刷新；手动刷新（无 ScheduleScan）总是回源。
-	ttl := time.Duration(d.TTLHours) * time.Hour
+	// 目录若有 ttl_hours 覆盖则只作用于该目录本身，不向子目录继承。
+	ttl := d.ttlFor(dirPath)
 	if item, err := GetCacheList(d.ID, dirPath); err != nil {
 		log.Errorf("cache: get list %s: %+v", dirPath, err)
 	} else if item != nil && (!args.Refresh || (args.ScheduleScan && time.Since(item.UpdatedAt) < ttl)) {
-		return fromCachedObjs(filterCachedObjs(item.Data, entries, whitelisted)), nil
+		return d.withFolderAddition(fromCachedObjs(filterCachedObjs(item.Data, entries, whitelisted))), nil
 	}
 	remoteObjs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), args)
 	if err != nil {
@@ -106,7 +108,7 @@ func (d *Cache) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	if err := UpsertCacheList(d.ID, dirPath, snaps); err != nil {
 		log.Errorf("cache: upsert %s: %+v", dirPath, err)
 	}
-	return fromCachedObjs(filterCachedObjs(snaps, entries, whitelisted)), nil
+	return d.withFolderAddition(fromCachedObjs(filterCachedObjs(snaps, entries, whitelisted))), nil
 }
 
 // filterCachedObjs 原地过滤快照列表：白名单启用时仅保留可见条目
@@ -144,7 +146,7 @@ func (d *Cache) Get(ctx context.Context, path string) (model.Obj, error) {
 		name := stdpath.Base(path)
 		for _, c := range item.Data {
 			if c.Name == name {
-				return fromCachedObj(c), nil
+				return d.wrapObj(fromCachedObj(c)), nil
 			}
 		}
 	}
@@ -156,7 +158,7 @@ func (d *Cache) Get(ctx context.Context, path string) (model.Obj, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &model.Object{
+	return d.wrapObj(&model.Object{
 		ID:       obj.GetID(),
 		Path:     path,
 		Name:     obj.GetName(),
@@ -165,7 +167,7 @@ func (d *Cache) Get(ctx context.Context, path string) (model.Obj, error) {
 		Ctime:    obj.CreateTime(),
 		IsFolder: obj.IsDir(),
 		HashInfo: obj.GetHash(),
-	}, nil
+	}), nil
 }
 
 func (d *Cache) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -182,4 +184,69 @@ func (d *Cache) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (
 	return &resultLink, nil
 }
 
-var _ driver.Driver = (*Cache)(nil)
+func (d *Cache) MkdirConfig() []driver.Item {
+	return []driver.Item{
+		{
+			Name:    "ttl_hours",
+			Type:    conf.TypeNumber,
+			Default: "0",
+			Help:    "this folder's cache validity in hours; 0 = use the storage default",
+		},
+	}
+}
+
+func (d *Cache) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
+	if !srcObj.IsDir() {
+		return errors.New("cache driver does not support renaming files")
+	}
+	var req FolderAddition
+	if err := utils.Json.UnmarshalFromString(newName, &req); err != nil {
+		return errors.Wrap(err, "invalid folder cache setting")
+	}
+	return UpsertCacheDirSetting(d.ID, srcObj.GetPath(), req.TTLHours)
+}
+
+func (d *Cache) ttlFor(dirPath string) time.Duration {
+	hours := d.TTLHours
+	if item, err := GetCacheDirSetting(d.ID, dirPath); err != nil {
+		log.Errorf("cache: get dir setting %s: %+v", dirPath, err)
+	} else if item != nil && item.TTLHours > 0 {
+		hours = item.TTLHours
+	}
+	if hours <= 0 {
+		hours = 24
+	}
+	return time.Duration(hours) * time.Hour
+}
+
+func (d *Cache) withFolderAddition(objs []model.Obj) []model.Obj {
+	settings, err := ListCacheDirSettings(d.ID)
+	if err != nil {
+		log.Errorf("cache: list dir settings: %+v", err)
+		settings = map[string]int{}
+	}
+	out := make([]model.Obj, len(objs))
+	for i, o := range objs {
+		out[i] = wrapFolder(o, settings[o.GetPath()])
+	}
+	return out
+}
+
+func (d *Cache) wrapObj(obj model.Obj) model.Obj {
+	if !obj.IsDir() {
+		return obj
+	}
+	ttl := 0
+	if item, err := GetCacheDirSetting(d.ID, obj.GetPath()); err != nil {
+		log.Errorf("cache: get dir setting %s: %+v", obj.GetPath(), err)
+	} else if item != nil {
+		ttl = item.TTLHours
+	}
+	return wrapFolder(obj, ttl)
+}
+
+var (
+	_ driver.Driver      = (*Cache)(nil)
+	_ driver.MkdirConfig = (*Cache)(nil)
+	_ driver.Rename      = (*Cache)(nil)
+)
