@@ -16,9 +16,38 @@ import (
 
 var ErrVideoDisabled = errors.New("pornhub video disabled")
 
-func isPornhubVideoDisabled(html string) bool {
-	return strings.Contains(strings.ToLower(html), "video disabled") ||
-		strings.Contains(html, "此视频已下架")
+// defaultDisabledVideoKeywords are used when the driver config does not
+// provide any disabled-keywords (see Pornhub.DisabledKeywords).
+var defaultDisabledVideoKeywords = []string{"video disabled", "此视频已下架"}
+
+// isPornhubVideoDisabled reports whether the page HTML indicates the video
+// has been disabled. The keywords are read from the driver configuration
+// (DisabledKeywords, comma separated); when none are configured the built-in
+// defaults are used.
+func (d *Pornhub) isPornhubVideoDisabled(html string) bool {
+	lowerHTML := strings.ToLower(html)
+	for _, keyword := range d.disabledVideoKeywords() {
+		if strings.Contains(lowerHTML, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Pornhub) disabledVideoKeywords() []string {
+	if strings.TrimSpace(d.DisabledKeywords) == "" {
+		return defaultDisabledVideoKeywords
+	}
+	var keywords []string
+	for _, keyword := range strings.Split(d.DisabledKeywords, ",") {
+		if keyword = strings.TrimSpace(keyword); keyword != "" {
+			keywords = append(keywords, keyword)
+		}
+	}
+	if len(keywords) == 0 {
+		return defaultDisabledVideoKeywords
+	}
+	return keywords
 }
 
 func (d *Pornhub) getVideoLink(ctx context.Context, viewKey string) (string, error) {
@@ -30,7 +59,7 @@ func (d *Pornhub) getVideoLink(ctx context.Context, viewKey string) (string, err
 	}
 
 	html := res.String()
-	if isPornhubVideoDisabled(html) {
+	if d.isPornhubVideoDisabled(html) {
 		return "", ErrVideoDisabled
 	}
 	scriptRegexp := regexp.MustCompile(`<script\b[^>]*>([\s\S]*?)</script>`)
@@ -52,7 +81,9 @@ func (d *Pornhub) getVideoLink(ctx context.Context, viewKey string) (string, err
 	defer cancelScript()
 	err = runPornhubScript(scriptCtx, vm, `var playerObjList = {};`+encryptedScript+fmt.Sprintf(`;var __VM__OUTPUT = JSON.stringify(%s.mediaDefinitions)`, flashID))
 	if err != nil {
+		// The page HTML is unexpected, log the raw response to help diagnose.
 		utils.Log.Warnf("failed to run script, %s", err.Error())
+		utils.Log.Warnf("pornhub video page response status code: %d, raw html: %s", res.StatusCode(), html)
 		return "", err
 	}
 

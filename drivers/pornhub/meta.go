@@ -22,6 +22,7 @@ type Addition struct {
 	FanartScanTime       int    `json:"fanart_scan_time" required:"false" type:"number" default:"360" help:"fanart extraction interval in minutes"`
 	FanartScanLimit      int    `json:"fanart_scan_limit" required:"false" type:"number" default:"10" help:"max films per fanart scan"`
 	FanartCount          int    `json:"fanart_count" required:"false" type:"number" default:"3" help:"fanart frames to extract per film"`
+	DisabledKeywords     string `json:"disabled_keywords" required:"false" type:"text" default:"video disabled,此视频已下架" help:"Keywords that mark a video as disabled, comma separated; defaults: video disabled, 此视频已下架"`
 	LinkCacheTime        int    `json:"linkCacheTime" type:"number"`
 	SyncNfo              bool   `json:"sync_nfo" required:"false" help:"Sync nfo from db to disk"`
 	RefreshNfo           bool   `json:"refresh_nfo" required:"false" help:"Force rewriting every normalized NFO during scheduled maintenance."`
