@@ -12,8 +12,7 @@ import (
 )
 
 func TestEndToEndThroughFS(t *testing.T) {
-	d := setup(t)
-	_ = d
+	_ = setup(t)
 	// 通过 fs 重命名设置 actor（等价于 UI 操作）
 	if err := fs.Rename(context.Background(), "/ew/Movies", `{"actors":"三上悠亚"}`); err != nil {
 		t.Fatalf("rename via fs: %+v", err)

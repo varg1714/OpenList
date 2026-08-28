@@ -72,7 +72,8 @@ func (d *EmbyWrapper) withVirtualNFOs(dirPath string, objs []model.Obj) []model.
 		}
 		name := o.GetName()
 		if strings.EqualFold(utils.Ext(name), "nfo") {
-			realNFO[nfoBaseName(name)+".nfo"] = true
+			// key 统一小写：真实 aaa.nfo 应能挡住影片 AAA.mkv 的虚拟 AAA.nfo
+			realNFO[strings.ToLower(nfoBaseName(name)+".nfo")] = true
 		}
 	}
 
@@ -87,7 +88,7 @@ func (d *EmbyWrapper) withVirtualNFOs(dirPath string, objs []model.Obj) []model.
 			continue
 		}
 		nfoName := nfoBaseName(o.GetName()) + ".nfo"
-		if realNFO[nfoName] || added[nfoName] {
+		if realNFO[strings.ToLower(nfoName)] || added[nfoName] {
 			continue
 		}
 		title := strings.TrimSuffix(nfoName, ".nfo")

@@ -111,7 +111,15 @@ func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
 	if err != nil {
 		return nil, err
 	}
-	return wrapObj(obj, path, "", obj.IsDir()), nil
+	actors := ""
+	if obj.IsDir() {
+		if item, e := GetEmbyDirSetting(d.ID, path); e != nil {
+			utils.Log.Warnf("emby wrapper: get dir setting %s: %+v", path, e)
+		} else if item != nil {
+			actors = item.Actors
+		}
+	}
+	return wrapObj(obj, path, actors, obj.IsDir()), nil
 }
 
 // virtualNFOForPath 尝试为 .nfo 路径构建虚拟对象。
@@ -139,7 +147,7 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 		if o.IsDir() {
 			continue
 		}
-		if strings.EqualFold(utils.Ext(o.GetName()), "nfo") && nfoBaseName(o.GetName()) == base {
+		if strings.EqualFold(utils.Ext(o.GetName()), "nfo") && strings.EqualFold(nfoBaseName(o.GetName()), base) {
 			// 下游存在真实 nfo，交给下游 Get 返回
 			return nil, false, nil
 		}
@@ -208,7 +216,7 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Name:    "actors",
 			Type:    conf.TypeString,
 			Default: "",
-			Help:    "演员列表，逗号分隔；仅对文件夹修改生效，设置后该文件夹及子文件夹内的影片会生成对应的虚拟 nfo 文件（配合 strm 驱动落盘）",
+			Help:    "演员列表，逗号分隔；仅对文件夹修改生效，设置后该文件夹及子文件夹内的影片会生成对应的虚拟 nfo 文件（内存构建，配合 strm 驱动落盘；strm 的 DownloadFileTypes 需包含 nfo）",
 		},
 	}
 }

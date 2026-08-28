@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/emby_wrapper"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
 
@@ -79,5 +80,27 @@ func TestGetPlainFileForwardsDownstream(t *testing.T) {
 	}
 	if obj.GetName() != "AAA.mkv" {
 		t.Errorf("unexpected obj: %v", obj.GetName())
+	}
+}
+
+func TestGetFolderExposesActorsAddition(t *testing.T) {
+	d := setup(t)
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+		t.Fatalf("set actors: %+v", err)
+	}
+	obj, err := d.Get(context.Background(), "/Movies")
+	if err != nil {
+		t.Fatalf("get folder: %+v", err)
+	}
+	add, ok := obj.(model.ObjAdditional)
+	if !ok {
+		t.Fatal("folder must expose additional")
+	}
+	fa, ok := add.GetAddition().(emby_wrapper.FolderAddition)
+	if !ok {
+		t.Fatalf("unexpected addition type %T", add.GetAddition())
+	}
+	if fa.Actors != "三上悠亚" {
+		t.Errorf("expected actors %q, got %q", "三上悠亚", fa.Actors)
 	}
 }

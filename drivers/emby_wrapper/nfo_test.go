@@ -146,3 +146,21 @@ func TestNFONotGeneratedForNonMovieExt(t *testing.T) {
 		}
 	}
 }
+
+func TestRealNFOIgnoreCaseBlocksVirtual(t *testing.T) {
+	d := setup(t)
+	// 真实 nfo 小写 aaa.nfo + 影片大写 AAA.mkv：不应再生成虚拟 AAA.nfo
+	if err := writeDownstreamFile(t, "/Movies/aaa.nfo", "real"); err != nil {
+		t.Fatalf("write real nfo: %v", err)
+	}
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"A"}`); err != nil {
+		t.Fatalf("set actors: %+v", err)
+	}
+	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list Movies: %+v", err)
+	}
+	if got := names(objs); len(got) != 2 {
+		t.Fatalf("expected [AAA.mkv aaa.nfo], got %v", got)
+	}
+}

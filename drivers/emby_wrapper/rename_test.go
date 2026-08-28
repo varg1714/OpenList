@@ -43,9 +43,6 @@ func TestRenameFolderSavesActors(t *testing.T) {
 	if item.Actors != "三上悠亚,深田咏美" {
 		t.Errorf("expected actors saved, got %q", item.Actors)
 	}
-	// 重命名不改变下游真实文件夹名：列表里仍是 Movies
-	got := names(objs)
-	_ = got
 }
 
 func TestRenameFolderEmptyClearsActors(t *testing.T) {
