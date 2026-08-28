@@ -90,6 +90,82 @@ func (d *EmbyWrapper) List(ctx context.Context, dir model.Obj, args model.ListAr
 	return d.withVirtualNFOs(dir.GetPath(), objs), nil
 }
 
+func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
+	if utils.PathEqual(path, "/") {
+		return &model.Object{Name: "Root", IsFolder: true, Path: "/"}, nil
+	}
+	if strings.HasSuffix(strings.ToLower(path), ".nfo") {
+		if obj, ok, err := d.virtualNFOForPath(ctx, path); err != nil {
+			return nil, err
+		} else if ok {
+			return obj, nil
+		}
+	}
+	remoteStorage, remoteActualPath, err := d.remote()
+	if err != nil {
+		return nil, err
+	}
+	obj, err := op.Get(ctx, remoteStorage, stdpath.Join(remoteActualPath, path))
+	if err != nil {
+		return nil, err
+	}
+	return wrapObj(obj, path, "", obj.IsDir()), nil
+}
+
+// virtualNFOForPath 尝试为 .nfo 路径构建虚拟对象。
+// 返回 (obj, true, nil)：命中虚拟 nfo；(nil, false, nil)：应转发下游（无设置/无匹配影片/存在真实 nfo）。
+func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model.Obj, bool, error) {
+	parentDir := stdpath.Dir(path)
+	setting, err := d.resolveSetting(parentDir)
+	if err != nil {
+		return nil, false, err
+	}
+	if setting == nil {
+		return nil, false, nil
+	}
+	remoteStorage, remoteActualPath, err := d.remote()
+	if err != nil {
+		return nil, false, err
+	}
+	objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, parentDir), model.ListArgs{})
+	if err != nil {
+		return nil, false, err
+	}
+	base := strings.TrimSuffix(stdpath.Base(path), ".nfo")
+	var movieObj model.Obj
+	for _, o := range objs {
+		if o.IsDir() {
+			continue
+		}
+		if strings.EqualFold(utils.Ext(o.GetName()), "nfo") && nfoBaseName(o.GetName()) == base {
+			// 下游存在真实 nfo，交给下游 Get 返回
+			return nil, false, nil
+		}
+		if nfoBaseName(o.GetName()) == base {
+			if _, ok := d.supportSuffix[utils.Ext(o.GetName())]; ok {
+				movieObj = o
+			}
+		}
+	}
+	if movieObj == nil {
+		return nil, false, nil
+	}
+	content, err := buildNFOContent(base, setting)
+	if err != nil {
+		return nil, false, err
+	}
+	return &virtualNFO{
+		Object: model.Object{
+			Name:     stdpath.Base(path),
+			Size:     int64(len(content)),
+			Modified: movieObj.ModTime(),
+			Path:     path,
+			ID:       "vnfo-" + stdpath.Base(path),
+		},
+		content: content,
+	}, true, nil
+}
+
 func (d *EmbyWrapper) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	remoteStorage, remoteActualPath, err := d.remote()
 	if err != nil {
