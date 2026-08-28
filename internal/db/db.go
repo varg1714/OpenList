@@ -11,7 +11,7 @@ var db *gorm.DB
 
 func Init(d *gorm.DB) error {
 	db = d
-	err := AutoMigrate(new(model.Storage), new(model.User), new(model.Meta), new(model.SettingItem), new(model.SearchNode), new(model.Film), new(model.MissedFilm), new(model.MagnetCache), new(model.Actor), new(model.VirtualFile), new(model.Replacement), new(model.TaskItem), new(model.SSHPublicKey), new(model.MovedItem), new(model.SharingDB), new(model.FilmWork), new(model.FilmFile), new(model.SourceMagnet), new(model.CacheList), new(model.CacheDirSetting))
+	err := AutoMigrate(new(model.Storage), new(model.User), new(model.Meta), new(model.SettingItem), new(model.SearchNode), new(model.Film), new(model.MissedFilm), new(model.MagnetCache), new(model.Actor), new(model.VirtualFile), new(model.Replacement), new(model.TaskItem), new(model.SSHPublicKey), new(model.MovedItem), new(model.SharingDB), new(model.FilmWork), new(model.FilmFile), new(model.SourceMagnet), new(model.CacheList), new(model.CacheDirSetting), new(model.EmbyDirSetting))
 	if err != nil {
 		return err
 	}
