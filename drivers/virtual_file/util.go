@@ -578,6 +578,12 @@ func mediaToXML(m *Media) ([]byte, error) {
 	return x, nil
 }
 
+// RenderMediaNFO 将 Media 结构渲染为完整的 NFO XML 文档（含 XML 头）。
+// 供其他驱动（如 emby_wrapper）构建内存 nfo，保证与 javdb 落盘 nfo 格式一致。
+func RenderMediaNFO(m *Media) ([]byte, error) {
+	return mediaToXML(m)
+}
+
 func buildVirtualFiles(virtualFiles []model.VirtualFile, dir model.Obj) []model.Obj {
 
 	var result []model.Obj
