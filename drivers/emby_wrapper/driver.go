@@ -1,6 +1,7 @@
 package emby_wrapper
 
 import (
+	"bytes"
 	"context"
 	stdpath "path"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/pkg/errors"
 )
@@ -167,6 +169,12 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 }
 
 func (d *EmbyWrapper) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	if nfo, ok := file.(*virtualNFO); ok {
+		return &model.Link{
+			RangeReader:   stream.GetRangeReaderFromMFile(int64(len(nfo.content)), bytes.NewReader(nfo.content)),
+			ContentLength: int64(len(nfo.content)),
+		}, nil
+	}
 	remoteStorage, remoteActualPath, err := d.remote()
 	if err != nil {
 		return nil, err
