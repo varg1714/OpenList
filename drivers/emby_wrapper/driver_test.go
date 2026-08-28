@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/local"
@@ -27,9 +28,13 @@ func init() {
 	db.Init(dB)
 }
 
+// localRoot 记录最近一次 setup 创建的本地存储根目录，供测试写下游文件。
+var localRoot string
+
 func setup(t *testing.T) *emby_wrapper.EmbyWrapper {
 	t.Helper()
 	tmp := t.TempDir()
+	localRoot = tmp
 	_ = os.MkdirAll(filepath.Join(tmp, "Movies"), 0o755)
 	_ = os.WriteFile(filepath.Join(tmp, "Movies", "AAA.mkv"), []byte("x"), 0o644)
 	_ = os.WriteFile(filepath.Join(tmp, "readme.txt"), []byte("hi"), 0o644)
@@ -62,6 +67,22 @@ func setup(t *testing.T) *emby_wrapper.EmbyWrapper {
 
 func getSettingForTest(d *emby_wrapper.EmbyWrapper, dirPath string) (*model.EmbyDirSetting, error) {
 	return emby_wrapper.GetEmbyDirSetting(d.ID, dirPath)
+}
+
+// writeDownstreamFile 在本地下游存储根目录下写文件（路径以 / 开头，相对下游根）。
+func writeDownstreamFile(t *testing.T, relPath, content string) error {
+	t.Helper()
+	full := filepath.Join(localRoot, strings.TrimPrefix(relPath, "/"))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(full, []byte(content), 0o644)
+}
+
+// writeDownstreamDir 在本地下游存储根目录下建目录。
+func writeDownstreamDir(t *testing.T, relPath string) error {
+	t.Helper()
+	return os.MkdirAll(filepath.Join(localRoot, strings.TrimPrefix(relPath, "/")), 0o755)
 }
 
 func names(objs []model.Obj) []string {

@@ -86,7 +86,8 @@ func (d *EmbyWrapper) List(ctx context.Context, dir model.Obj, args model.ListAr
 	if err != nil {
 		return nil, err
 	}
-	return d.decorate(dir.GetPath(), objs), nil
+	objs = d.decorate(dir.GetPath(), objs)
+	return d.withVirtualNFOs(dir.GetPath(), objs), nil
 }
 
 func (d *EmbyWrapper) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
