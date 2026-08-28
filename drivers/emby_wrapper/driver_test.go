@@ -60,6 +60,10 @@ func setup(t *testing.T) *emby_wrapper.EmbyWrapper {
 	return d.(*emby_wrapper.EmbyWrapper)
 }
 
+func getSettingForTest(d *emby_wrapper.EmbyWrapper, dirPath string) (*model.EmbyDirSetting, error) {
+	return emby_wrapper.GetEmbyDirSetting(d.ID, dirPath)
+}
+
 func names(objs []model.Obj) []string {
 	out := make([]string, 0, len(objs))
 	for _, o := range objs {

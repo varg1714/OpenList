@@ -5,6 +5,7 @@ import (
 	stdpath "path"
 	"strings"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -85,7 +86,7 @@ func (d *EmbyWrapper) List(ctx context.Context, dir model.Obj, args model.ListAr
 	if err != nil {
 		return nil, err
 	}
-	return d.withFolderAddition(objs), nil
+	return d.decorate(dir.GetPath(), objs), nil
 }
 
 func (d *EmbyWrapper) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -102,7 +103,8 @@ func (d *EmbyWrapper) Link(ctx context.Context, file model.Obj, args model.LinkA
 	return &resultLink, nil
 }
 
-func (d *EmbyWrapper) withFolderAddition(objs []model.Obj) []model.Obj {
+// decorate 将下游对象包装进本驱动路径命名空间，并给文件夹附带目录设置（用于 UI 展示）。
+func (d *EmbyWrapper) decorate(dirPath string, objs []model.Obj) []model.Obj {
 	settings, err := ListEmbyDirSettings(d.ID)
 	if err != nil {
 		utils.Log.Warnf("emby wrapper: list dir settings: %+v", err)
@@ -110,9 +112,35 @@ func (d *EmbyWrapper) withFolderAddition(objs []model.Obj) []model.Obj {
 	}
 	out := make([]model.Obj, len(objs))
 	for i, o := range objs {
-		out[i] = wrapFolder(o, settings[o.GetPath()])
+		out[i] = wrapObj(o, stdpath.Join(dirPath, o.GetName()), settings[stdpath.Join(dirPath, o.GetName())], o.IsDir())
 	}
 	return out
 }
 
-var _ driver.Driver = (*EmbyWrapper)(nil)
+func (d *EmbyWrapper) MkdirConfig() []driver.Item {
+	return []driver.Item{
+		{
+			Name:    "actors",
+			Type:    conf.TypeString,
+			Default: "",
+			Help:    "演员列表，逗号分隔；仅对文件夹修改生效，设置后该文件夹及子文件夹内的影片会生成对应的虚拟 nfo 文件（配合 strm 驱动落盘）",
+		},
+	}
+}
+
+func (d *EmbyWrapper) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
+	if !srcObj.IsDir() {
+		return errors.New("emby wrapper driver does not support renaming files")
+	}
+	var req FolderAddition
+	if err := utils.Json.UnmarshalFromString(newName, &req); err != nil {
+		return errors.Wrap(err, "invalid folder emby setting")
+	}
+	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors)
+}
+
+var (
+	_ driver.Driver      = (*EmbyWrapper)(nil)
+	_ driver.MkdirConfig = (*EmbyWrapper)(nil)
+	_ driver.Rename      = (*EmbyWrapper)(nil)
+)
