@@ -19,8 +19,10 @@ func init() {
 	db.Init(dB)
 }
 
+func boolPtr(b bool) *bool { return &b }
+
 func TestUpsertAndGetEmbyDirSetting(t *testing.T) {
-	if err := UpsertEmbyDirSetting(1, "/Movies", "三上悠亚,深田咏美"); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/Movies", "三上悠亚,深田咏美", nil); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	item, err := GetEmbyDirSetting(1, "/Movies")
@@ -38,10 +40,10 @@ func TestUpsertAndGetEmbyDirSetting(t *testing.T) {
 }
 
 func TestUpsertEmptyClearsEmbyDirSetting(t *testing.T) {
-	if err := UpsertEmbyDirSetting(1, "/Movies", "三上悠亚"); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/Movies", "三上悠亚", nil); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := UpsertEmbyDirSetting(1, "/Movies", "  "); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/Movies", "  ", nil); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	item, err := GetEmbyDirSetting(1, "/Movies")
@@ -51,18 +53,73 @@ func TestUpsertEmptyClearsEmbyDirSetting(t *testing.T) {
 }
 
 func TestListEmbyDirSettings(t *testing.T) {
-	if err := UpsertEmbyDirSetting(1, "/a", "A"); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/a", "A", nil); err != nil {
 		t.Fatalf("upsert a: %v", err)
 	}
-	if err := UpsertEmbyDirSetting(1, "/b", "B"); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/b", "B", nil); err != nil {
 		t.Fatalf("upsert b: %v", err)
 	}
 	m, err := ListEmbyDirSettings(1)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if m["/a"] != "A" || m["/b"] != "B" {
+	if m["/a"].Actors != "A" || m["/b"].Actors != "B" {
 		t.Errorf("unexpected map: %v", m)
+	}
+}
+
+func TestUpsertUseNameAsActorKeepsActors(t *testing.T) {
+	if err := UpsertEmbyDirSetting(1, "/A", "X", boolPtr(true)); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	item, err := GetEmbyDirSetting(1, "/A")
+	if err != nil || item == nil {
+		t.Fatalf("get: %v %v", item, err)
+	}
+	if !item.UseNameAsActor || item.Actors != "X" {
+		t.Errorf("expected use=true actors=X, got %+v", item)
+	}
+	// actors 清空不影响 use
+	if err := UpsertEmbyDirSetting(1, "/A", "", nil); err != nil {
+		t.Fatalf("clear actors: %v", err)
+	}
+	item, err = GetEmbyDirSetting(1, "/A")
+	if err != nil || item == nil {
+		t.Fatalf("get after clear actors: %v %v", item, err)
+	}
+	if !item.UseNameAsActor || item.Actors != "" {
+		t.Errorf("use must survive actors clear, got %+v", item)
+	}
+}
+
+func TestUpsertActorsKeepsUseNameAsActor(t *testing.T) {
+	if err := UpsertEmbyDirSetting(1, "/A", "", boolPtr(true)); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// 不带 use 字段（nil）写 actors，use 保持
+	if err := UpsertEmbyDirSetting(1, "/A", "Y", nil); err != nil {
+		t.Fatalf("set actors: %v", err)
+	}
+	item, err := GetEmbyDirSetting(1, "/A")
+	if err != nil || item == nil {
+		t.Fatalf("get: %v %v", item, err)
+	}
+	if !item.UseNameAsActor || item.Actors != "Y" {
+		t.Errorf("use must survive actors write, got %+v", item)
+	}
+}
+
+func TestUpsertDisableUseNameAsActorDeletesRow(t *testing.T) {
+	if err := UpsertEmbyDirSetting(1, "/A", "", boolPtr(true)); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	f := false
+	if err := UpsertEmbyDirSetting(1, "/A", "", &f); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	item, err := GetEmbyDirSetting(1, "/A")
+	if err != nil || item != nil {
+		t.Errorf("row must be deleted, got %v %v", item, err)
 	}
 }
 

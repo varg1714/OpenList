@@ -13,7 +13,7 @@ func newTestWrapper() *EmbyWrapper {
 func TestResolveSettingInheritsAncestor(t *testing.T) {
 	d := newTestWrapper()
 	d.ID = 1
-	if err := UpsertEmbyDirSetting(d.ID, "/Movies", "三上悠亚"); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/Movies", "三上悠亚", nil); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	// 子目录没有自身设置，应继承 /Movies 的设置
@@ -25,7 +25,7 @@ func TestResolveSettingInheritsAncestor(t *testing.T) {
 		t.Errorf("expected inherited actors, got %q", item.Actors)
 	}
 	// 自身设置覆盖祖先
-	if err := UpsertEmbyDirSetting(d.ID, "/Movies/Sub", "深田咏美"); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/Movies/Sub", "深田咏美", nil); err != nil {
 		t.Fatalf("set sub actors: %+v", err)
 	}
 	item, err = d.resolveSetting("/Movies/Sub")

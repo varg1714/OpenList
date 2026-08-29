@@ -112,14 +112,15 @@ func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
 		return nil, err
 	}
 	actors := ""
+	use := false
 	if obj.IsDir() {
 		if item, e := GetEmbyDirSetting(d.ID, path); e != nil {
 			utils.Log.Warnf("emby wrapper: get dir setting %s: %+v", path, e)
 		} else if item != nil {
-			actors = item.Actors
+			actors, use = item.Actors, item.UseNameAsActor
 		}
 	}
-	return wrapObj(obj, path, actors, obj.IsDir()), nil
+	return wrapObj(obj, path, actors, use, obj.IsDir()), nil
 }
 
 // virtualNFOForPath 尝试为 .nfo 路径构建虚拟对象。
@@ -196,16 +197,22 @@ func (d *EmbyWrapper) Link(ctx context.Context, file model.Obj, args model.LinkA
 	return &resultLink, nil
 }
 
-// decorate 将下游对象包装进本驱动路径命名空间，并给文件夹附带目录设置（用于 UI 展示）。
+// decorate 将下游对象包装进本驱动路径命名空间，并给文件夹附带目录设置（用于 UI 展示与表单预填）。
 func (d *EmbyWrapper) decorate(dirPath string, objs []model.Obj) []model.Obj {
 	settings, err := ListEmbyDirSettings(d.ID)
 	if err != nil {
 		utils.Log.Warnf("emby wrapper: list dir settings: %+v", err)
-		settings = map[string]string{}
+		settings = map[string]model.EmbyDirSetting{}
 	}
 	out := make([]model.Obj, len(objs))
 	for i, o := range objs {
-		out[i] = wrapObj(o, stdpath.Join(dirPath, o.GetName()), settings[stdpath.Join(dirPath, o.GetName())], o.IsDir())
+		p := stdpath.Join(dirPath, o.GetName())
+		s, ok := settings[p]
+		actors, use := "", false
+		if ok {
+			actors, use = s.Actors, s.UseNameAsActor
+		}
+		out[i] = wrapObj(o, p, actors, use, o.IsDir())
 	}
 	return out
 }
@@ -229,7 +236,7 @@ func (d *EmbyWrapper) Rename(ctx context.Context, srcObj model.Obj, newName stri
 	if err := utils.Json.UnmarshalFromString(newName, &req); err != nil {
 		return errors.Wrap(err, "invalid folder emby setting")
 	}
-	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors)
+	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors, req.UseNameAsActor)
 }
 
 var (
