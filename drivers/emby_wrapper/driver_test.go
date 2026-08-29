@@ -133,6 +133,38 @@ func TestFoldersExposeActorsAddition(t *testing.T) {
 		if fa.Actors != "" {
 			t.Errorf("expected empty actors, got %q", fa.Actors)
 		}
+		if fa.UseNameAsActor != nil && *fa.UseNameAsActor {
+			t.Error("expected use_name_as_actor unset or false")
+		}
+		return
+	}
+	t.Fatal("Movies folder not found")
+}
+
+func TestFolderAdditionExposesUseNameAsActor(t *testing.T) {
+	d := setup(t)
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"use_name_as_actor":true}`); err != nil {
+		t.Fatalf("enable: %+v", err)
+	}
+	root, err := d.List(context.Background(), &model.Object{Name: "Root", Path: "/", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list root: %+v", err)
+	}
+	for _, o := range root {
+		if o.GetName() != "Movies" {
+			continue
+		}
+		add, ok := o.(model.ObjAdditional)
+		if !ok {
+			t.Fatal("folder must expose additional")
+		}
+		fa, ok := add.GetAddition().(emby_wrapper.FolderAddition)
+		if !ok {
+			t.Fatalf("unexpected addition type %T", add.GetAddition())
+		}
+		if fa.UseNameAsActor == nil || !*fa.UseNameAsActor {
+			t.Error("addition must expose use_name_as_actor=true")
+		}
 		return
 	}
 	t.Fatal("Movies folder not found")

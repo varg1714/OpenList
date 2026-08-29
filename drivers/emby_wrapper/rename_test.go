@@ -10,11 +10,14 @@ import (
 func TestMkdirConfigHasActors(t *testing.T) {
 	d := setup(t)
 	items := d.MkdirConfig()
-	if len(items) != 1 {
-		t.Fatalf("expected 1 mkdir config item, got %d", len(items))
+	if len(items) != 2 {
+		t.Fatalf("expected 2 mkdir config items, got %d", len(items))
 	}
 	if items[0].Name != "actors" {
 		t.Errorf("expected actors field, got %q", items[0].Name)
+	}
+	if items[1].Name != "use_name_as_actor" || items[1].Type != "bool" {
+		t.Errorf("expected bool use_name_as_actor field, got %+v", items[1])
 	}
 }
 
@@ -80,5 +83,55 @@ func TestRenameFileNotSupported(t *testing.T) {
 	}
 	if err := d.Rename(context.Background(), objs[0], `{"actors":"A"}`); err == nil {
 		t.Fatal("file rename must not be supported")
+	}
+}
+
+func TestRenameEnableAndDisableUseNameAsActor(t *testing.T) {
+	d := setup(t)
+	objs, err := d.List(context.Background(), &model.Object{Name: "Root", Path: "/", IsFolder: true}, model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list root: %+v", err)
+	}
+	var movies model.Obj
+	for _, o := range objs {
+		if o.GetName() == "Movies" {
+			movies = o
+		}
+	}
+	if movies == nil {
+		t.Fatal("Movies folder not found")
+	}
+	if err := d.Rename(context.Background(), movies, `{"use_name_as_actor":true}`); err != nil {
+		t.Fatalf("enable: %+v", err)
+	}
+	item, err := getSettingForTest(d, "/Movies")
+	if err != nil || item == nil || !item.UseNameAsActor {
+		t.Fatalf("expected use_name_as_actor enabled, got %v %v", item, err)
+	}
+	if err := d.Rename(context.Background(), movies, `{"use_name_as_actor":false}`); err != nil {
+		t.Fatalf("disable: %+v", err)
+	}
+	item, err = getSettingForTest(d, "/Movies")
+	if err != nil || item != nil {
+		t.Errorf("expected row deleted after disable, got %v %v", item, err)
+	}
+}
+
+func TestRenameWithoutUseFieldKeepsIt(t *testing.T) {
+	d := setup(t)
+	movies := &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}
+	if err := d.Rename(context.Background(), movies, `{"use_name_as_actor":true}`); err != nil {
+		t.Fatalf("enable: %+v", err)
+	}
+	// 只改 actors，不带 use 字段：use 必须保持
+	if err := d.Rename(context.Background(), movies, `{"actors":"A"}`); err != nil {
+		t.Fatalf("set actors: %+v", err)
+	}
+	item, err := getSettingForTest(d, "/Movies")
+	if err != nil || item == nil {
+		t.Fatalf("get: %v %v", item, err)
+	}
+	if !item.UseNameAsActor || item.Actors != "A" {
+		t.Errorf("use must survive actors-only rename, got %+v", item)
 	}
 }

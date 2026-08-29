@@ -225,6 +225,12 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Default: "",
 			Help:    "演员列表，逗号分隔；仅对文件夹修改生效，设置后该文件夹及子文件夹内的影片会生成对应的虚拟 nfo 文件（内存构建，配合 strm 驱动落盘；strm 的 DownloadFileTypes 需包含 nfo）",
 		},
+		{
+			Name:    "use_name_as_actor",
+			Type:    conf.TypeBool,
+			Default: "false",
+			Help:    "开启后该文件夹的直接子文件夹以各自名称为 actor（后代继承），手动设置的 actors 优先",
+		},
 	}
 }
 
