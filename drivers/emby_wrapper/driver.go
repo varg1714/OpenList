@@ -229,7 +229,7 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Name:    "use_name_as_actor",
 			Type:    conf.TypeBool,
 			Default: "false",
-			Help:    "开启后该文件夹的直接子文件夹以各自名称为 actor（后代继承），手动设置的 actors 优先",
+			Help:    "开启后该文件夹的直接子文件夹以各自名称为 actor（后代继承），手动设置的 actors 优先；仅反映本目录自身状态，子目录的继承状态不在此显示",
 		},
 	}
 }

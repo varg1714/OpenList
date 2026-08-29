@@ -146,3 +146,41 @@ func TestResolveSettingNearestEnablerWins(t *testing.T) {
 		t.Errorf("expected actors=A1 (outer enabler), got %q", item.Actors)
 	}
 }
+
+// TestResolveSettingDistancePriorityMixed 钉住距离优先语义（用户确认）：
+// 祖先手动 actors 与近处 use_name_as_actor 并存时，近处设置优先。
+func TestResolveSettingDistancePriorityMixed(t *testing.T) {
+	d := newTestWrapper()
+	d.ID = 1
+	// 祖先手动 actors + 近处 use_name_as_actor
+	if err := UpsertEmbyDirSetting(d.ID, "/A", "X", nil); err != nil {
+		t.Fatalf("manual on A: %v", err)
+	}
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", boolPtr(true)); err != nil {
+		t.Fatalf("enable on A1: %v", err)
+	}
+	// 近处 use 生效：A11 用 A1 的开关 -> actor = A11
+	item, err := d.resolveSetting("/A/A1/A11")
+	if err != nil || item == nil {
+		t.Fatalf("expected nearest use actor, got %v %v", item, err)
+	}
+	if item.Actors != "A11" {
+		t.Errorf("distance priority: expected actors=A11, got %q", item.Actors)
+	}
+	// A1 自身不因自己的开关获得 actor -> 回退祖先手动 X
+	item, err = d.resolveSetting("/A/A1")
+	if err != nil || item == nil {
+		t.Fatalf("expected ancestor manual actors, got %v %v", item, err)
+	}
+	if item.Actors != "X" {
+		t.Errorf("enabler itself must fall back to ancestor manual, got %q", item.Actors)
+	}
+	// 未被 use 覆盖的兄弟分支继承祖先手动
+	item, err = d.resolveSetting("/A/A2")
+	if err != nil || item == nil {
+		t.Fatalf("expected ancestor manual actors, got %v %v", item, err)
+	}
+	if item.Actors != "X" {
+		t.Errorf("sibling must inherit ancestor manual, got %q", item.Actors)
+	}
+}

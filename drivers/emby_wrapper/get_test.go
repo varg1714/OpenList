@@ -104,3 +104,25 @@ func TestGetFolderExposesActorsAddition(t *testing.T) {
 		t.Errorf("expected actors %q, got %q", "三上悠亚", fa.Actors)
 	}
 }
+
+func TestGetFolderExposesUseNameAsActor(t *testing.T) {
+	d := setup(t)
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"use_name_as_actor":true}`); err != nil {
+		t.Fatalf("enable: %+v", err)
+	}
+	obj, err := d.Get(context.Background(), "/Movies")
+	if err != nil {
+		t.Fatalf("get folder: %+v", err)
+	}
+	add, ok := obj.(model.ObjAdditional)
+	if !ok {
+		t.Fatal("folder must expose additional")
+	}
+	fa, ok := add.GetAddition().(emby_wrapper.FolderAddition)
+	if !ok {
+		t.Fatalf("unexpected addition type %T", add.GetAddition())
+	}
+	if fa.UseNameAsActor == nil || !*fa.UseNameAsActor {
+		t.Error("Get must expose use_name_as_actor=true")
+	}
+}

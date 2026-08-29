@@ -9,7 +9,8 @@ import (
 )
 
 // resolveSetting 返回 dirPath 生效的目录设置（自身或最近祖先）。
-// 优先级：手动 actors > use_name_as_actor（最近的开启者）> 无设置。
+// 距离优先：自底向上遇到的第一个有效设置即生效（手动 actors 或 use_name_as_actor 开启者，
+// 用户确认的语义：近处设置优先于祖先手动设置）。
 // use_name_as_actor 开启者自身不获得 actor（配置只作用于其直接子文件夹及后代）；
 // 命中开启者时返回合成 setting，Actors = 开启者之下第一段目录名。
 func (d *EmbyWrapper) resolveSetting(dirPath string) (*model.EmbyDirSetting, error) {
@@ -31,6 +32,7 @@ func (d *EmbyWrapper) resolveSetting(dirPath string) (*model.EmbyDirSetting, err
 					rel = rel[:idx]
 				}
 				if rel != "" {
+					// 合成 setting：DirPath 为开启者路径，仅作溯源用；消费方只应读取 Actors。
 					return &model.EmbyDirSetting{
 						StorageID:      d.ID,
 						DirPath:        dirPath,
