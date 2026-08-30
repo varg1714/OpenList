@@ -22,14 +22,14 @@ func init() {
 func boolPtr(b bool) *bool { return &b }
 
 func TestUpsertAndGetEmbyDirSetting(t *testing.T) {
-	if err := UpsertEmbyDirSetting(1, "/Movies", "三上悠亚,深田咏美", "", nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/Movies", "演员A,演员B", "", nil, nil); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	item, err := GetEmbyDirSetting(1, "/Movies")
 	if err != nil || item == nil {
 		t.Fatalf("get: %v %v", item, err)
 	}
-	if item.Actors != "三上悠亚,深田咏美" {
+	if item.Actors != "演员A,演员B" {
 		t.Errorf("unexpected actors %q", item.Actors)
 	}
 	// 不同 storage 隔离
@@ -40,7 +40,7 @@ func TestUpsertAndGetEmbyDirSetting(t *testing.T) {
 }
 
 func TestUpsertEmptyClearsEmbyDirSetting(t *testing.T) {
-	if err := UpsertEmbyDirSetting(1, "/Movies", "三上悠亚", "", nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/Movies", "演员A", "", nil, nil); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	if err := UpsertEmbyDirSetting(1, "/Movies", "  ", "", nil, nil); err != nil {

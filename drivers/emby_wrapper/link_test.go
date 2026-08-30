@@ -12,7 +12,7 @@ import (
 
 func TestLinkServesVirtualNFOContent(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚,深田咏美"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A,演员B"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	obj, err := d.Get(context.Background(), "/Movies/AAA.nfo")
@@ -42,7 +42,7 @@ func TestLinkServesVirtualNFOContent(t *testing.T) {
 	if !strings.Contains(got, "AAA") {
 		t.Errorf("nfo must contain movie title, got %s", got)
 	}
-	if !strings.Contains(got, "三上悠亚") || !strings.Contains(got, "深田咏美") {
+	if !strings.Contains(got, "演员A") || !strings.Contains(got, "演员B") {
 		t.Errorf("nfo must contain actors, got %s", got)
 	}
 }

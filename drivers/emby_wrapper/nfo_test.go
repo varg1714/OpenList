@@ -10,7 +10,7 @@ import (
 
 func TestListAddsVirtualNFO(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚,深田咏美"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A,演员B"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{})
@@ -109,7 +109,7 @@ func TestListSkipsRealNFO(t *testing.T) {
 
 func TestListInheritedSettingAddsNFOInSubfolder(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	// 子文件夹 + 影片

@@ -14,7 +14,7 @@ import (
 func TestEndToEndThroughFS(t *testing.T) {
 	_ = setup(t)
 	// 通过 fs 重命名设置 actor（等价于 UI 操作）
-	if err := fs.Rename(context.Background(), "/ew/Movies", `{"actors":"三上悠亚"}`); err != nil {
+	if err := fs.Rename(context.Background(), "/ew/Movies", `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("rename via fs: %+v", err)
 	}
 	// fs 列表应包含虚拟 nfo
@@ -49,7 +49,7 @@ func TestEndToEndThroughFS(t *testing.T) {
 		t.Fatalf("read: %+v", err)
 	}
 	got := string(body)
-	if !strings.Contains(got, "三上悠亚") || !strings.Contains(got, "AAA") {
+	if !strings.Contains(got, "演员A") || !strings.Contains(got, "AAA") {
 		t.Errorf("nfo content mismatch: %s", got)
 	}
 }

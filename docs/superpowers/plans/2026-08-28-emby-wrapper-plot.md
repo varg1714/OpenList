@@ -141,7 +141,7 @@ func ListEmbyDirSettings(storageID uint) (map[string]model.EmbyDirSetting, error
 }
 ```
 
-- [ ] **Step 3: 更新既有测试调用签名** `drivers/emby_wrapper/db_test.go` / `setting_test.go`：所有 `UpsertEmbyDirSetting(id, path, actors, use)` 调用追加 `plot=""` 与 `append=nil` 两个参数（形如 `UpsertEmbyDirSetting(1, "/Movies", "三上悠亚", "", nil, nil)`）。
+- [ ] **Step 3: 更新既有测试调用签名** `drivers/emby_wrapper/db_test.go` / `setting_test.go`：所有 `UpsertEmbyDirSetting(id, path, actors, use)` 调用追加 `plot=""` 与 `append=nil` 两个参数（形如 `UpsertEmbyDirSetting(1, "/Movies", "演员A", "", nil, nil)`）。
 
 - [ ] **Step 4: 追加合并语义测试**（追加到 db_test.go）：
 

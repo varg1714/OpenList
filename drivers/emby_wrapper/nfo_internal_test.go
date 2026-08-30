@@ -8,7 +8,7 @@ func TestPlotFileNameStripsOnlyExtension(t *testing.T) {
 		"BBB.cd1.mkv":          "BBB.cd1",
 		"CCC.CD2.mp4":          "CCC.CD2",
 		"noext":                "noext",
-		"ASMR   小如快醒醒  R_E_STUDIO  喉咙 .mp4": "ASMR   小如快醒醒  R_E_STUDIO  喉咙 ",
+		"Example Movie Title.mp4": "Example Movie Title",
 	}
 	for in, want := range cases {
 		if got := plotFileName(in); got != want {

@@ -51,7 +51,7 @@ import (
 func TestRenderMediaNFO(t *testing.T) {
 	out, err := RenderMediaNFO(&Media{
 		Title: Inner{Inner: "<![CDATA[测试标题]]>"},
-		Actor: []Actor{{Name: "三上悠亚"}},
+		Actor: []Actor{{Name: "演员A"}},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -66,7 +66,7 @@ func TestRenderMediaNFO(t *testing.T) {
 	if !strings.Contains(got, "<![CDATA[测试标题]]>") {
 		t.Errorf("missing title, got %s", got)
 	}
-	if !strings.Contains(got, "<name>三上悠亚</name>") {
+	if !strings.Contains(got, "<name>演员A</name>") {
 		t.Errorf("missing actor, got %s", got)
 	}
 }
@@ -157,14 +157,14 @@ func init() {
 }
 
 func TestUpsertAndGetEmbyDirSetting(t *testing.T) {
-	if err := UpsertEmbyDirSetting(1, "/Movies", "三上悠亚,深田咏美"); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/Movies", "演员A,演员B"); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	item, err := GetEmbyDirSetting(1, "/Movies")
 	if err != nil || item == nil {
 		t.Fatalf("get: %v %v", item, err)
 	}
-	if item.Actors != "三上悠亚,深田咏美" {
+	if item.Actors != "演员A,演员B" {
 		t.Errorf("unexpected actors %q", item.Actors)
 	}
 	// 不同 storage 隔离
@@ -175,7 +175,7 @@ func TestUpsertAndGetEmbyDirSetting(t *testing.T) {
 }
 
 func TestUpsertEmptyClearsEmbyDirSetting(t *testing.T) {
-	if err := UpsertEmbyDirSetting(1, "/Movies", "三上悠亚"); err != nil {
+	if err := UpsertEmbyDirSetting(1, "/Movies", "演员A"); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	if err := UpsertEmbyDirSetting(1, "/Movies", "  "); err != nil {
@@ -668,14 +668,14 @@ func TestRenameFolderSavesActors(t *testing.T) {
 	if movies == nil {
 		t.Fatal("Movies folder not found")
 	}
-	if err := d.Rename(context.Background(), movies, `{"actors":"三上悠亚,深田咏美"}`); err != nil {
+	if err := d.Rename(context.Background(), movies, `{"actors":"演员A,演员B"}`); err != nil {
 		t.Fatalf("rename folder: %+v", err)
 	}
 	item, err := getSettingForTest(d, "/Movies")
 	if err != nil || item == nil {
 		t.Fatalf("expected setting, got %v %v", item, err)
 	}
-	if item.Actors != "三上悠亚,深田咏美" {
+	if item.Actors != "演员A,演员B" {
 		t.Errorf("expected actors saved, got %q", item.Actors)
 	}
 	// 重命名不改变下游真实文件夹名：列表里仍是 Movies
@@ -723,7 +723,7 @@ func TestRenameFileNotSupported(t *testing.T) {
 
 func TestResolveSettingInheritsAncestor(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	// 子目录没有自身设置，应继承 /Movies 的设置
@@ -731,18 +731,18 @@ func TestResolveSettingInheritsAncestor(t *testing.T) {
 	if err != nil || item == nil {
 		t.Fatalf("expected inherited setting, got %v %v", item, err)
 	}
-	if item.Actors != "三上悠亚" {
+	if item.Actors != "演员A" {
 		t.Errorf("expected inherited actors, got %q", item.Actors)
 	}
 	// 自身设置覆盖祖先
-	if err := d.Rename(context.Background(), &model.Object{Name: "Sub", Path: "/Movies/Sub", IsFolder: true}, `{"actors":"深田咏美"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Sub", Path: "/Movies/Sub", IsFolder: true}, `{"actors":"演员B"}`); err != nil {
 		t.Fatalf("set sub actors: %+v", err)
 	}
 	item, err = d.resolveSetting("/Movies/Sub")
 	if err != nil || item == nil {
 		t.Fatalf("expected own setting, got %v %v", item, err)
 	}
-	if item.Actors != "深田咏美" {
+	if item.Actors != "演员B" {
 		t.Errorf("expected own actors, got %q", item.Actors)
 	}
 	// 无任何设置
@@ -877,7 +877,7 @@ import (
 
 func TestListAddsVirtualNFO(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚,深田咏美"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A,演员B"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{})
@@ -976,7 +976,7 @@ func TestListSkipsRealNFO(t *testing.T) {
 
 func TestListInheritedSettingAddsNFOInSubfolder(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	// 子文件夹 + 影片
@@ -1211,7 +1211,7 @@ import (
 
 func TestGetVirtualNFO(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	obj, err := d.Get(context.Background(), "/Movies/AAA.nfo")
@@ -1245,7 +1245,7 @@ func TestGetRealNFOFileWins(t *testing.T) {
 
 func TestGetVirtualNFOInherited(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	if err := writeDownstreamDir(t, "/Movies/Sub"); err != nil {
@@ -1408,7 +1408,7 @@ import (
 
 func TestLinkServesVirtualNFOContent(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚,深田咏美"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A,演员B"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	obj, err := d.Get(context.Background(), "/Movies/AAA.nfo")
@@ -1438,7 +1438,7 @@ func TestLinkServesVirtualNFOContent(t *testing.T) {
 	if !strings.Contains(got, "AAA") {
 		t.Errorf("nfo must contain movie title, got %s", got)
 	}
-	if !strings.Contains(got, "三上悠亚") || !strings.Contains(got, "深田咏美") {
+	if !strings.Contains(got, "演员A") || !strings.Contains(got, "演员B") {
 		t.Errorf("nfo must contain actors, got %s", got)
 	}
 }
@@ -1534,7 +1534,7 @@ import (
 func TestEndToEndThroughFS(t *testing.T) {
 	d := setup(t)
 	// 通过 fs 重命名设置 actor（等价于 UI 操作）
-	if err := fs.Rename(context.Background(), "/ew/Movies", `{"actors":"三上悠亚"}`); err != nil {
+	if err := fs.Rename(context.Background(), "/ew/Movies", `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("rename via fs: %+v", err)
 	}
 	// fs 列表应包含虚拟 nfo
@@ -1566,7 +1566,7 @@ func TestEndToEndThroughFS(t *testing.T) {
 		t.Fatalf("read: %+v", err)
 	}
 	got := string(body)
-	if !strings.Contains(got, "三上悠亚") || !strings.Contains(got, "AAA") {
+	if !strings.Contains(got, "演员A") || !strings.Contains(got, "AAA") {
 		t.Errorf("nfo content mismatch: %s", got)
 	}
 }
@@ -1598,7 +1598,7 @@ cd /Users/varg247/store/work-store/backend/openlist && git add drivers/emby_wrap
 
 1. Web UI 新增存储选择 **EmbyWrapper**，`remote_path` 填下游存储挂载路径（如 `/115`）
 2. strm 驱动的 `DownloadFileTypes` 需包含 `nfo`（用户已自行配置）
-3. 在 EmbyWrapper 挂载路径下对文件夹执行"重命名"，表单填入 `actors`（逗号分隔，如 `三上悠亚,深田咏美`），确定后该文件夹及子文件夹内每个影片（mp4/mkv 等）即出现对应 `<影片名>.nfo` 虚拟文件
+3. 在 EmbyWrapper 挂载路径下对文件夹执行"重命名"，表单填入 `actors`（逗号分隔，如 `演员A,演员B`），确定后该文件夹及子文件夹内每个影片（mp4/mkv 等）即出现对应 `<影片名>.nfo` 虚拟文件
 4. strm 扫描后本地生成 `<影片名>.strm` + `<影片名>.nfo`，Emby/Jellyfin 刮削即取到 actor
 5. 清除设置：重命名填空 `actors` 即可
 

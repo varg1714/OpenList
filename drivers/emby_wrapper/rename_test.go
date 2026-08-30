@@ -42,14 +42,14 @@ func TestRenameFolderSavesActors(t *testing.T) {
 	if movies == nil {
 		t.Fatal("Movies folder not found")
 	}
-	if err := d.Rename(context.Background(), movies, `{"actors":"三上悠亚,深田咏美"}`); err != nil {
+	if err := d.Rename(context.Background(), movies, `{"actors":"演员A,演员B"}`); err != nil {
 		t.Fatalf("rename folder: %+v", err)
 	}
 	item, err := getSettingForTest(d, "/Movies")
 	if err != nil || item == nil {
 		t.Fatalf("expected setting, got %v %v", item, err)
 	}
-	if item.Actors != "三上悠亚,深田咏美" {
+	if item.Actors != "演员A,演员B" {
 		t.Errorf("expected actors saved, got %q", item.Actors)
 	}
 }

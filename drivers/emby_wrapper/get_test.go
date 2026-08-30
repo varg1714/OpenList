@@ -10,7 +10,7 @@ import (
 
 func TestGetVirtualNFO(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	obj, err := d.Get(context.Background(), "/Movies/AAA.nfo")
@@ -44,7 +44,7 @@ func TestGetRealNFOFileWins(t *testing.T) {
 
 func TestGetVirtualNFOInherited(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	if err := writeDownstreamDir(t, "/Movies/Sub"); err != nil {
@@ -85,7 +85,7 @@ func TestGetPlainFileForwardsDownstream(t *testing.T) {
 
 func TestGetFolderExposesActorsAddition(t *testing.T) {
 	d := setup(t)
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"三上悠亚"}`); err != nil {
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"actors":"演员A"}`); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	obj, err := d.Get(context.Background(), "/Movies")
@@ -100,8 +100,8 @@ func TestGetFolderExposesActorsAddition(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected addition type %T", add.GetAddition())
 	}
-	if fa.Actors != "三上悠亚" {
-		t.Errorf("expected actors %q, got %q", "三上悠亚", fa.Actors)
+	if fa.Actors != "演员A" {
+		t.Errorf("expected actors %q, got %q", "演员A", fa.Actors)
 	}
 }
 
