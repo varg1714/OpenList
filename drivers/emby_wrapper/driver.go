@@ -111,16 +111,16 @@ func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
 	if err != nil {
 		return nil, err
 	}
-	actors := ""
-	use := false
+	actors, use, plot, appendFlag := "", false, "", (*bool)(nil)
 	if obj.IsDir() {
 		if item, e := GetEmbyDirSetting(d.ID, path); e != nil {
 			utils.Log.Warnf("emby wrapper: get dir setting %s: %+v", path, e)
 		} else if item != nil {
-			actors, use = item.Actors, item.UseNameAsActor
+			actors, use, plot = item.Actors, item.UseNameAsActor, item.Plot
+			appendFlag = item.AppendFileNameToPlot
 		}
 	}
-	return wrapObj(obj, path, actors, use, obj.IsDir()), nil
+	return wrapObj(obj, path, actors, use, plot, appendFlag, obj.IsDir()), nil
 }
 
 // virtualNFOForPath 尝试为 .nfo 路径构建虚拟对象。
@@ -208,11 +208,12 @@ func (d *EmbyWrapper) decorate(dirPath string, objs []model.Obj) []model.Obj {
 	for i, o := range objs {
 		p := stdpath.Join(dirPath, o.GetName())
 		s, ok := settings[p]
-		actors, use := "", false
+		actors, use, plot, appendFlag := "", false, "", (*bool)(nil)
 		if ok {
-			actors, use = s.Actors, s.UseNameAsActor
+			actors, use, plot = s.Actors, s.UseNameAsActor, s.Plot
+			appendFlag = s.AppendFileNameToPlot
 		}
-		out[i] = wrapObj(o, p, actors, use, o.IsDir())
+		out[i] = wrapObj(o, p, actors, use, plot, appendFlag, o.IsDir())
 	}
 	return out
 }
@@ -231,6 +232,18 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Default: "false",
 			Help:    "开启后该文件夹的直接子文件夹以各自名称为 actor（后代继承），手动设置的 actors 优先；仅反映本目录自身状态，子目录的继承状态不在此显示",
 		},
+		{
+			Name:    "plot",
+			Type:    conf.TypeString,
+			Default: "",
+			Help:    "影片简介；设置后该文件夹及子文件夹内的影片 nfo 使用该简介（分维度独立继承，不影响 actors）",
+		},
+		{
+			Name:    "append_file_name_to_plot",
+			Type:    conf.TypeBool,
+			Default: "false",
+			Help:    "将去扩展名的影片文件名追加到 plot（格式：plot-文件名；plot 未设置时直接以文件名为 plot）",
+		},
 	}
 }
 
@@ -242,7 +255,7 @@ func (d *EmbyWrapper) Rename(ctx context.Context, srcObj model.Obj, newName stri
 	if err := utils.Json.UnmarshalFromString(newName, &req); err != nil {
 		return errors.Wrap(err, "invalid folder emby setting")
 	}
-	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors, req.UseNameAsActor)
+	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors, req.Plot, req.UseNameAsActor, req.AppendFileNameToPlot)
 }
 
 var (

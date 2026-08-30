@@ -10,14 +10,20 @@ import (
 func TestMkdirConfigHasActors(t *testing.T) {
 	d := setup(t)
 	items := d.MkdirConfig()
-	if len(items) != 2 {
-		t.Fatalf("expected 2 mkdir config items, got %d", len(items))
+	if len(items) != 4 {
+		t.Fatalf("expected 4 mkdir config items, got %d", len(items))
 	}
 	if items[0].Name != "actors" {
 		t.Errorf("expected actors field, got %q", items[0].Name)
 	}
 	if items[1].Name != "use_name_as_actor" || items[1].Type != "bool" {
 		t.Errorf("expected bool use_name_as_actor field, got %+v", items[1])
+	}
+	if items[2].Name != "plot" {
+		t.Errorf("expected plot field, got %q", items[2].Name)
+	}
+	if items[3].Name != "append_file_name_to_plot" || items[3].Type != "bool" {
+		t.Errorf("expected bool append_file_name_to_plot field, got %+v", items[3])
 	}
 }
 

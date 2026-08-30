@@ -3,8 +3,10 @@ package emby_wrapper
 import "github.com/OpenListTeam/OpenList/v4/internal/model"
 
 type FolderAddition struct {
-	Actors         string `json:"actors"`
-	UseNameAsActor *bool  `json:"use_name_as_actor"`
+	Actors               string `json:"actors"`
+	UseNameAsActor       *bool  `json:"use_name_as_actor"`
+	Plot                 string `json:"plot"`
+	AppendFileNameToPlot *bool  `json:"append_file_name_to_plot"`
 }
 
 // wrappedObj 将下游对象包装进本驱动的路径命名空间（GetPath 返回本驱动相对路径）。
@@ -29,11 +31,16 @@ func (f *embyFolder) GetAddition() model.Additional {
 	return f.addition
 }
 
-func wrapObj(obj model.Obj, path, actors string, useNameAsActor bool, folder bool) model.Obj {
+func wrapObj(obj model.Obj, path, actors string, useNameAsActor bool, plot string, appendFileNameToPlot *bool, folder bool) model.Obj {
 	wrapped := &wrappedObj{Obj: obj, path: path}
 	if !folder {
 		return wrapped
 	}
 	use := useNameAsActor
-	return &embyFolder{Obj: wrapped, addition: FolderAddition{Actors: actors, UseNameAsActor: &use}}
+	return &embyFolder{Obj: wrapped, addition: FolderAddition{
+		Actors:               actors,
+		UseNameAsActor:       &use,
+		Plot:                 plot,
+		AppendFileNameToPlot: appendFileNameToPlot,
+	}}
 }
