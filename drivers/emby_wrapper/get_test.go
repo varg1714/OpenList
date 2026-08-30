@@ -126,3 +126,28 @@ func TestGetFolderExposesUseNameAsActor(t *testing.T) {
 		t.Error("Get must expose use_name_as_actor=true")
 	}
 }
+
+func TestGetFolderExposesPlotAndAppend(t *testing.T) {
+	d := setup(t)
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"plot":"P","append_file_name_to_plot":true}`); err != nil {
+		t.Fatalf("config: %+v", err)
+	}
+	obj, err := d.Get(context.Background(), "/Movies")
+	if err != nil {
+		t.Fatalf("get folder: %+v", err)
+	}
+	add, ok := obj.(model.ObjAdditional)
+	if !ok {
+		t.Fatal("folder must expose additional")
+	}
+	fa, ok := add.GetAddition().(emby_wrapper.FolderAddition)
+	if !ok {
+		t.Fatalf("unexpected addition type %T", add.GetAddition())
+	}
+	if fa.Plot != "P" {
+		t.Errorf("expected plot=P, got %q", fa.Plot)
+	}
+	if fa.AppendFileNameToPlot == nil || !*fa.AppendFileNameToPlot {
+		t.Error("Get must expose append_file_name_to_plot=true")
+	}
+}

@@ -172,16 +172,16 @@ func TestUpsertAppendThreeState(t *testing.T) {
 	if item.AppendFileNameToPlot == nil || !*item.AppendFileNameToPlot {
 		t.Errorf("expected append enabled, got %+v", item.AppendFileNameToPlot)
 	}
-	// 关闭 append（false = 清除，与 use_name_as_actor 一致）：无其他配置则删行
+	// 显式关闭 append（仅 append=false，无其他字段）：删行，恢复上层继承
 	ff := false
 	if err := UpsertEmbyDirSetting(1, "/A", "", "", nil, &ff); err != nil {
 		t.Fatalf("disable append: %v", err)
 	}
 	item, err = GetEmbyDirSetting(1, "/A")
 	if err != nil || item != nil {
-		t.Errorf("expected row deleted after disable, got %v %v", item, err)
+		t.Errorf("expected row deleted when only append=false, got %v %v", item, err)
 	}
-	// 重新开启 + 其他字段：关闭只清 append，其他保留
+	// 显式关闭 append + actors/plot 非空：行保留且 append=false（阻断上层继承）
 	if err := UpsertEmbyDirSetting(1, "/A", "X", "P", nil, &tf); err != nil {
 		t.Fatalf("enable with actors+plot: %v", err)
 	}
@@ -192,11 +192,19 @@ func TestUpsertAppendThreeState(t *testing.T) {
 	if err != nil || item == nil {
 		t.Fatalf("row must survive with actors+plot, got %v %v", item, err)
 	}
-	if item.AppendFileNameToPlot != nil {
-		t.Errorf("append must be cleared, got %+v", item.AppendFileNameToPlot)
+	if item.AppendFileNameToPlot == nil || *item.AppendFileNameToPlot {
+		t.Errorf("append must be explicitly false, got %+v", item.AppendFileNameToPlot)
 	}
 	if item.Actors != "X" || item.Plot != "P" {
 		t.Errorf("actors/plot must survive append disable, got %+v", item)
+	}
+	// 全部字段清空：删行
+	if err := UpsertEmbyDirSetting(1, "/A", "", "", nil, nil); err != nil {
+		t.Fatalf("clear all: %v", err)
+	}
+	item, err = GetEmbyDirSetting(1, "/A")
+	if err != nil || item != nil {
+		t.Errorf("expected row deleted, got %v %v", item, err)
 	}
 }
 

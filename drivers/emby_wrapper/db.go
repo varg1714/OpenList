@@ -41,14 +41,10 @@ func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot string, useNameA
 		use = *useNameAsActor
 	}
 	if appendFileNameToPlot != nil {
-		// 与 use_name_as_actor 一致：false = 清除（恢复上层继承），不写入显式关闭态
-		if *appendFileNameToPlot {
-			appendFlag = appendFileNameToPlot
-		} else {
-			appendFlag = nil
-		}
+		// false 落库：显式关闭，阻断上层继承；全字段清空时删行可恢复继承
+		appendFlag = appendFileNameToPlot
 	}
-	if actors == "" && plot == "" && !use && appendFlag == nil {
+	if actors == "" && plot == "" && !use && (appendFlag == nil || !*appendFlag) {
 		return db.GetDb().Where("storage_id = ? AND dir_path = ?", storageID, dirPath).Delete(&model.EmbyDirSetting{}).Error
 	}
 	if item != nil {

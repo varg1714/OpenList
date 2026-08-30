@@ -219,7 +219,7 @@ func TestResolveSettingPlotDimension(t *testing.T) {
 	}
 }
 
-// TestResolveSettingAppendDimension：append 独立继承；关闭（false = 清除）后恢复继承。
+// TestResolveSettingAppendDimension：append 独立继承；显式 false 阻断上层，全清删行后恢复继承。
 func TestResolveSettingAppendDimension(t *testing.T) {
 	d := newTestWrapper()
 	tf := true
@@ -234,21 +234,35 @@ func TestResolveSettingAppendDimension(t *testing.T) {
 	if item.AppendFileNameToPlot == nil || !*item.AppendFileNameToPlot || item.Plot != "P" {
 		t.Errorf("expected append=true plot=P inherited, got %+v", item)
 	}
-	// A1 关闭 append（false = 清除，无其他配置则删行）：恢复继承 A 的 true
+	// A1 设 actors=Y + 显式关闭 append：行保留，阻断继承
 	ff := false
-	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", "", nil, &ff); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "Y", "", nil, &ff); err != nil {
 		t.Fatalf("disable append on A1: %v", err)
 	}
 	item, err = d.resolveSetting("/A/A1")
 	if err != nil || item == nil {
 		t.Fatalf("expected setting, got %v %v", item, err)
 	}
-	if item.AppendFileNameToPlot == nil || !*item.AppendFileNameToPlot {
-		t.Errorf("append must re-inherit after disable, got %+v", item.AppendFileNameToPlot)
+	if item.Actors != "Y" {
+		t.Errorf("expected actors=Y, got %q", item.Actors)
+	}
+	if item.AppendFileNameToPlot == nil || *item.AppendFileNameToPlot {
+		t.Errorf("explicit false must block inheritance, got %+v", item.AppendFileNameToPlot)
 	}
 	// plot 仍独立继承 P
 	if item.Plot != "P" {
 		t.Errorf("plot must still inherit P, got %q", item.Plot)
+	}
+	// 全清 A1 行（删行）：恢复继承 A 的 append=true
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", "", nil, nil); err != nil {
+		t.Fatalf("clear A1: %v", err)
+	}
+	item, err = d.resolveSetting("/A/A1")
+	if err != nil || item == nil {
+		t.Fatalf("expected setting, got %v %v", item, err)
+	}
+	if item.AppendFileNameToPlot == nil || !*item.AppendFileNameToPlot {
+		t.Errorf("append must re-inherit after row deletion, got %+v", item.AppendFileNameToPlot)
 	}
 }
 

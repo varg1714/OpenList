@@ -3,7 +3,7 @@ package model
 // EmbyDirSetting 某个目录的 Emby 元数据设置。各字段独立生效（分维度继承）：
 // Actors 为空且 UseNameAsActor 为 false 表示未配置演员；Plot 为空表示未配置简介；
 // AppendFileNameToPlot 为 nil 表示未配置（false 为显式关闭，阻断上层继承）。
-// 全部字段未配置时不应存在该行。
+// 全部字段未配置（append 为 nil 或 false）时该行会被删除，删除后恢复上层继承。
 type EmbyDirSetting struct {
 	ID                   uint   `gorm:"primaryKey"`
 	StorageID            uint   `gorm:"uniqueIndex:idx_emby_dir_setting"`
