@@ -161,7 +161,7 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 	if movieObj == nil {
 		return nil, false, nil
 	}
-	content, err := buildNFOContent(base, setting)
+	content, err := buildNFOContent(base, movieObj.GetName(), setting)
 	if err != nil {
 		return nil, false, err
 	}

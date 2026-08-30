@@ -40,8 +40,28 @@ func splitActors(actors string) []string {
 	return out
 }
 
-// buildNFOContent 构建与 javdb 格式一致的 nfo XML：title + actor。
-func buildNFOContent(title string, setting *model.EmbyDirSetting) ([]byte, error) {
+// plotFileName 取去扩展名的原始文件名（保留 cd 等原始部分，仅去最后一个扩展名）。
+func plotFileName(fileName string) string {
+	if index := strings.LastIndex(fileName, "."); index != -1 {
+		return fileName[:index]
+	}
+	return fileName
+}
+
+// buildPlot 计算 nfo plot：append 开启时拼接 plot + '-' + 文件名（plot 未设置则直接用文件名）。
+func buildPlot(plot string, appendFlag *bool, fileName string) string {
+	if appendFlag == nil || !*appendFlag {
+		return plot
+	}
+	name := plotFileName(fileName)
+	if plot == "" {
+		return name
+	}
+	return plot + "-" + name
+}
+
+// buildNFOContent 构建与 javdb 格式一致的 nfo XML：title + actor + plot。
+func buildNFOContent(title, fileName string, setting *model.EmbyDirSetting) ([]byte, error) {
 	actors := splitActors(setting.Actors)
 	actorInfos := make([]virtual_file.Actor, 0, len(actors))
 	for _, a := range actors {
@@ -49,6 +69,7 @@ func buildNFOContent(title string, setting *model.EmbyDirSetting) ([]byte, error
 	}
 	return virtual_file.RenderMediaNFO(&virtual_file.Media{
 		Title: virtual_file.Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", title)},
+		Plot:  virtual_file.Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", buildPlot(setting.Plot, setting.AppendFileNameToPlot, fileName))},
 		Actor: actorInfos,
 	})
 }
@@ -92,7 +113,7 @@ func (d *EmbyWrapper) withVirtualNFOs(dirPath string, objs []model.Obj) []model.
 			continue
 		}
 		title := strings.TrimSuffix(nfoName, ".nfo")
-		content, err := buildNFOContent(title, setting)
+		content, err := buildNFOContent(title, o.GetName(), setting)
 		if err != nil {
 			utils.Log.Warnf("emby wrapper: build nfo %s: %+v", nfoName, err)
 			continue
