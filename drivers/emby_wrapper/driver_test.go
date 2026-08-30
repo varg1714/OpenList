@@ -169,3 +169,35 @@ func TestFolderAdditionExposesUseNameAsActor(t *testing.T) {
 	}
 	t.Fatal("Movies folder not found")
 }
+
+func TestFolderAdditionExposesPlotAndAppend(t *testing.T) {
+	d := setup(t)
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"plot":"P","append_file_name_to_plot":true}`); err != nil {
+		t.Fatalf("config: %+v", err)
+	}
+	root, err := d.List(context.Background(), &model.Object{Name: "Root", Path: "/", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list root: %+v", err)
+	}
+	for _, o := range root {
+		if o.GetName() != "Movies" {
+			continue
+		}
+		add, ok := o.(model.ObjAdditional)
+		if !ok {
+			t.Fatal("folder must expose additional")
+		}
+		fa, ok := add.GetAddition().(emby_wrapper.FolderAddition)
+		if !ok {
+			t.Fatalf("unexpected addition type %T", add.GetAddition())
+		}
+		if fa.Plot != "P" {
+			t.Errorf("expected plot=P, got %q", fa.Plot)
+		}
+		if fa.AppendFileNameToPlot == nil || !*fa.AppendFileNameToPlot {
+			t.Error("addition must expose append_file_name_to_plot=true")
+		}
+		return
+	}
+	t.Fatal("Movies folder not found")
+}
