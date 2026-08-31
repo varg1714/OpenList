@@ -61,15 +61,22 @@ func buildPlot(plot string, appendFlag *bool, fileName string) string {
 }
 
 // buildNFOContent 构建与 javdb 格式一致的 nfo XML：title + actor + plot。
+// plot 配置后 title 与 plot 同值（用户确认：plot 选项同时作用于 title 与 plot）；
+// plot 未配置时 title 保持影片文件名（归一化）。
 func buildNFOContent(title, fileName string, setting *model.EmbyDirSetting) ([]byte, error) {
 	actors := splitActors(setting.Actors)
 	actorInfos := make([]virtual_file.Actor, 0, len(actors))
 	for _, a := range actors {
 		actorInfos = append(actorInfos, virtual_file.Actor{Name: a})
 	}
+	plot := buildPlot(setting.Plot, setting.AppendFileNameToPlot, fileName)
+	nfoTitle := title
+	if setting.Plot != "" {
+		nfoTitle = plot
+	}
 	return virtual_file.RenderMediaNFO(&virtual_file.Media{
-		Title: virtual_file.Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", title)},
-		Plot:  virtual_file.Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", buildPlot(setting.Plot, setting.AppendFileNameToPlot, fileName))},
+		Title: virtual_file.Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", nfoTitle)},
+		Plot:  virtual_file.Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", plot)},
 		Actor: actorInfos,
 	})
 }

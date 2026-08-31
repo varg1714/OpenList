@@ -22,7 +22,10 @@ func TestPlotConfigured(t *testing.T) {
 		t.Fatalf("expected [AAA.mkv AAA.nfo], got %v", got)
 	}
 	got := readNFOLink(t, d, "/Movies/AAA.nfo")
-	if !strings.Contains(got, "<![CDATA[测试简介]]>") {
+	if !strings.Contains(got, "<title><![CDATA[测试简介]]></title>") {
+		t.Errorf("title must use plot value, got %s", got)
+	}
+	if !strings.Contains(got, "<plot><![CDATA[测试简介]]></plot>") {
 		t.Errorf("nfo must contain plot, got %s", got)
 	}
 }
@@ -34,7 +37,10 @@ func TestPlotAppendFileName(t *testing.T) {
 		t.Fatalf("set plot+append: %+v", err)
 	}
 	got := readNFOLink(t, d, "/Movies/AAA.nfo")
-	if !strings.Contains(got, "<![CDATA[P-AAA]]>") {
+	if !strings.Contains(got, "<title><![CDATA[P-AAA]]></title>") {
+		t.Errorf("title must be P-AAA, got %s", got)
+	}
+	if !strings.Contains(got, "<plot><![CDATA[P-AAA]]></plot>") {
 		t.Errorf("expected plot P-AAA, got %s", got)
 	}
 }
@@ -46,7 +52,10 @@ func TestPlotAppendWithoutPlot(t *testing.T) {
 		t.Fatalf("set append: %+v", err)
 	}
 	got := readNFOLink(t, d, "/Movies/AAA.nfo")
-	if !strings.Contains(got, "<![CDATA[AAA]]>") {
+	if !strings.Contains(got, "<title><![CDATA[AAA]]></title>") {
+		t.Errorf("title must stay file name AAA, got %s", got)
+	}
+	if !strings.Contains(got, "<plot><![CDATA[AAA]]></plot>") {
 		t.Errorf("expected plot AAA, got %s", got)
 	}
 }
@@ -58,7 +67,10 @@ func TestPlotAppendDisabled(t *testing.T) {
 		t.Fatalf("set plot: %+v", err)
 	}
 	got := readNFOLink(t, d, "/Movies/AAA.nfo")
-	if !strings.Contains(got, "<![CDATA[P]]>") {
+	if !strings.Contains(got, "<title><![CDATA[P]]></title>") {
+		t.Errorf("title must be P, got %s", got)
+	}
+	if !strings.Contains(got, "<plot><![CDATA[P]]></plot>") {
 		t.Errorf("expected plot P, got %s", got)
 	}
 	if strings.Contains(got, "P-AAA") {
@@ -83,7 +95,10 @@ func TestPlotInheritedDimension(t *testing.T) {
 		t.Fatalf("set actors on A1: %+v", err)
 	}
 	got := readNFOLink(t, d, "/Movies/A1/BBB.nfo")
-	if !strings.Contains(got, "<![CDATA[P-BBB]]>") {
+	if !strings.Contains(got, "<title><![CDATA[P-BBB]]></title>") {
+		t.Errorf("title must inherit and append, got %s", got)
+	}
+	if !strings.Contains(got, "<plot><![CDATA[P-BBB]]></plot>") {
 		t.Errorf("plot must inherit and append, got %s", got)
 	}
 	if !strings.Contains(got, "<name>Y</name>") {

@@ -236,7 +236,7 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Name:    "plot",
 			Type:    conf.TypeString,
 			Default: "",
-			Help:    "影片简介；设置后该文件夹及子文件夹内的影片 nfo 使用该简介（分维度独立继承，不影响 actors）",
+			Help:    "影片标题与简介；设置后该文件夹及子文件夹内的影片 nfo 的 title 和 plot 均使用该值（append 开启时追加文件名），分维度独立继承，不影响 actors",
 		},
 		{
 			Name:    "append_file_name_to_plot",
