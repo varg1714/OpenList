@@ -530,7 +530,7 @@ func (d *EmbyWrapper) emitTVSeasonView(pc *tvPathContext, idx *tvIndex, setting 
 	}
 	// season.nfo（真实同名 nfo 优先；季号已由 S{季号} 目录名承载，nfo 仅作双保险）
 	if !realNFO["season.nfo"] {
-		content := buildSeasonNFO(idx.seasonNo[pc.realDir], "")
+		content := buildSeasonNFO(idx.seasonNo[pc.realDir], stdpath.Base(pc.realDir))
 		modified := time.Time{}
 		if idx.last != nil {
 			modified = idx.last.ModTime()

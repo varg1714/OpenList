@@ -264,7 +264,7 @@ func (d *EmbyWrapper) tvNFOForPath(ctx context.Context, path, parentDir, base, r
 		if idx.last != nil {
 			modified = idx.last.ModTime()
 		}
-		return d.newVirtualNFO(path, buildSeasonNFO(idx.seasonNo[seasonReal], ""), modified), true, nil
+		return d.newVirtualNFO(path, buildSeasonNFO(idx.seasonNo[seasonReal], stdpath.Base(seasonReal)), modified), true, nil
 	}
 	// 剧集 nfo：虚拟 nfo 路径匹配（含季别名段，天然按目录限定）
 	epName, ok := idx.nfoBases[strings.ToLower(stdpath.Join(parentDir, base))]
