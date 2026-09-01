@@ -508,6 +508,7 @@ func TestRenderNFOWithRoot(t *testing.T) {
 	if m.XMLName.Local != "movie" {
 		t.Errorf("RenderNFO must not mutate input Media, XMLName=%s", m.XMLName.Local)
 	}
+	// 注：m 的构造字面量需显式 XMLName: xml.Name{Local: "movie"}，否则 Local 为空串、"不被突变"无从断言
 	// RenderMediaNFO 行为不变
 	out3, err := RenderMediaNFO(m)
 	if err != nil {
@@ -591,11 +592,20 @@ Expected: FAIL（RenderNFO/buildEpisodeNFO/buildTVShowNFO/buildSeasonNFO 未定�
 
 ```go
 // RenderNFO 将 Media 结构渲染为指定根元素（movie/tvshow/episodedetails）的 NFO XML 文档（含 XML 头）。
-// 拷贝语义：不突变入参。
+// 不突变入参。
+// 注意：不能通过 copy.XMLName 赋值改根元素——encoding/xml 中 XMLName 字段的 struct tag
+// （xml:"movie"）优先于字段值；必须用 EncodeElement 的 start 参数（startTemplate 优先级）。
 func RenderNFO(root string, m *Media) ([]byte, error) {
-	copy := *m
-	copy.XMLName = xml.Name{Local: root}
-	return mediaToXML(&copy)
+	var buf bytes.Buffer
+	enc := xml.NewEncoder(&buf)
+	enc.Indent("", "  ")
+	if err := enc.EncodeElement(m, xml.StartElement{Name: xml.Name{Local: root}}); err != nil {
+		return nil, err
+	}
+	if err := enc.Flush(); err != nil {
+		return nil, err
+	}
+	return append([]byte(xml.Header), buf.Bytes()...), nil
 }
 
 // RenderMediaNFO 渲染 <movie> 根元素的 NFO XML 文档（与 javdb 落盘 nfo 格式一致）。
