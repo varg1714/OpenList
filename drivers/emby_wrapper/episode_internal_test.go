@@ -1,6 +1,7 @@
 package emby_wrapper
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -57,8 +58,8 @@ func TestByCreateTimeName(t *testing.T) {
 	if !byCreateTimeName(obj("A.mp4", base, base), obj("B.mp4", base.Add(time.Hour), base.Add(2*time.Hour))) {
 		t.Error("older ctime must sort first")
 	}
-	// Ctime 为零时回退修改时间
-	if !byCreateTimeName(obj("A.mp4", time.Time{}, base), obj("B.mp4", time.Time{}, base.Add(time.Hour))) {
+	// Ctime 为零时回退修改时间（名称顺序与之相反，可判别是回退而非名称比较）
+	if !byCreateTimeName(obj("B.mp4", time.Time{}, base), obj("A.mp4", time.Time{}, base.Add(time.Hour))) {
 		t.Error("zero ctime must fall back to mtime")
 	}
 	// 时间相同按名称升序
@@ -74,14 +75,14 @@ func TestTVIndexAddAndResolve(t *testing.T) {
 	idx := newTVIndexForTest("/R")
 	real := &model.Object{Name: "A.mp4", Path: "/R/A.mp4", Modified: time.Now()}
 	idx.addEpisode(real, "/R/A.mp4", "A-S01E01.mp4")
-	if got := idx.resolve("A-S01E01.mp4"); got != real {
-		t.Errorf("resolve must return the real object, got %v", got)
+	if got := idx.byPath["/r/a-s01e01.mp4"]; got != real {
+		t.Errorf("byPath must resolve canonical virtual path to the real object, got %v", got)
 	}
-	if got := idx.resolve("a-s01e01.mp4"); got != real {
-		t.Errorf("resolve must be case-insensitive, got %v", got)
+	if got := idx.byPath[strings.ToLower("/r/A-S01E01.MP4")]; got != real {
+		t.Errorf("byPath must be case-insensitive, got %v", got)
 	}
-	if got := idx.resolve("A.mp4"); got != nil {
-		t.Errorf("original name must not resolve, got %v", got)
+	if got := idx.byPath["/r/a.mp4"]; got != nil {
+		t.Errorf("original name must not be a byPath key, got %v", got)
 	}
 	if got := idx.titles["a-s01e01.mp4"]; got != "A" {
 		t.Errorf("title must be original base name, got %q", got)
@@ -97,12 +98,11 @@ func TestTVIndexAddAndResolve(t *testing.T) {
 // newTVIndexForTest 构造空索引（测试辅助，Task 4 的 buildTVIndex 是驱动方法）。
 func newTVIndexForTest(root string) *tvIndex {
 	return &tvIndex{
-		root:      root,
-		byVirtual: map[string]model.Obj{},
-		titles:    map[string]string{},
-		names:     map[string]string{},
-		nfoBases:  map[string]string{},
-		byReal:    map[string]string{},
-		seasonNo:  map[string]int{},
+		root:     root,
+		byPath:   map[string]model.Obj{},
+		titles:   map[string]string{},
+		nfoBases: map[string]string{},
+		byReal:   map[string]string{},
+		seasonNo: map[string]int{},
 	}
 }

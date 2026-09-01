@@ -200,13 +200,16 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 				return d.newVirtualNFO(path, buildSeasonNFO(seasonNo, stdpath.Base(parentDir)), modified), true, nil
 			}
 		}
-		// 剧集 nfo：虚拟名匹配
+		// 剧集 nfo：虚拟名匹配（按目录限定解析，防跨季同名碰撞）
 		epName, ok := idx.nfoBases[strings.ToLower(base)]
 		if !ok {
 			return nil, false, nil
 		}
-		real := idx.resolve(epName)
-		content, err := buildEpisodeNFO(idx.titles[strings.ToLower(epName)], setting)
+		real := idx.byPath[strings.ToLower(stdpath.Join(parentDir, epName))]
+		if real == nil {
+			return nil, false, nil
+		}
+		content, err := buildEpisodeNFO(strings.TrimSuffix(real.GetName(), stdpath.Ext(real.GetName())), setting)
 		if err != nil {
 			return nil, false, err
 		}
@@ -249,7 +252,7 @@ func (d *EmbyWrapper) resolveEpisodePath(ctx context.Context, path string) (mode
 	if err != nil {
 		return nil, false, err
 	}
-	real := idx.resolve(stdpath.Base(path))
+	real := idx.byPath[strings.ToLower(stdpath.Join(parentDir, stdpath.Base(path)))]
 	if real == nil {
 		return nil, false, nil
 	}

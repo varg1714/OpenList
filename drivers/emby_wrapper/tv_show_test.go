@@ -312,3 +312,55 @@ func TestGetVirtualEpisodeNotFound(t *testing.T) {
 		t.Fatal("unmapped virtual episode must not be served")
 	}
 }
+
+// TestGetVirtualEpisodeWrongDirectory：虚拟名必须限定在所属目录内解析——
+// 根目录文件 AAA.mkv 的虚拟名 AAA-S01E01.mkv 在其他季目录下请求必须 404。
+func TestGetVirtualEpisodeWrongDirectory(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir 2024年: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	// AAA.mkv 位于剧集根（季 1），其虚拟名在季 2 目录下不可解析
+	if _, err := d.Get(context.Background(), "/Movies/2024年/AAA-S01E01.mkv"); err == nil {
+		t.Fatal("virtual episode under the wrong directory must not be served")
+	}
+	if _, err := d.Get(context.Background(), "/Movies/2024年/AAA-S01E01.nfo"); err == nil {
+		t.Fatal("virtual episode nfo under the wrong directory must not be served")
+	}
+}
+
+// TestTVShowDuplicateVirtualNameAcrossSeasons：不同季生成相同虚拟名（A1.mp4 →
+// A1-S02E01.mp4 与真实编号文件 A1-S02E01.mp4）时，播放与 nfo 都必须限定在请求目录内。
+func TestTVShowDuplicateVirtualNameAcrossSeasons(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir 2024年: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := writeDirOrdered(t, "/Movies/2025年"); err != nil {
+		t.Fatalf("mkdir 2025年: %v", err)
+	}
+	// 真实编号文件保留原名，与季 2 的虚拟名相同
+	if err := writeEpisodeFile(t, "/Movies/2025年/A1-S02E01.mp4", "real"); err != nil {
+		t.Fatalf("write numbered: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	// 季 2 的虚拟剧集播放它自己的文件，而非季 3 的同名真实文件
+	if got := readNFOLink(t, d, "/Movies/2024年/A1-S02E01.mp4"); got != "a1" {
+		t.Errorf("season 2 virtual episode must play its own file, got %q", got)
+	}
+	// 季 2 的剧集 nfo 标题来自 A1.mp4，而非季 3 的文件名
+	if got := readNFOLink(t, d, "/Movies/2024年/A1-S02E01.nfo"); !strings.Contains(got, "<![CDATA[A1]]>") {
+		t.Errorf("season 2 episode nfo title must come from A1.mp4, got %s", got)
+	}
+	// 季 3 的真实文件直接播放
+	if got := readNFOLink(t, d, "/Movies/2025年/A1-S02E01.mp4"); got != "real" {
+		t.Errorf("real numbered file must play directly, got %q", got)
+	}
+}

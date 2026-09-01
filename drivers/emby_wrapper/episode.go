@@ -43,32 +43,25 @@ func byCreateTimeName(a, b model.Obj) bool {
 // tvIndex 一部电视剧的完整索引：根目录直接文件 = 第 1 季；直接子文件夹 = 季
 // （按创建时间+名称排序分配连续季号，保留原名）。一次构建，List 展示与 Get 反查共用。
 type tvIndex struct {
-	root      string               // 剧集根目录规范路径
-	byVirtual map[string]model.Obj // 小写虚拟名（含扩展名）→ 真实对象
-	titles    map[string]string    // 小写虚拟名 → 集名（原文件名去扩展名）
-	names     map[string]string    // 小写虚拟名 → 虚拟名（保留原样）
-	nfoBases  map[string]string    // 小写虚拟名去扩展名 → 虚拟名
-	byReal    map[string]string    // 规范真实路径 → 虚拟名
-	seasonNo  map[string]int       // 直接子文件夹规范路径 → 季号
-	last      model.Obj            // 排序后最新的视频对象（tvshow.nfo 时间戳用，无视频时为 nil）
+	root     string               // 剧集根目录规范路径
+	byPath   map[string]model.Obj // 小写规范虚拟路径 → 真实对象（按目录限定，防跨季同名碰撞）
+	titles   map[string]string    // 小写虚拟名 → 集名（原文件名去扩展名）
+	nfoBases map[string]string    // 小写虚拟名去扩展名 → 虚拟名
+	byReal   map[string]string    // 规范真实路径 → 虚拟名
+	seasonNo map[string]int       // 直接子文件夹规范路径 → 季号
+	last     model.Obj            // 最后登记的剧集对象（tvshow.nfo 时间戳参考），无视频时为 nil
 }
 
 // addEpisode 将真实对象登记为一个剧集条目（虚拟名 → 真实对象及各派生映射）。
 // canonicalPath 为 wrapper 命名空间下的真实路径。
 func (idx *tvIndex) addEpisode(real model.Obj, canonicalPath, virtualName string) {
 	key := strings.ToLower(virtualName)
-	idx.byVirtual[key] = real
-	idx.names[key] = virtualName
+	idx.byPath[strings.ToLower(stdpath.Join(stdpath.Dir(canonicalPath), virtualName))] = real
 	ext := stdpath.Ext(real.GetName())
 	idx.titles[key] = strings.TrimSuffix(real.GetName(), ext)
 	idx.nfoBases[strings.ToLower(strings.TrimSuffix(virtualName, stdpath.Ext(virtualName)))] = virtualName
 	idx.byReal[canonicalPath] = virtualName
 	idx.last = real
-}
-
-// resolve 按虚拟名（含扩展名，大小写不敏感）反查真实对象；未命中返回 nil。
-func (idx *tvIndex) resolve(virtualName string) model.Obj {
-	return idx.byVirtual[strings.ToLower(virtualName)]
 }
 
 // episodeName 返回真实对象（规范路径）对应的虚拟名。
@@ -90,13 +83,12 @@ type tvFile struct {
 func (d *EmbyWrapper) buildTVIndex(ctx context.Context, rootPath string) (*tvIndex, error) {
 	rootPath = utils.FixAndCleanPath(rootPath)
 	idx := &tvIndex{
-		root:      rootPath,
-		byVirtual: map[string]model.Obj{},
-		titles:    map[string]string{},
-		names:     map[string]string{},
-		nfoBases:  map[string]string{},
-		byReal:    map[string]string{},
-		seasonNo:  map[string]int{},
+		root:     rootPath,
+		byPath:   map[string]model.Obj{},
+		titles:   map[string]string{},
+		nfoBases: map[string]string{},
+		byReal:   map[string]string{},
+		seasonNo: map[string]int{},
 	}
 	remoteStorage, remoteActualPath, err := d.remote()
 	if err != nil {
