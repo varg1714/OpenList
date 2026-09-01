@@ -2,21 +2,23 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 文件夹可标记为电视剧（`tv_show` + 自定义剧名 `tv_show_name`）：直接文件按 ModTime 旧→新自动编号为剧集（虚拟名 `原基础名-S01E01.mp4` 格式），生成剧集 nfo（`<episodedetails>`：title=原文件名、actors、无 plot）与 `tvshow.nfo`（`<tvshow>`：剧名+简介+actors）；文件不物理改名，下游 Get/Link 还原真实路径。
+**Goal:** 文件夹可标记为电视剧（`tv_show` + 自定义剧名 `tv_show_name`）：根目录直接文件 = 第 1 季，直接子文件夹按"创建时间+名称"排序分配季号（保留原名），季内文件按"创建时间+名称"编号为 `原基础名-S{NN}E{MM}.mp4`；生成剧集 nfo（`<episodedetails>`：title=原名、actors、无 plot）、`tvshow.nfo`（`<tvshow>`：剧名+简介+actors）与 `season.nfo`（`<season>`：seasonnumber+seasonname，让 Emby 识别任意命名文件夹为指定季）；文件不物理改名，下游 Get/Link 还原真实路径。
 
-**Architecture:** 沿用现有虚拟 nfo 模式：`EmbyDirSetting` 新增 `TvShow bool` 与 `TvShowName string`（本地生效不继承）；新增 `episode.go` 负责编号/排序/虚拟名映射（一次构建，List 展示与 Get 反查共用）；`virtual_file.RenderNFO` 根元素参数化以支持 `tvshow`/`episodedetails`；`Get` 是虚拟→真实路径的唯一映射点（`virtualEpisode.GetPath()` 返回真实路径，Link 现有代码零改动）；`resolveSetting` 在 TV 边界阻断 plot/append 维度向子目录继承。
+**Architecture:** 沿用现有虚拟 nfo 模式：`EmbyDirSetting` 新增 `TvShow bool` 与 `TvShowName string`（本地生效不继承）；新增 `episode.go` 构建整棵剧集树索引（`tvIndex`：根文件=季 1 + 直接子文件夹按创建时间+名称分配连续季号 + 季内递归收集按时间编号），一次构建供 List 展示与 Get 反查共用；`virtual_file.RenderNFO` 根元素参数化支持 `tvshow`/`episodedetails`（`season.nfo` 结构简单，直接手写 XML）；`Get` 是虚拟→真实路径的唯一映射点（`virtualEpisode.GetPath()` 返回真实路径，Link 现有代码零改动）；任一目录的 List/Get 先查"最近的电视剧祖先"再决定走 TV 分支还是影片分支。
 
 **Tech Stack:** Go 1.25.4（`/Library/Go/sdk/go1.25.4/bin/go`）、gorm、复用 `virtual_file.RenderNFO`（CDATA）与既有测试设施（`setup(t)`/`writeDownstreamFile`/`readNFOLink`/`names`）。
 
 **Spec:** 用户需求（2026-09-01 逐项确认）：
-1. 文件夹新增设置 `tv_show`（bool，标记为电视剧）与 `tv_show_name`（string，自定义剧名，为空回退文件夹名）；**本地生效，不继承**
-2. TV 模式只作用于**直接文件**（子文件夹不参与编号，原样展示）
-3. 编号方式：**动态推导**——直接视频文件按 ModTime 旧→新排序，未编号文件虚拟命名为 `原基础名-S01E%02d+扩展名`（E01 起）；**已含 `SxxExx`/`NxNN` 编号的文件跳过**、保持原名（含其 nfo 生成）；同时间按文件名升序稳定排序
-4. 每个剧集文件（含已编号的）生成虚拟剧集 nfo：根元素 `<episodedetails>`，title=原文件名去扩展名，actors=现有继承解析结果（`resolveSetting`），**无 plot**；`-cd` 多段不合并（一文件一集）
-5. 生成虚拟 `tvshow.nfo`：根元素 `<tvshow>`，title=自定义剧名（空→文件夹名），plot=该目录解析出的 plot（剧集介绍），actors 同
-6. **不物理改名**：虚拟名只存在于展示层（List/Get 返回的对象名）；`virtualEpisode.GetPath()` 返回真实路径，Link 直接转发真实文件（`op.Link` 前必经 Get，Get 是唯一映射点）；真实同名文件/nfo 优先（下游已存在同名文件或 nfo 时跳过虚拟生成）
-7. `tv_show` 标记**向下阻断 plot/append 维度继承**（防止剧集介绍泄漏进子文件夹影片 nfo）；演员维度不阻断
-8. 剧集命名格式用 `-S01E01`（Emby 官方文档+解析器确认 `-E01` 不被识别；`anything_s01e02` 是受支持模式）
+1. 文件夹新增设置 `tv_show`（bool，标记为电视剧）与 `tv_show_name`（string，自定义剧名，为空回退文件夹名）；**本地生效，不继承**（子文件夹是否为电视剧由自身标记决定，嵌套电视剧独立成剧、被父剧索引跳过）
+2. **排序**：文件与文件夹一律按 **`CreateTime()`（创建时间，驱动未提供时自动回退 `ModTime()`）+ 名称升序** 联合排序（用户确认：同一时间多个文件不能单靠时间，联合排序保证确定性、不随整理动作漂移）
+3. **结构**：根目录直接文件 = 第 1 季（`S01E<季内时间序>`）；**直接子文件夹 = 季**——保留原名、不解析文件夹名，按创建时间+名称排序分配**连续季号**（旧的季号更小；根目录存在直接视频时子文件夹从第 2 季起，否则从第 1 季起）；季内文件**递归收集**（嵌套子文件夹如 `季/专题/` 中的文件并入该季；递归时跳过自身标记为 TV 的子文件夹），按创建时间+名称编号 `原基础名-S{NN}E{MM}.mp4`，**原地虚拟展示**（文件留在自己的文件夹里）
+4. **已含 `SxxExx`/`NxNN` 编号的文件跳过**、保持原名（含其同名 nfo 生成），不消耗序号
+5. **剧集 nfo**：每个剧集文件生成虚拟 nfo（`原基础名-S{NN}E{MM}.nfo`）：根元素 `<episodedetails>`，title=原文件名去扩展名，actors=现有继承解析结果（`resolveSetting`），**无 plot**；`-cd` 多段不合并（一文件一集）
+6. **tvshow.nfo**（剧集根目录）：根元素 `<tvshow>`，title=自定义剧名（空→文件夹名），plot=该目录解析出的 plot（剧集介绍），actors 同
+7. **season.nfo**（每个直接子文件夹，虚拟）：根元素 `<season>`，含 `<seasonnumber>NN</seasonnumber>`（该文件夹分配的季号）+ `<seasonname>原文件夹名</seasonname>`——Emby 的 `SeasonNfoParser` 读取这两项设置季号与显示名（已核实：季识别基于文件夹名，任意命名文件夹只要有视频即创建为"无编号季"，season.nfo 在元数据刷新时填入季号；文件名中的 `S{NN}E{MM}` 是双保险——Emby 文件名季号优先）
+8. **不物理改名**：虚拟名只存在于展示层（List/Get 返回的对象名）；`virtualEpisode.GetPath()` 返回真实路径，Link 直接转发真实文件（`op.Link` 前必经 Get，Get 是唯一映射点）；真实同名文件/nfo 优先（同目录存在同名真实文件或 nfo 时跳过虚拟生成）
+9. 剧集命名格式用 `-S{NN}E{MM}`（Emby 官方文档+解析器确认 `-E01` 不被识别；`anything_s01e02` 是受支持模式）
+10. **不需要** TV 边界阻断 plot/append 继承（早期设计的遗留需求，方案 B 下 TV 树内任何目录都不再走影片模式 nfo 生成，无泄漏场景）
 
 ## Global Constraints
 
@@ -27,6 +29,7 @@
 - 全量 `go build ./...` 会因环境缺失 fuse.h 失败（与本改动无关）；验证使用受控包集：`drivers/emby_wrapper`、`drivers/virtual_file`、`internal/op`、`internal/fs`、`internal/db`、`internal/model`
 - 不修改 `text_types` 默认值
 - 既有测试语义不回归：`buildNFOContent` 重构为内部调用 `buildNFOWithRoot("movie", ...)`，行为保持不变
+- **测试时间控制**：local 驱动用文件系统 birth time 填充 Ctime（`times.Stat`），`os.Chtimes` 无法控制；集成测试用 `writeEpisodeFile`/`writeDirOrdered` 辅助函数（写后 sleep 15ms）保证创建时间递增
 
 ---
 
@@ -42,7 +45,7 @@
 
 **Interfaces:**
 - Consumes: 现有 EmbyDirSetting / GetEmbyDirSetting
-- Produces: `EmbyDirSetting{..., TvShow bool, TvShowName string}`、`UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName string, useNameAsActor, appendFileNameToPlot *bool, tvShow *bool) error`（tvShowName 空串清除；tvShow nil 保持原值）、`FolderAddition{..., TvShow *bool, TvShowName string}` —— Task 2/4/6 依赖
+- Produces: `EmbyDirSetting{..., TvShow bool, TvShowName string}`、`UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName string, useNameAsActor, appendFileNameToPlot *bool, tvShow *bool) error`（tvShowName 空串清除；tvShow nil 保持原值）、`FolderAddition{..., TvShow *bool, TvShowName string}` —— 后续任务依赖
 
 - [ ] **Step 1: 模型加字段** `internal/model/emby.go`
 
@@ -238,15 +241,15 @@ cd /Users/varg247/store/work-store/backend/openlist && git add internal/model/em
 
 ---
 
-### Task 2: episode.go 剧集编号与映射（纯函数）
+### Task 2: episode.go 剧集树索引（纯函数部分）
 
 **Files:**
 - Create: `drivers/emby_wrapper/episode.go`
 - Test: `drivers/emby_wrapper/episode_internal_test.go`
 
 **Interfaces:**
-- Consumes: 无（纯函数；`utils.Ext` 返回无点小写扩展名，与 `Init` 的 supportSuffix 键一致）
-- Produces: `isNumberedEpisode(fileName string) bool`、`episodeVirtualName(fileName string, idx int) string`、`episodeIndex{byVirtual, titles, names, nfoBases, byReal, last}`、`buildEpisodeIndex(files []model.Obj, supportSuffix map[string]struct{}) *episodeIndex` —— Task 4 依赖（List 展示与 Get 反查共用）
+- Consumes: 无（纯函数；`utils.Ext` 返回无点小写扩展名，与 `Init` 的 supportSuffix 键一致；`model.Obj.CreateTime()` 存在且 Ctime 为零时回退 ModTime）
+- Produces: `isNumberedEpisode(fileName string) bool`、`episodeVirtualName(fileName string, seasonNo, epNo int) string`（`原基础名-S%02dE%02d+扩展名`）、`byCreateTimeName(a, b model.Obj) bool`（创建时间升序、名称升序）、`tvIndex{root string; byVirtual map[string]model.Obj; titles/names/nfoBases/byReal map[string]string; seasonNo map[string]int; last model.Obj}`、`(*tvIndex).addEpisode(real model.Obj, canonicalPath, virtualName string)`、`(*tvIndex).resolve(virtualName string) model.Obj`、`(*tvIndex).episodeName(realObj model.Obj) (string, bool)` —— Task 4 依赖
 
 - [ ] **Step 1: 写失败测试** `drivers/emby_wrapper/episode_internal_test.go`（package emby_wrapper，内部测试，与 nfo_internal_test.go 同模式）：
 
@@ -285,79 +288,78 @@ func TestIsNumberedEpisode(t *testing.T) {
 func TestEpisodeVirtualName(t *testing.T) {
 	cases := []struct {
 		fileName string
-		idx      int
+		seasonNo int
+		epNo     int
 		want     string
 	}{
-		{"AAA.mkv", 1, "AAA-S01E01.mkv"},
-		{"B.mp4", 2, "B-S01E02.mp4"},
-		{"C", 12, "C-S01E12"},
-		{"D.mkv", 100, "D-S01E100.mkv"},
+		{"AAA.mkv", 1, 1, "AAA-S01E01.mkv"},
+		{"B.mp4", 2, 5, "B-S02E05.mp4"},
+		{"C", 12, 3, "C-S12E03"},
+		{"D.mkv", 1, 100, "D-S01E100.mkv"},
 	}
 	for _, c := range cases {
-		if got := episodeVirtualName(c.fileName, c.idx); got != c.want {
-			t.Errorf("episodeVirtualName(%q, %d) = %q, want %q", c.fileName, c.idx, got, c.want)
+		if got := episodeVirtualName(c.fileName, c.seasonNo, c.epNo); got != c.want {
+			t.Errorf("episodeVirtualName(%q, %d, %d) = %q, want %q", c.fileName, c.seasonNo, c.epNo, got, c.want)
 		}
 	}
 }
 
-func TestBuildEpisodeIndex(t *testing.T) {
-	support := map[string]struct{}{"mp4": {}, "mkv": {}}
+func TestByCreateTimeName(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	obj := func(name string, ts time.Time) model.Obj {
-		return &model.Object{Name: name, Path: "/dir/" + name, IsFolder: false, Modified: ts}
+	obj := func(name string, ctime, mtime time.Time) model.Obj {
+		return &model.Object{Name: name, Path: "/dir/" + name, Modified: mtime, Ctime: ctime}
 	}
-	idx := buildEpisodeIndex([]model.Obj{
-		obj("B.mp4", base.Add(2*time.Hour)),
-		obj("A.mp4", base),
-		obj("Skip.S01E03.mkv", base.Add(3*time.Hour)),
-		obj("readme.txt", base.Add(4*time.Hour)),
-		obj("C.mp4", base.Add(1*time.Hour)),
-	}, support)
-	// 时间旧→新：A→E01、C→E02、B→E03；已编号文件保持原名
-	if got := idx.resolve("A-S01E01.mp4"); got == nil || got.GetName() != "A.mp4" {
-		t.Errorf("A-S01E01.mp4 must map to A.mp4, got %v", got)
+	// 创建时间优先
+	if !byCreateTimeName(obj("A.mp4", base, base), obj("B.mp4", base.Add(time.Hour), base.Add(2*time.Hour))) {
+		t.Error("older ctime must sort first")
 	}
-	if got := idx.resolve("C-S01E02.mp4"); got == nil || got.GetName() != "C.mp4" {
-		t.Errorf("C-S01E02.mp4 must map to C.mp4, got %v", got)
+	// Ctime 为零时回退修改时间
+	if !byCreateTimeName(obj("A.mp4", time.Time{}, base), obj("B.mp4", time.Time{}, base.Add(time.Hour))) {
+		t.Error("zero ctime must fall back to mtime")
 	}
-	if got := idx.resolve("B-S01E03.mp4"); got == nil || got.GetName() != "B.mp4" {
-		t.Errorf("B-S01E03.mp4 must map to B.mp4, got %v", got)
+	// 时间相同按名称升序
+	if !byCreateTimeName(obj("A.mp4", base, base), obj("B.mp4", base, base)) {
+		t.Error("same time must tie-break by name asc")
 	}
-	if got := idx.resolve("Skip.S01E03.mkv"); got == nil || got.GetName() != "Skip.S01E03.mkv" {
-		t.Errorf("numbered file must keep its name, got %v", got)
+	if byCreateTimeName(obj("B.mp4", base, base), obj("A.mp4", base, base)) {
+		t.Error("name tie-break must be asc")
 	}
-	if got := idx.resolve("readme.txt"); got != nil {
-		t.Errorf("non-video must not be an episode, got %v", got)
+}
+
+func TestTVIndexAddAndResolve(t *testing.T) {
+	idx := newTVIndexForTest("/R")
+	real := &model.Object{Name: "A.mp4", Path: "/R/A.mp4", Modified: time.Now()}
+	idx.addEpisode(real, "/R/A.mp4", "A-S01E01.mp4")
+	if got := idx.resolve("A-S01E01.mp4"); got != real {
+		t.Errorf("resolve must return the real object, got %v", got)
+	}
+	if got := idx.resolve("a-s01e01.mp4"); got != real {
+		t.Errorf("resolve must be case-insensitive, got %v", got)
 	}
 	if got := idx.resolve("A.mp4"); got != nil {
-		t.Errorf("original name must not resolve (virtual name replaces it), got %v", got)
+		t.Errorf("original name must not resolve, got %v", got)
 	}
 	if got := idx.titles["a-s01e01.mp4"]; got != "A" {
-		t.Errorf("title of A episode must be A, got %q", got)
+		t.Errorf("title must be original base name, got %q", got)
 	}
 	if got := idx.nfoBases["a-s01e01"]; got != "A-S01E01.mp4" {
 		t.Errorf("nfo base must map to virtual name, got %q", got)
 	}
-	if idx.last == nil || idx.last.GetName() != "Skip.S01E03.mkv" {
-		t.Errorf("last must be the newest video, got %v", idx.last)
+	if got, ok := idx.episodeName(real); !ok || got != "A-S01E01.mp4" {
+		t.Errorf("episodeName by real path must work, got %q %v", got, ok)
 	}
 }
 
-func TestBuildEpisodeIndexSameMtimeTieBreak(t *testing.T) {
-	support := map[string]struct{}{"mp4": {}}
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	obj := func(name string) model.Obj {
-		return &model.Object{Name: name, Path: "/dir/" + name, Modified: base}
-	}
-	idx := buildEpisodeIndex([]model.Obj{
-		obj("Z.mp4"),
-		obj("A.mp4"),
-	}, support)
-	if got := idx.resolve("A-S01E01.mp4"); got == nil || got.GetName() != "A.mp4" {
-		t.Errorf("same mtime must tie-break by name asc: A first, got %v", got)
-	}
-	if got := idx.resolve("Z-S01E02.mp4"); got == nil || got.GetName() != "Z.mp4" {
-		t.Errorf("same mtime must tie-break by name asc: Z second, got %v", got)
+// newTVIndexForTest 构造空索引（测试辅助，Task 4 的 buildTVIndex 是驱动方法）。
+func newTVIndexForTest(root string) *tvIndex {
+	return &tvIndex{
+		root:      root,
+		byVirtual: map[string]model.Obj{},
+		titles:    map[string]string{},
+		names:     map[string]string{},
+		nfoBases:  map[string]string{},
+		byReal:    map[string]string{},
+		seasonNo:  map[string]int{},
 	}
 }
 ```
@@ -365,7 +367,7 @@ func TestBuildEpisodeIndexSameMtimeTieBreak(t *testing.T) {
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestIsNumberedEpisode|TestEpisodeVirtualName|TestBuildEpisodeIndex' -count=1
+cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestIsNumberedEpisode|TestEpisodeVirtualName|TestByCreateTimeName|TestTVIndexAddAndResolve' -count=1
 ```
 
 Expected: FAIL（编译错误：isNumberedEpisode 等未定义）
@@ -379,11 +381,9 @@ import (
 	"fmt"
 	stdpath "path"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
 // episodePattern 匹配已含 Emby 剧集编号的文件名（SxxExx 及其变体、NxNN）。
@@ -395,77 +395,56 @@ func isNumberedEpisode(fileName string) bool {
 	return episodePattern.MatchString(fileName)
 }
 
-// episodeVirtualName 为未编号文件生成虚拟剧集名：原基础名-S01E%02d+原扩展名。
-func episodeVirtualName(fileName string, idx int) string {
+// episodeVirtualName 为未编号文件生成虚拟剧集名：原基础名-S{季号}E{集号}+原扩展名。
+func episodeVirtualName(fileName string, seasonNo, epNo int) string {
 	ext := stdpath.Ext(fileName)
-	return fmt.Sprintf("%s-S01E%02d%s", strings.TrimSuffix(fileName, ext), idx, ext)
+	return fmt.Sprintf("%s-S%02dE%02d%s", strings.TrimSuffix(fileName, ext), seasonNo, epNo, ext)
 }
 
-// episodeIndex TV 文件夹的剧集映射：虚拟名 ↔ 真实对象。
-// 一次构建，List 展示与 Get 反查共用。
-type episodeIndex struct {
+// byCreateTimeName 比较两个对象的排序键：创建时间升序（CreateTime 为零时回退
+// ModTime，model.Object.CreateTime 已内置该回退），时间相同按名称升序。
+// 保证任何输入集都产生确定性顺序。
+func byCreateTimeName(a, b model.Obj) bool {
+	at, bt := a.CreateTime(), b.CreateTime()
+	if !at.Equal(bt) {
+		return at.Before(bt)
+	}
+	return a.GetName() < b.GetName()
+}
+
+// tvIndex 一部电视剧的完整索引：根目录直接文件 = 第 1 季；直接子文件夹 = 季
+// （按创建时间+名称排序分配连续季号，保留原名）。一次构建，List 展示与 Get 反查共用。
+type tvIndex struct {
+	root      string              // 剧集根目录规范路径
 	byVirtual map[string]model.Obj // 小写虚拟名（含扩展名）→ 真实对象
 	titles    map[string]string    // 小写虚拟名 → 集名（原文件名去扩展名）
 	names     map[string]string    // 小写虚拟名 → 虚拟名（保留原样）
 	nfoBases  map[string]string    // 小写虚拟名去扩展名 → 虚拟名
-	byReal    map[string]string    // 真实路径 → 虚拟名
+	byReal    map[string]string    // 规范真实路径 → 虚拟名
+	seasonNo  map[string]int       // 直接子文件夹规范路径 → 季号
 	last      model.Obj            // 排序后最新的视频对象（tvshow.nfo 时间戳用，无视频时为 nil）
 }
 
-// buildEpisodeIndex 将直接视频文件按 ModTime 旧→新编号为剧集：
-// 已编号文件保持原名；未编号文件命名为 原基础名-S01E%02d+扩展名（E01 起）。
-// 同时间按文件名升序稳定排序。
-func buildEpisodeIndex(files []model.Obj, supportSuffix map[string]struct{}) *episodeIndex {
-	var videos []model.Obj
-	for _, o := range files {
-		if o.IsDir() {
-			continue
-		}
-		if _, ok := supportSuffix[utils.Ext(o.GetName())]; ok {
-			videos = append(videos, o)
-		}
-	}
-	sort.SliceStable(videos, func(i, j int) bool {
-		if !videos[i].ModTime().Equal(videos[j].ModTime()) {
-			return videos[i].ModTime().Before(videos[j].ModTime())
-		}
-		return videos[i].GetName() < videos[j].GetName()
-	})
-	idx := &episodeIndex{
-		byVirtual: map[string]model.Obj{},
-		titles:    map[string]string{},
-		names:     map[string]string{},
-		nfoBases:  map[string]string{},
-		byReal:    map[string]string{},
-	}
-	n := 0
-	for _, o := range videos {
-		fileName := o.GetName()
-		ext := stdpath.Ext(fileName)
-		base := strings.TrimSuffix(fileName, ext)
-		epName := fileName
-		if !isNumberedEpisode(fileName) {
-			n++
-			epName = fmt.Sprintf("%s-S01E%02d%s", base, n, ext)
-		}
-		key := strings.ToLower(epName)
-		idx.byVirtual[key] = o
-		idx.titles[key] = base
-		idx.names[key] = epName
-		idx.nfoBases[strings.ToLower(strings.TrimSuffix(epName, ext))] = epName
-		idx.byReal[o.GetPath()] = epName
-		idx.last = o
-	}
-	return idx
+// addEpisode 将真实对象登记为一个剧集条目（虚拟名 → 真实对象及各派生映射）。
+// canonicalPath 为 wrapper 命名空间下的真实路径。
+func (idx *tvIndex) addEpisode(real model.Obj, canonicalPath, virtualName string) {
+	key := strings.ToLower(virtualName)
+	idx.byVirtual[key] = real
+	idx.names[key] = virtualName
+	ext := stdpath.Ext(real.GetName())
+	idx.titles[key] = strings.TrimSuffix(real.GetName(), ext)
+	idx.nfoBases[strings.ToLower(strings.TrimSuffix(virtualName, stdpath.Ext(virtualName)))] = virtualName
+	idx.byReal[canonicalPath] = virtualName
+	idx.last = real
 }
 
 // resolve 按虚拟名（含扩展名，大小写不敏感）反查真实对象；未命中返回 nil。
-func (idx *episodeIndex) resolve(virtualName string) model.Obj {
+func (idx *tvIndex) resolve(virtualName string) model.Obj {
 	return idx.byVirtual[strings.ToLower(virtualName)]
 }
 
-// episodeName 返回真实对象对应的虚拟名。
-func (idx *episodeIndex) episodeName(realObj model.Obj) (string, bool) {
+// episodeName 返回真实对象（规范路径）对应的虚拟名。
+func (idx *tvIndex) episodeName(realObj model.Obj) (string, bool) {
 	name, ok := idx.byReal[realObj.GetPath()]
 	return name, ok
 }
@@ -474,7 +453,7 @@ func (idx *episodeIndex) episodeName(realObj model.Obj) (string, bool) {
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
-cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestIsNumberedEpisode|TestEpisodeVirtualName|TestBuildEpisodeIndex' -count=1
+cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestIsNumberedEpisode|TestEpisodeVirtualName|TestByCreateTimeName|TestTVIndexAddAndResolve' -count=1
 ```
 
 Expected: PASS
@@ -482,12 +461,12 @@ Expected: PASS
 - [ ] **Step 5: 提交**
 
 ```bash
-cd /Users/varg247/store/work-store/backend/openlist && git add drivers/emby_wrapper/episode.go drivers/emby_wrapper/episode_internal_test.go && git commit -m "feat(emby_wrapper): build episode index with time-ordered virtual names"
+cd /Users/varg247/store/work-store/backend/openlist && git add drivers/emby_wrapper/episode.go drivers/emby_wrapper/episode_internal_test.go && git commit -m "feat(emby_wrapper): build tv-show index primitives with time-ordered naming"
 ```
 
 ---
 
-### Task 3: RenderNFO 根元素参数化 + 剧集/剧集级 nfo 构建
+### Task 3: RenderNFO 根元素参数化 + 剧集/剧集级/季 nfo 构建
 
 **Files:**
 - Modify: `drivers/virtual_file/util.go`
@@ -496,7 +475,7 @@ cd /Users/varg247/store/work-store/backend/openlist && git add drivers/emby_wrap
 
 **Interfaces:**
 - Consumes: 现有 `virtual_file.Media`/`Inner`/`Actor`、`buildPlot`/`plotFileName`/`splitActors`
-- Produces: `virtual_file.RenderNFO(root string, m *Media) ([]byte, error)`（拷贝语义，不突变入参；`RenderMediaNFO` 签名不变委托之）、`buildNFOWithRoot(root, title, plot string, setting *model.EmbyDirSetting) ([]byte, error)`、`buildEpisodeNFO(title string, setting *model.EmbyDirSetting) ([]byte, error)`、`buildTVShowNFO(showName, plot string, setting *model.EmbyDirSetting) ([]byte, error)` —— Task 4 依赖
+- Produces: `virtual_file.RenderNFO(root string, m *Media) ([]byte, error)`（拷贝语义，不突变入参；`RenderMediaNFO` 签名不变委托之）、`buildNFOWithRoot(root, title, plot string, setting *model.EmbyDirSetting) ([]byte, error)`、`buildEpisodeNFO(title string, setting *model.EmbyDirSetting) ([]byte, error)`、`buildTVShowNFO(showName, plot string, setting *model.EmbyDirSetting) ([]byte, error)`、`buildSeasonNFO(seasonNo int, name string) []byte`（手写 XML，无失败路径）—— Task 4 依赖
 
 - [ ] **Step 1: 写失败测试**（追加到 `drivers/virtual_file/render_nfo_test.go`）：
 
@@ -540,7 +519,7 @@ func TestRenderNFOWithRoot(t *testing.T) {
 }
 ```
 
-追加到 `drivers/emby_wrapper/nfo_internal_test.go`：
+追加到 `drivers/emby_wrapper/nfo_internal_test.go`（需要新增 import：`"strings"`、`"github.com/OpenListTeam/OpenList/v4/internal/model"`）：
 
 ```go
 // TestBuildEpisodeNFO：剧集 nfo 根元素 episodedetails，title=集名，保留 actors，无 plot 内容。
@@ -584,17 +563,29 @@ func TestBuildTVShowNFO(t *testing.T) {
 		t.Errorf("missing actor, got %s", got)
 	}
 }
-```
 
-`nfo_internal_test.go` 需要新增 import：`"strings"`、`"github.com/OpenListTeam/OpenList/v4/internal/model"`。
+// TestBuildSeasonNFO：季 nfo 根元素 season，含 seasonnumber 与 seasonname。
+func TestBuildSeasonNFO(t *testing.T) {
+	got := string(buildSeasonNFO(2, "2024年"))
+	if !strings.Contains(got, "<season>") {
+		t.Errorf("missing season root, got %s", got)
+	}
+	if !strings.Contains(got, "<seasonnumber>2</seasonnumber>") {
+		t.Errorf("missing seasonnumber 2, got %s", got)
+	}
+	if !strings.Contains(got, "<seasonname><![CDATA[2024年]]></seasonname>") {
+		t.Errorf("missing seasonname, got %s", got)
+	}
+}
+```
 
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/virtual_file/ -run TestRenderNFOWithRoot -count=1 && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestBuildEpisodeNFO|TestBuildTVShowNFO' -count=1
+cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/virtual_file/ -run TestRenderNFOWithRoot -count=1 && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestBuildEpisodeNFO|TestBuildTVShowNFO|TestBuildSeasonNFO' -count=1
 ```
 
-Expected: FAIL（RenderNFO/buildEpisodeNFO/buildTVShowNFO 未定义）
+Expected: FAIL（RenderNFO/buildEpisodeNFO/buildTVShowNFO/buildSeasonNFO 未定义）
 
 - [ ] **Step 3: 实现 `drivers/virtual_file/util.go`** —— `RenderMediaNFO` 替换为：
 
@@ -654,6 +645,17 @@ func buildEpisodeNFO(title string, setting *model.EmbyDirSetting) ([]byte, error
 func buildTVShowNFO(showName, plot string, setting *model.EmbyDirSetting) ([]byte, error) {
 	return buildNFOWithRoot("tvshow", showName, plot, setting)
 }
+
+// buildSeasonNFO 构建季 nfo：<season><seasonnumber>N</seasonnumber><seasonname>名称</seasonname></season>。
+// Emby 的 SeasonNfoParser 读取 seasonnumber 设置季号、seasonname 设置显示名，
+// 使任意命名的文件夹（如"2024年"）被识别为指定季。
+func buildSeasonNFO(seasonNo int, name string) []byte {
+	return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<season>
+  <seasonnumber>%d</seasonnumber>
+  <seasonname><![CDATA[%s]]></seasonname>
+</season>`, seasonNo, name))
+}
 ```
 
 - [ ] **Step 5: 运行确认通过**
@@ -667,23 +669,23 @@ Expected: PASS（既有 nfo/plot 测试不回归——buildNFOContent 行为不�
 - [ ] **Step 6: 提交**
 
 ```bash
-cd /Users/varg247/store/work-store/backend/openlist && git add drivers/virtual_file/util.go drivers/virtual_file/render_nfo_test.go drivers/emby_wrapper/nfo.go drivers/emby_wrapper/nfo_internal_test.go && git commit -m "feat(virtual_file): render nfo with configurable root element for tvshow and episodedetails"
+cd /Users/varg247/store/work-store/backend/openlist && git add drivers/virtual_file/util.go drivers/virtual_file/render_nfo_test.go drivers/emby_wrapper/nfo.go drivers/emby_wrapper/nfo_internal_test.go && git commit -m "feat(emby_wrapper): build episode, tvshow and season nfo content"
 ```
 
 ---
 
-### Task 4: List/Get TV 分支（虚拟剧集展示 + 反查 + Link 还原）
+### Task 4: List/Get TV 分支（季/剧集索引 + 反查 + Link 还原）
 
 **Files:**
 - Modify: `drivers/emby_wrapper/folder.go`（virtualEpisode 类型）
-- Modify: `drivers/emby_wrapper/episode.go`（withTVShowNFOs）
-- Modify: `drivers/emby_wrapper/setting.go`（tvShowInfo）
-- Modify: `drivers/emby_wrapper/driver.go`（List/Get/resolveEpisodePath/virtualNFOForPath 重构/newVirtualNFO）
+- Modify: `drivers/emby_wrapper/setting.go`（tvShowInfo / tvShowAncestor / isTVDir）
+- Modify: `drivers/emby_wrapper/episode.go`（buildTVIndex / gatherVideos / collectSeasonVideos / withTVShowNFOs）
+- Modify: `drivers/emby_wrapper/driver.go`（List 路由 / Get 反查 / resolveEpisodePath / virtualNFOForPath 重构 / newVirtualNFO）
 - Test: `drivers/emby_wrapper/tv_show_test.go`（新文件，外部测试包）、`drivers/emby_wrapper/e2e_test.go`
 
 **Interfaces:**
-- Consumes: Task 2 的 `buildEpisodeIndex`/`isNumberedEpisode`、Task 3 的 `buildEpisodeNFO`/`buildTVShowNFO`、Task 1 的 `TvShow`/`TvShowName`/`FolderAddition`、现有 `resolveSetting`/`withVirtualNFOs`/`virtualNFO`/`nfoBaseName`
-- Produces: `tvShowInfo(dirPath string) (string, bool, error)`（剧名，空回退文件夹名；本地生效不继承）、`withTVShowNFOs(dir model.Obj, showName string, objs []model.Obj) []model.Obj`、`resolveEpisodePath(ctx, path) (model.Obj, bool, error)`、`newVirtualEpisode(real model.Obj, name, path string) model.Obj`、`d.newVirtualNFO(path string, content []byte, modified time.Time) model.Obj` —— Task 6 无依赖；Task 5 修改 resolveSetting 时保持此任务行为
+- Consumes: Task 2 的 `tvIndex`/`addEpisode`/`resolve`/`episodeName`/`byCreateTimeName`/`episodeVirtualName`/`isNumberedEpisode`、Task 3 的 `buildEpisodeNFO`/`buildTVShowNFO`/`buildSeasonNFO`、Task 1 的 `TvShow`/`TvShowName`/`FolderAddition`、现有 `resolveSetting`/`withVirtualNFOs`/`virtualNFO`/`nfoBaseName`
+- Produces: `tvShowAncestor(dirPath string) (rootPath, showName string, ok bool, err error)`（最近的电视剧祖先，含自身）、`isTVDir(dirPath string) (bool, error)`、`buildTVIndex(ctx, rootPath string) (*tvIndex, error)`、`withTVShowNFOs(ctx, dir model.Obj, rootPath, showName string, objs []model.Obj) []model.Obj`、`resolveEpisodePath(ctx, path string) (model.Obj, bool, error)`、`newVirtualEpisode(real model.Obj, name, path string) model.Obj`、`d.newVirtualNFO(path string, content []byte, modified time.Time) model.Obj`
 
 - [ ] **Step 1: 写失败测试** `drivers/emby_wrapper/tv_show_test.go`（package emby_wrapper_test）：
 
@@ -700,16 +702,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/emby_wrapper"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
 
-// setMtime 设置下游文件修改时间（剧集排序依据）。
-func setMtime(t *testing.T, relPath string, ts time.Time) {
+// writeEpisodeFile 写下游文件并等待 15ms：local 驱动取文件系统 birth time 作为
+// CreateTime（os.Chtimes 无法控制），sleep 保证创建时间严格递增、排序确定性。
+func writeEpisodeFile(t *testing.T, relPath, content string) error {
 	t.Helper()
-	full := filepath.Join(localRoot, strings.TrimPrefix(relPath, "/"))
-	if err := os.Chtimes(full, ts, ts); err != nil {
-		t.Fatalf("chtimes %s: %v", relPath, err)
+	if err := writeDownstreamFile(t, relPath, content); err != nil {
+		return err
 	}
+	time.Sleep(15 * time.Millisecond)
+	return nil
+}
+
+// writeDirOrdered 建下游目录并等待 15ms（季号按文件夹创建时间排序）。
+func writeDirOrdered(t *testing.T, relPath string) error {
+	t.Helper()
+	if err := writeDownstreamDir(t, relPath); err != nil {
+		return err
+	}
+	time.Sleep(15 * time.Millisecond)
+	return nil
 }
 
 func sortedNames(objs []model.Obj) []string {
@@ -719,98 +734,153 @@ func sortedNames(objs []model.Obj) []string {
 }
 
 func markTVShow(t *testing.T, d *emby_wrapper.EmbyWrapper, payload string) {
+	markTVShowAt(t, d, "/Movies", payload)
+}
+
+func markTVShowAt(t *testing.T, d *emby_wrapper.EmbyWrapper, dirPath, payload string) {
 	t.Helper()
-	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, payload); err != nil {
-		t.Fatalf("mark tv show: %+v", err)
+	if err := d.Rename(context.Background(), &model.Object{Name: stdpath.Base(dirPath), Path: dirPath, IsFolder: true}, payload); err != nil {
+		t.Fatalf("mark tv show %s: %+v", dirPath, err)
 	}
 }
 
-// TestTVShowListNamesAndOrder：直接文件按时间旧→新编号；原始名不再出现；含剧集 nfo 与 tvshow.nfo。
-func TestTVShowListNamesAndOrder(t *testing.T) {
+// TestTVShowSeasonsAndRootEpisodes：根目录直接文件 = 第 1 季；直接子文件夹按
+// 创建时间分配连续季号（根有视频从 2 起）；季内文件按创建时间编号。
+func TestTVShowSeasonsAndRootEpisodes(t *testing.T) {
 	d := setup(t)
-	if err := writeDownstreamFile(t, "/Movies/B.mp4", "b"); err != nil {
-		t.Fatalf("write B: %v", err)
+	// 根目录已有 AAA.mkv（setup 创建，最早）→ 季 1；子文件夹按创建时间：2024年 早 → 季 2，2025年 → 季 3
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir 2024年: %v", err)
 	}
-	if err := writeDownstreamFile(t, "/Movies/C.mp4", "c"); err != nil {
+	if err := writeDirOrdered(t, "/Movies/2025年"); err != nil {
+		t.Fatalf("mkdir 2025年: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A2.mp4", "a2"); err != nil {
+		t.Fatalf("write A2: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2025年/B1.mp4", "b1"); err != nil {
+		t.Fatalf("write B1: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true,"tv_show_name":"测试剧","plot":"剧集介绍","actors":"演员A"}`)
+	// 根目录：AAA 季1 + 两个季文件夹 + tvshow.nfo
+	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list root: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"2024年", "2025年", "AAA-S01E01.mkv", "AAA-S01E01.nfo", "tvshow.nfo"}) {
+		t.Errorf("root listing mismatch, got %v", got)
+	}
+	// 季 2（2024年）：A1 先建 → E01；含 season.nfo
+	objs, err = d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 2024年: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S02E01.mp4", "A1-S02E01.nfo", "A2-S02E02.mp4", "A2-S02E02.nfo", "season.nfo"}) {
+		t.Errorf("season 2 listing mismatch, got %v", got)
+	}
+	// 季 3（2025年）
+	objs, err = d.List(context.Background(), &model.Object{Name: "2025年", Path: "/Movies/2025年", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 2025年: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"B1-S03E01.mp4", "B1-S03E01.nfo", "season.nfo"}) {
+		t.Errorf("season 3 listing mismatch, got %v", got)
+	}
+}
+
+// TestTVShowNoRootVideos：根目录无直接视频时子文件夹从第 1 季起。
+func TestTVShowNoRootVideos(t *testing.T) {
+	d := setup(t)
+	if err := os.Remove(filepath.Join(localRoot, "Movies", "AAA.mkv")); err != nil {
+		t.Fatalf("remove AAA: %v", err)
+	}
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	objs, err := d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S01E01.mp4", "A1-S01E01.nfo", "season.nfo"}) {
+		t.Errorf("no-root-videos season must start at 1, got %v", got)
+	}
+}
+
+// TestTVShowNestedFolderInSeason：季内的嵌套子文件夹文件并入该季编号（原地展示）。
+func TestTVShowNestedFolderInSeason(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/C.mp4", "c"); err != nil {
 		t.Fatalf("write C: %v", err)
 	}
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	setMtime(t, "/Movies/AAA.mkv", base)       // 最早 → E01
-	setMtime(t, "/Movies/C.mp4", base.Add(1*time.Hour))  // → E02
-	setMtime(t, "/Movies/B.mp4", base.Add(2*time.Hour))  // → E03
-	markTVShow(t, d, `{"tv_show":true,"tv_show_name":"测试剧","plot":"剧集介绍","actors":"演员A"}`)
-	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true})
-	if err != nil {
-		t.Fatalf("list: %+v", err)
+	if err := writeDirOrdered(t, "/Movies/2024年/专题"); err != nil {
+		t.Fatalf("mkdir 专题: %v", err)
 	}
-	want := []string{
-		"AAA-S01E01.mkv", "AAA-S01E01.nfo",
-		"B-S01E03.mp4", "B-S01E03.nfo",
-		"C-S01E02.mp4", "C-S01E02.nfo",
-		"tvshow.nfo",
+	if err := writeEpisodeFile(t, "/Movies/2024年/专题/D.mp4", "d"); err != nil {
+		t.Fatalf("write D: %v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, want) {
-		t.Errorf("expected %v, got %v", want, got)
-	}
-}
-
-// TestTVShowSkipsNumbered：已含 SxxExx 的文件保持原名，不参与时间编号。
-func TestTVShowSkipsNumbered(t *testing.T) {
-	d := setup(t)
-	if err := writeDownstreamFile(t, "/Movies/Skip.S01E03.mkv", "s"); err != nil {
-		t.Fatalf("write skip: %v", err)
-	}
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	setMtime(t, "/Movies/AAA.mkv", base)
-	setMtime(t, "/Movies/Skip.S01E03.mkv", base.Add(1*time.Hour))
 	markTVShow(t, d, `{"tv_show":true}`)
-	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true})
+	// C 先建 → 季 2 的 E01；D 后建 → E02，显示在 专题 内
+	objs, err := d.List(context.Background(), &model.Object{Name: "专题", Path: "/Movies/2024年/专题", IsFolder: true}, model.ListArgs{Refresh: true})
 	if err != nil {
-		t.Fatalf("list: %+v", err)
+		t.Fatalf("list 专题: %+v", err)
 	}
-	want := []string{
-		"AAA-S01E01.mkv", "AAA-S01E01.nfo",
-		"Skip.S01E03.mkv", "Skip.S01E03.nfo",
-		"tvshow.nfo",
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"D-S02E02.mp4", "D-S02E02.nfo"}) {
+		t.Errorf("nested folder episodes mismatch, got %v", got)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, want) {
-		t.Errorf("expected %v, got %v", want, got)
+	// 2024年 自身列表：C 在根、专题文件夹原样（无 season.nfo——只有直接子文件夹是季）
+	objs, err = d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 2024年: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"C-S02E01.mp4", "C-S02E01.nfo", "season.nfo", "专题"}) {
+		t.Errorf("season listing with nested dir mismatch, got %v", got)
 	}
 }
 
-// TestTVShowRealFilePriority：虚拟名已被真实文件占用时，原文件原样展示且不生成虚拟 nfo。
-func TestTVShowRealFilePriority(t *testing.T) {
+// TestTVShowSeasonNFOContent：season.nfo 含分配的季号与原文件夹名。
+func TestTVShowSeasonNFOContent(t *testing.T) {
 	d := setup(t)
-	if err := writeDownstreamFile(t, "/Movies/AAA-S01E01.mkv", "real"); err != nil {
-		t.Fatalf("write real: %v", err)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	setMtime(t, "/Movies/AAA.mkv", base)
-	setMtime(t, "/Movies/AAA-S01E01.mkv", base.Add(1*time.Hour))
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true})
-	if err != nil {
-		t.Fatalf("list: %+v", err)
+	got := readNFOLink(t, d, "/Movies/2024年/season.nfo")
+	if !strings.Contains(got, "<seasonnumber>2</seasonnumber>") {
+		t.Errorf("season.nfo must carry assigned season number, got %s", got)
 	}
-	want := []string{
-		"AAA-S01E01.mkv", // 真实文件（已编号，保持原名）
-		"AAA.mkv",        // 虚拟名被占用：原样展示
-		"tvshow.nfo",
-	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, want) {
-		t.Errorf("expected %v, got %v", want, got)
+	if !strings.Contains(got, "<seasonname><![CDATA[2024年]]></seasonname>") {
+		t.Errorf("season.nfo must carry original folder name, got %s", got)
 	}
 }
 
-// TestTVShowNFOsContent：剧集 nfo（episodedetails、title=原文件名、actors、无 plot）与 tvshow.nfo（剧名+简介）。
+// TestTVShowNFOsContent：剧集 nfo（episodedetails、title=原名、actors、无 plot）与 tvshow.nfo（剧名+简介）。
 func TestTVShowNFOsContent(t *testing.T) {
 	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
 	markTVShow(t, d, `{"tv_show":true,"tv_show_name":"测试剧","plot":"剧集介绍","actors":"演员A"}`)
-	ep := readNFOLink(t, d, "/Movies/AAA-S01E01.nfo")
+	ep := readNFOLink(t, d, "/Movies/2024年/A1-S02E01.nfo")
 	if !strings.Contains(ep, "<episodedetails>") {
 		t.Errorf("episode nfo must use episodedetails root, got %s", ep)
 	}
-	if !strings.Contains(ep, "<![CDATA[AAA]]>") {
+	if !strings.Contains(ep, "<![CDATA[A1]]>") {
 		t.Errorf("episode nfo title must be original base name, got %s", ep)
 	}
 	if !strings.Contains(ep, "<name>演员A</name>") {
@@ -820,17 +890,8 @@ func TestTVShowNFOsContent(t *testing.T) {
 		t.Errorf("episode nfo must not contain show plot, got %s", ep)
 	}
 	show := readNFOLink(t, d, "/Movies/tvshow.nfo")
-	if !strings.Contains(show, "<tvshow>") {
-		t.Errorf("tvshow.nfo must use tvshow root, got %s", show)
-	}
-	if !strings.Contains(show, "<![CDATA[测试剧]]>") {
-		t.Errorf("tvshow.nfo must contain show name, got %s", show)
-	}
-	if !strings.Contains(show, "<![CDATA[剧集介绍]]>") {
-		t.Errorf("tvshow.nfo must contain plot, got %s", show)
-	}
-	if !strings.Contains(show, "<name>演员A</name>") {
-		t.Errorf("tvshow.nfo must keep actors, got %s", show)
+	if !strings.Contains(show, "<tvshow>") || !strings.Contains(show, "<![CDATA[测试剧]]>") || !strings.Contains(show, "<![CDATA[剧集介绍]]>") {
+		t.Errorf("tvshow.nfo mismatch, got %s", show)
 	}
 }
 
@@ -844,24 +905,93 @@ func TestTVShowNameFallbackFolder(t *testing.T) {
 	}
 }
 
-// TestGetAndLinkVirtualEpisode：虚拟剧集路径 Get 反查真实文件，Link 还原真实内容。
-func TestGetAndLinkVirtualEpisode(t *testing.T) {
+// TestTVShowSkipsNumbered：已含 SxxExx 的文件保持原名，不消耗序号。
+func TestTVShowSkipsNumbered(t *testing.T) {
 	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/Show.S01E03.mkv", "s"); err != nil {
+		t.Fatalf("write numbered: %v", err)
+	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	if got := readNFOLink(t, d, "/Movies/AAA-S01E01.mkv"); got != "x" {
+	objs, err := d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S02E01.mp4", "A1-S02E01.nfo", "Show.S01E03.mkv", "Show.S01E03.nfo", "season.nfo"}) {
+		t.Errorf("numbered file must keep name without consuming index, got %v", got)
+	}
+}
+
+// TestTVShowRealSeasonNFOFileWins：下游真实 season.nfo 优先于虚拟。
+func TestTVShowRealSeasonNFOFileWins(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := writeDownstreamFile(t, "/Movies/2024年/season.nfo", "real-content"); err != nil {
+		t.Fatalf("write real season.nfo: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	if got := readNFOLink(t, d, "/Movies/2024年/season.nfo"); got != "real-content" {
+		t.Errorf("real season.nfo must win, got %q", got)
+	}
+}
+
+// TestGetAndLinkSeasonEpisode：季内虚拟剧集路径 Get 反查真实文件，Link 还原真实内容。
+func TestGetAndLinkSeasonEpisode(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	if got := readNFOLink(t, d, "/Movies/2024年/A1-S02E01.mp4"); got != "a1" {
 		t.Errorf("episode must play real file content, got %q", got)
 	}
 }
 
-// TestGetEpisodeNFORealFileWins：下游真实同名 nfo 优先于虚拟剧集 nfo。
-func TestGetEpisodeNFORealFileWins(t *testing.T) {
+// TestTVShowNestedTVSkipped：嵌套标记为电视剧的子文件夹独立成剧，父剧索引跳过它。
+func TestTVShowNestedTVSkipped(t *testing.T) {
 	d := setup(t)
-	if err := writeDownstreamFile(t, "/Movies/AAA-S01E01.nfo", "real-content"); err != nil {
-		t.Fatalf("write real nfo: %v", err)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := writeDirOrdered(t, "/Movies/2024年/内嵌剧"); err != nil {
+		t.Fatalf("mkdir 内嵌剧: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/内嵌剧/X.mp4", "x"); err != nil {
+		t.Fatalf("write X: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	if got := readNFOLink(t, d, "/Movies/AAA-S01E01.nfo"); got != "real-content" {
-		t.Errorf("real nfo must win, got %q", got)
+	markTVShowAt(t, d, "/Movies/2024年/内嵌剧", `{"tv_show":true,"tv_show_name":"内嵌剧名"}`)
+	// 内嵌剧自身：独立成剧，季 1
+	objs, err := d.List(context.Background(), &model.Object{Name: "内嵌剧", Path: "/Movies/2024年/内嵌剧", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 内嵌剧: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"X-S01E01.mp4", "X-S01E01.nfo", "tvshow.nfo"}) {
+		t.Errorf("nested tv show must be independent, got %v", got)
+	}
+	// 父剧的季 2：X 不参与编号
+	objs, err = d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 2024年: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S02E01.mp4", "A1-S02E01.nfo", "内嵌剧", "season.nfo"}) {
+		t.Errorf("nested tv must be skipped by parent season, got %v", got)
 	}
 }
 
@@ -875,7 +1005,7 @@ func TestGetVirtualEpisodeNotFound(t *testing.T) {
 }
 ```
 
-`tv_show_test.go` 需要 import `"github.com/OpenListTeam/OpenList/v4/drivers/emby_wrapper"`（markTVShow 参数类型）。
+（`tv_show_test.go` 需要 import `stdpath "path"`——markTVShowAt 中 `stdpath.Base`）
 
 追加到 `drivers/emby_wrapper/e2e_test.go`：
 
@@ -883,6 +1013,12 @@ func TestGetVirtualEpisodeNotFound(t *testing.T) {
 // TestEndToEndTVShowThroughFS：TV 模式经 fs 层全链路（等价于 strm 落盘路径：虚拟名落盘、播放还原真实文件）。
 func TestEndToEndTVShowThroughFS(t *testing.T) {
 	_ = setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
 	if err := fs.Rename(context.Background(), "/ew/Movies", `{"tv_show":true,"tv_show_name":"测试剧"}`); err != nil {
 		t.Fatalf("rename via fs: %+v", err)
 	}
@@ -890,19 +1026,30 @@ func TestEndToEndTVShowThroughFS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fs list: %+v", err)
 	}
-	episodeFound, tvshowFound := false, false
+	episodeFound, tvshowFound, seasonFound := false, false, false
 	for _, o := range objs {
 		switch o.GetName() {
 		case "AAA-S01E01.mkv":
 			episodeFound = true
 		case "tvshow.nfo":
 			tvshowFound = true
+		case "2024年":
+			seasonFound = true
 		}
 	}
-	if !episodeFound || !tvshowFound {
-		t.Fatalf("fs list must contain virtual episode and tvshow.nfo, got %v", names(objs))
+	if !episodeFound || !tvshowFound || !seasonFound {
+		t.Fatalf("fs list must contain episode/tvshow.nfo/season folder, got %v", names(objs))
 	}
-	link, _, err := fs.Link(context.Background(), "/ew/Movies/AAA-S01E01.mkv", model.LinkArgs{})
+	// 季文件夹：虚拟剧集 + season.nfo
+	objs, err = fs.List(context.Background(), "/ew/Movies/2024年", &fs.ListArgs{})
+	if err != nil {
+		t.Fatalf("fs list season: %+v", err)
+	}
+	if !containsName(objs, "A1-S02E01.mp4") || !containsName(objs, "season.nfo") {
+		t.Fatalf("season folder listing mismatch, got %v", names(objs))
+	}
+	// 播放链路：季内虚拟剧集路径 → 还原真实文件内容
+	link, _, err := fs.Link(context.Background(), "/ew/Movies/2024年/A1-S02E01.mp4", model.LinkArgs{})
 	if err != nil {
 		t.Fatalf("fs link episode: %+v", err)
 	}
@@ -918,24 +1065,34 @@ func TestEndToEndTVShowThroughFS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %+v", err)
 	}
-	if string(body) != "x" {
+	if string(body) != "a1" {
 		t.Errorf("episode must play the real file content, got %q", string(body))
 	}
+}
+
+// containsName 判断列表是否包含指定名称。
+func containsName(objs []model.Obj, name string) bool {
+	for _, o := range objs {
+		if o.GetName() == name {
+			return true
+		}
+	}
+	return false
 }
 ```
 
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestTVShow|TestGetAndLinkVirtualEpisode|TestGetEpisodeNFORealFileWins|TestGetVirtualEpisodeNotFound|TestEndToEndTVShowThroughFS' -count=1
+cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestTVShow|TestGetAndLinkSeasonEpisode|TestGetVirtualEpisodeNotFound|TestEndToEndTVShowThroughFS' -count=1
 ```
 
-Expected: FAIL（tvShowInfo/withTVShowNFOs/resolveEpisodePath/newVirtualEpisode 未定义或 TV 分支未生效）
+Expected: FAIL（tvShowAncestor/buildTVIndex/withTVShowNFOs/resolveEpisodePath/newVirtualEpisode 未定义或 TV 分支未生效）
 
 - [ ] **Step 3: 实现 `drivers/emby_wrapper/folder.go`** —— 追加：
 
 ```go
-// virtualEpisode 虚拟剧集对象：GetName 返回虚拟名（如 A-S01E01.mp4），
+// virtualEpisode 虚拟剧集对象：GetName 返回虚拟名（如 A-S02E01.mp4），
 // GetPath 返回下游真实路径，Link 无需拦截即可转发真实文件。
 // 不实现 ObjUnwrap：解包会泄露下游真实路径。
 type virtualEpisode struct {
@@ -952,7 +1109,7 @@ func newVirtualEpisode(real model.Obj, name, path string) model.Obj {
 }
 ```
 
-- [ ] **Step 4: 实现 `drivers/emby_wrapper/setting.go`** —— 追加：
+- [ ] **Step 4: 实现 `drivers/emby_wrapper/setting.go`** —— 追加（import 增加 `stdpath`）：
 
 ```go
 // tvShowInfo 返回 dirPath 是否为电视剧文件夹及剧名（自定义剧名为空时回退文件夹名）。
@@ -971,18 +1128,173 @@ func (d *EmbyWrapper) tvShowInfo(dirPath string) (string, bool, error) {
 	}
 	return name, true, nil
 }
+
+// isTVDir 判断 dirPath 是否被标记为电视剧（本地标记，不继承）。
+func (d *EmbyWrapper) isTVDir(dirPath string) (bool, error) {
+	item, err := GetEmbyDirSetting(d.ID, dirPath)
+	if err != nil {
+		return false, err
+	}
+	return item != nil && item.TvShow, nil
+}
+
+// tvShowAncestor 返回 dirPath 最近的电视剧祖先（含自身）：根路径 + 剧名。
+// 任一目录的 List/Get 先经此判断走 TV 分支还是影片分支。
+func (d *EmbyWrapper) tvShowAncestor(dirPath string) (string, string, bool, error) {
+	dirPath = utils.FixAndCleanPath(dirPath)
+	for {
+		if name, ok, err := d.tvShowInfo(dirPath); err != nil {
+			return "", "", false, err
+		} else if ok {
+			return dirPath, name, true, nil
+		}
+		if utils.PathEqual(dirPath, "/") {
+			break
+		}
+		dirPath = stdpath.Dir(dirPath)
+	}
+	return "", "", false, nil
+}
 ```
 
-（setting.go 已有 stdpath/strings import）
-
-- [ ] **Step 5: 实现 `drivers/emby_wrapper/episode.go`** —— 追加（文件末尾）：
+- [ ] **Step 5: 实现 `drivers/emby_wrapper/episode.go`** —— 追加（文件末尾；import 增加 `"context"`、`"sort"`、`"github.com/OpenListTeam/OpenList/v4/internal/driver"`、`"github.com/OpenListTeam/OpenList/v4/internal/op"`、`"github.com/OpenListTeam/OpenList/v4/pkg/utils"`）：
 
 ```go
-// withTVShowNFOs TV 模式：直接视频文件按时间编号为剧集（虚拟名展示），
-// 生成剧集 nfo（episodedetails：title=原文件名、actors、无 plot）与 tvshow.nfo（剧名+简介）。
-// 真实同名 nfo/文件优先：下游已存在同名文件或 nfo 时跳过虚拟生成。
-func (d *EmbyWrapper) withTVShowNFOs(dir model.Obj, showName string, objs []model.Obj) []model.Obj {
+// tvFile 收集到的视频：真实对象 + 规范路径（wrapper 命名空间）。
+type tvFile struct {
+	obj  model.Obj
+	path string
+}
+
+// buildTVIndex 构建整个剧集树的索引：列根目录 → 直接子文件夹（跳过自身标记为
+// TV 的，独立成剧）按创建时间+名称排序分配连续季号（根目录存在直接视频时从第 2 季
+// 起，否则从第 1 季起）→ 各季递归收集视频 → 季内按创建时间+名称编号。
+// 一次构建，List 展示与 Get 反查共用。
+func (d *EmbyWrapper) buildTVIndex(ctx context.Context, rootPath string) (*tvIndex, error) {
+	rootPath = utils.FixAndCleanPath(rootPath)
+	idx := &tvIndex{
+		root:      rootPath,
+		byVirtual: map[string]model.Obj{},
+		titles:    map[string]string{},
+		names:     map[string]string{},
+		nfoBases:  map[string]string{},
+		byReal:    map[string]string{},
+		seasonNo:  map[string]int{},
+	}
+	remoteStorage, remoteActualPath, err := d.remote()
+	if err != nil {
+		return nil, err
+	}
+	objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, rootPath), model.ListArgs{})
+	if err != nil {
+		return nil, err
+	}
+	var rootVideos []model.Obj
+	var seasonDirs []model.Obj
+	for _, o := range objs {
+		if o.IsDir() {
+			isTV, err := d.isTVDir(stdpath.Join(rootPath, o.GetName()))
+			if err != nil {
+				return nil, err
+			}
+			if !isTV {
+				seasonDirs = append(seasonDirs, o)
+			}
+			continue
+		}
+		if _, ok := d.supportSuffix[utils.Ext(o.GetName())]; ok {
+			rootVideos = append(rootVideos, o)
+		}
+	}
+	// 根目录直接视频 = 第 1 季
+	sort.SliceStable(rootVideos, func(i, j int) bool { return byCreateTimeName(rootVideos[i], rootVideos[j]) })
+	ep := 0
+	for _, o := range rootVideos {
+		canonical := stdpath.Join(rootPath, o.GetName())
+		if isNumberedEpisode(o.GetName()) {
+			idx.addEpisode(o, canonical, o.GetName())
+			continue
+		}
+		ep++
+		idx.addEpisode(o, canonical, episodeVirtualName(o.GetName(), 1, ep))
+	}
+	// 直接子文件夹：创建时间+名称排序 → 连续季号
+	sort.SliceStable(seasonDirs, func(i, j int) bool { return byCreateTimeName(seasonDirs[i], seasonDirs[j]) })
+	seasonBase := 1
+	if len(rootVideos) > 0 {
+		seasonBase = 2
+	}
+	for i, dir := range seasonDirs {
+		dirPath := stdpath.Join(rootPath, dir.GetName())
+		idx.seasonNo[dirPath] = seasonBase + i
+		if err := d.collectSeasonVideos(ctx, idx, remoteStorage, remoteActualPath, dirPath, seasonBase+i); err != nil {
+			return nil, err
+		}
+	}
+	return idx, nil
+}
+
+// collectSeasonVideos 递归收集季文件夹下所有视频并登记进索引，季内按创建时间+名称编号。
+func (d *EmbyWrapper) collectSeasonVideos(ctx context.Context, idx *tvIndex, remoteStorage driver.Driver, remoteActualPath, dirPath string, seasonNo int) error {
+	files, err := d.gatherVideos(ctx, remoteStorage, remoteActualPath, dirPath)
+	if err != nil {
+		return err
+	}
+	sort.SliceStable(files, func(i, j int) bool { return byCreateTimeName(files[i].obj, files[j].obj) })
+	ep := 0
+	for _, f := range files {
+		if isNumberedEpisode(f.obj.GetName()) {
+			idx.addEpisode(f.obj, f.path, f.obj.GetName())
+			continue
+		}
+		ep++
+		idx.addEpisode(f.obj, f.path, episodeVirtualName(f.obj.GetName(), seasonNo, ep))
+	}
+	return nil
+}
+
+// gatherVideos 递归收集 dirPath 下所有视频（跳过自身标记为 TV 的子文件夹）。
+func (d *EmbyWrapper) gatherVideos(ctx context.Context, remoteStorage driver.Driver, remoteActualPath, dirPath string) ([]tvFile, error) {
+	objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dirPath), model.ListArgs{})
+	if err != nil {
+		return nil, err
+	}
+	var out []tvFile
+	for _, o := range objs {
+		if o.IsDir() {
+			child := stdpath.Join(dirPath, o.GetName())
+			isTV, err := d.isTVDir(child)
+			if err != nil {
+				return nil, err
+			}
+			if isTV {
+				continue
+			}
+			sub, err := d.gatherVideos(ctx, remoteStorage, remoteActualPath, child)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, sub...)
+			continue
+		}
+		if _, ok := d.supportSuffix[utils.Ext(o.GetName())]; ok {
+			out = append(out, tvFile{obj: o, path: stdpath.Join(dirPath, o.GetName())})
+		}
+	}
+	return out, nil
+}
+
+// withTVShowNFOs TV 模式展示：当前目录的直接视频按索引映射为虚拟剧集（原地），
+// 生成剧集 nfo（episodedetails：title=原文件名、actors、无 plot）；
+// 剧集根目录追加 tvshow.nfo；直接子文件夹（季）追加 season.nfo。
+// 真实同名 nfo/文件优先：同目录已存在同名文件或 nfo 时跳过虚拟生成。
+func (d *EmbyWrapper) withTVShowNFOs(ctx context.Context, dir model.Obj, rootPath, showName string, objs []model.Obj) []model.Obj {
 	dirPath := dir.GetPath()
+	idx, err := d.buildTVIndex(ctx, rootPath)
+	if err != nil {
+		utils.Log.Warnf("emby wrapper: build tv index %s: %+v", rootPath, err)
+		return objs
+	}
 	setting, err := d.resolveSetting(dirPath)
 	if err != nil {
 		utils.Log.Warnf("emby wrapper: resolve setting %s: %+v", dirPath, err)
@@ -993,7 +1305,6 @@ func (d *EmbyWrapper) withTVShowNFOs(dir model.Obj, showName string, objs []mode
 	}
 	realNFO := map[string]bool{}
 	realFiles := map[string]bool{}
-	var videos []model.Obj
 	for _, o := range objs {
 		if o.IsDir() {
 			continue
@@ -1004,11 +1315,7 @@ func (d *EmbyWrapper) withTVShowNFOs(dir model.Obj, showName string, objs []mode
 			continue
 		}
 		realFiles[strings.ToLower(name)] = true
-		if _, ok := d.supportSuffix[utils.Ext(name)]; ok {
-			videos = append(videos, o)
-		}
 	}
-	idx := buildEpisodeIndex(videos, d.supportSuffix)
 	out := make([]model.Obj, 0, len(objs)+2)
 	addedNFO := map[string]bool{}
 	for _, o := range objs {
@@ -1057,8 +1364,8 @@ func (d *EmbyWrapper) withTVShowNFOs(dir model.Obj, showName string, objs []mode
 			content: content,
 		})
 	}
-	// tvshow.nfo（真实同名 nfo 优先）
-	if !realNFO["tvshow.nfo"] {
+	// tvshow.nfo：仅剧集根目录（真实同名 nfo 优先）
+	if utils.PathEqual(dirPath, rootPath) && !realNFO["tvshow.nfo"] {
 		content, err := buildTVShowNFO(showName, setting.Plot, setting)
 		if err == nil {
 			modified := dir.ModTime()
@@ -1077,20 +1384,40 @@ func (d *EmbyWrapper) withTVShowNFOs(dir model.Obj, showName string, objs []mode
 			})
 		}
 	}
+	// season.nfo：直接子文件夹（季），真实同名 nfo 优先
+	if !utils.PathEqual(dirPath, rootPath) && utils.PathEqual(stdpath.Dir(dirPath), rootPath) {
+		if seasonNo, ok := idx.seasonNo[dirPath]; ok && !realNFO["season.nfo"] {
+			content := buildSeasonNFO(seasonNo, stdpath.Base(dirPath))
+			modified := dir.ModTime()
+			if idx.last != nil {
+				modified = idx.last.ModTime()
+			}
+			out = append(out, &virtualNFO{
+				Object: model.Object{
+					Name:     "season.nfo",
+					Size:     int64(len(content)),
+					Modified: modified,
+					Path:     stdpath.Join(dirPath, "season.nfo"),
+					ID:       "vnfo-season.nfo",
+				},
+				content: content,
+			})
+		}
+	}
 	return out
 }
 ```
 
 - [ ] **Step 6: 实现 `drivers/emby_wrapper/driver.go`** —— 四处修改：
 
-**(a) List** 增加 TV 分支：
+**(a) List** 改为按最近电视剧祖先路由（import 增加 `"time"`）：
 
 ```go
 	objs = d.decorate(dir.GetPath(), objs)
-	if showName, ok, err := d.tvShowInfo(dir.GetPath()); err != nil {
-		utils.Log.Warnf("emby wrapper: tv show info %s: %+v", dir.GetPath(), err)
+	if rootPath, showName, ok, err := d.tvShowAncestor(dir.GetPath()); err != nil {
+		utils.Log.Warnf("emby wrapper: tv show ancestor %s: %+v", dir.GetPath(), err)
 	} else if ok {
-		return d.withTVShowNFOs(dir, showName, objs), nil
+		return d.withTVShowNFOs(ctx, dir, rootPath, showName, objs), nil
 	}
 	return d.withVirtualNFOs(dir.GetPath(), objs), nil
 ```
@@ -1109,27 +1436,24 @@ func (d *EmbyWrapper) withTVShowNFOs(dir model.Obj, showName string, objs []mode
 	}
 ```
 
-**(c) 新增 resolveEpisodePath 与 newVirtualNFO**（追加到 virtualNFOForPath 之后；import 增加 `"time"`）：
+**(c) 新增 resolveEpisodePath 与 newVirtualNFO**（追加到 virtualNFOForPath 之后）：
 
 ```go
-// resolveEpisodePath 在父目录为 TV 模式时按虚拟名反查真实文件。
-// 返回 (包装对象, true, nil)：命中虚拟剧集；(nil, false, nil)：非 TV 模式或未命中。
+// resolveEpisodePath 在父目录处于某部电视剧内时按虚拟名反查真实文件。
+// 返回 (包装对象, true, nil)：命中虚拟剧集；(nil, false, nil)：非 TV 树或未命中。
 func (d *EmbyWrapper) resolveEpisodePath(ctx context.Context, path string) (model.Obj, bool, error) {
 	parentDir := stdpath.Dir(path)
-	if _, ok, err := d.tvShowInfo(parentDir); err != nil {
+	rootPath, _, ok, err := d.tvShowAncestor(parentDir)
+	if err != nil {
 		return nil, false, err
-	} else if !ok {
+	}
+	if !ok {
 		return nil, false, nil
 	}
-	remoteStorage, remoteActualPath, err := d.remote()
+	idx, err := d.buildTVIndex(ctx, rootPath)
 	if err != nil {
 		return nil, false, err
 	}
-	objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, parentDir), model.ListArgs{})
-	if err != nil {
-		return nil, false, err
-	}
-	idx := buildEpisodeIndex(objs, d.supportSuffix)
 	real := idx.resolve(stdpath.Base(path))
 	if real == nil {
 		return nil, false, nil
@@ -1152,7 +1476,7 @@ func (d *EmbyWrapper) newVirtualNFO(path string, content []byte, modified time.T
 }
 ```
 
-**(d) virtualNFOForPath 整体替换**（TV 分支 + 原有影片分支，真实 nfo 优先扫描提前到公共位置）：
+**(d) virtualNFOForPath 整体替换**（TV 分支：tvshow.nfo / season.nfo / 剧集 nfo；真实 nfo 优先扫描提前到公共位置）：
 
 ```go
 // virtualNFOForPath 尝试为 .nfo 路径构建虚拟对象。
@@ -1160,7 +1484,7 @@ func (d *EmbyWrapper) newVirtualNFO(path string, content []byte, modified time.T
 func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model.Obj, bool, error) {
 	parentDir := stdpath.Dir(path)
 	base := strings.TrimSuffix(stdpath.Base(path), ".nfo")
-	showName, isTV, err := d.tvShowInfo(parentDir)
+	rootPath, showName, isTV, err := d.tvShowAncestor(parentDir)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1182,7 +1506,7 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 	if err != nil {
 		return nil, false, err
 	}
-	// 真实 nfo 优先：下游存在同名真实 nfo 时交给下游 Get（含 tvshow.nfo）
+	// 真实 nfo 优先：下游存在同名真实 nfo 时交给下游 Get（含 tvshow.nfo/season.nfo）
 	for _, o := range objs {
 		if o.IsDir() {
 			continue
@@ -1191,10 +1515,14 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 			return nil, false, nil
 		}
 	}
-	// TV 模式分支：tvshow.nfo 与剧集虚拟名 nfo
+	// TV 模式分支
 	if isTV {
-		idx := buildEpisodeIndex(objs, d.supportSuffix)
-		if strings.EqualFold(base, "tvshow") {
+		idx, err := d.buildTVIndex(ctx, rootPath)
+		if err != nil {
+			return nil, false, err
+		}
+		// tvshow.nfo：仅剧集根目录
+		if utils.PathEqual(parentDir, rootPath) && strings.EqualFold(base, "tvshow") {
 			content, err := buildTVShowNFO(showName, setting.Plot, setting)
 			if err != nil {
 				return nil, false, err
@@ -1205,6 +1533,17 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 			}
 			return d.newVirtualNFO(path, content, modified), true, nil
 		}
+		// season.nfo：直接子文件夹（季）
+		if !utils.PathEqual(parentDir, rootPath) && utils.PathEqual(stdpath.Dir(parentDir), rootPath) && strings.EqualFold(base, "season") {
+			if seasonNo, ok := idx.seasonNo[parentDir]; ok {
+				modified := time.Time{}
+				if idx.last != nil {
+					modified = idx.last.ModTime()
+				}
+				return d.newVirtualNFO(path, buildSeasonNFO(seasonNo, stdpath.Base(parentDir)), modified), true, nil
+			}
+		}
+		// 剧集 nfo：虚拟名匹配
 		epName, ok := idx.nfoBases[strings.ToLower(base)]
 		if !ok {
 			return nil, false, nil
@@ -1250,216 +1589,12 @@ Expected: PASS（新增 TV 用例 + 既有 nfo/get/name_actor/plot/e2e 用例全
 - [ ] **Step 8: 提交**
 
 ```bash
-cd /Users/varg247/store/work-store/backend/openlist && git add drivers/emby_wrapper/folder.go drivers/emby_wrapper/episode.go drivers/emby_wrapper/setting.go drivers/emby_wrapper/driver.go drivers/emby_wrapper/tv_show_test.go drivers/emby_wrapper/e2e_test.go && git commit -m "feat(emby_wrapper): serve tv-show folders as time-ordered episodes with virtual names"
+cd /Users/varg247/store/work-store/backend/openlist && git add drivers/emby_wrapper/folder.go drivers/emby_wrapper/setting.go drivers/emby_wrapper/episode.go drivers/emby_wrapper/driver.go drivers/emby_wrapper/tv_show_test.go drivers/emby_wrapper/e2e_test.go && git commit -m "feat(emby_wrapper): serve tv-show trees as seasons with numbered episodes and season nfo"
 ```
 
 ---
 
-### Task 5: resolveSetting TV 边界阻断 plot/append
-
-**Files:**
-- Modify: `drivers/emby_wrapper/setting.go`
-- Test: `drivers/emby_wrapper/setting_test.go`
-
-**Interfaces:**
-- Consumes: Task 1 的 `TvShow` 字段（Upsert 已支持）
-- Produces: 无新接口；`resolveSetting` 语义扩展——当 walk 经过一个 `TvShow=true` 且**非 origin** 的目录时，plot/append 维度停止收集（不再向上继承，也不取自该目录自身）；演员维度不受影响继续向上。origin 自身（即被解析目录就是 TV 文件夹）不触发阻断，其 plot/append 正常生效（供 tvshow.nfo 使用）。全维度无值时仍返回 nil（阻断不产生空行）
-
-- [ ] **Step 1: 写失败测试**（追加到 `drivers/emby_wrapper/setting_test.go`；用 `newTestWrapper()` 自动分配独立 storageID）：
-
-```go
-// TestResolveSettingTVBlocksPlotInheritance：TV 文件夹的 plot 不向子目录继承，actors 正常继承；
-// TV 文件夹自身解析 plot 正常（供 tvshow.nfo）。
-func TestResolveSettingTVBlocksPlotInheritance(t *testing.T) {
-	d := newTestWrapper()
-	tv := true
-	if err := UpsertEmbyDirSetting(d.ID, "/TV", "Y", "P", "", nil, nil, &tv); err != nil {
-		t.Fatalf("config TV folder: %v", err)
-	}
-	// TV 文件夹自身：plot 生效
-	item, err := d.resolveSetting("/TV")
-	if err != nil || item == nil {
-		t.Fatalf("expected setting for TV folder, got %v %v", item, err)
-	}
-	if item.Plot != "P" || item.Actors != "Y" {
-		t.Errorf("TV folder itself must use own plot/actors, got %+v", item)
-	}
-	// 子目录：plot 被阻断、actors 继承
-	item, err = d.resolveSetting("/TV/Sub")
-	if err != nil || item == nil {
-		t.Fatalf("expected setting for sub, got %v %v", item, err)
-	}
-	if item.Plot != "" {
-		t.Errorf("plot must be blocked below tv folder, got %q", item.Plot)
-	}
-	if item.Actors != "Y" {
-		t.Errorf("actors must still inherit, got %q", item.Actors)
-	}
-}
-
-// TestResolveSettingTVBlocksAppend：append 维度同样被阻断；TV 文件夹自身 append 生效。
-func TestResolveSettingTVBlocksAppend(t *testing.T) {
-	d := newTestWrapper()
-	tv, tf := true, true
-	if err := UpsertEmbyDirSetting(d.ID, "/TV2", "", "", "", nil, &tf, &tv); err != nil {
-		t.Fatalf("config TV folder: %v", err)
-	}
-	item, err := d.resolveSetting("/TV2")
-	if err != nil || item == nil {
-		t.Fatalf("expected setting for TV folder, got %v %v", item, err)
-	}
-	if item.AppendFileNameToPlot == nil || !*item.AppendFileNameToPlot {
-		t.Errorf("TV folder itself must keep append, got %+v", item.AppendFileNameToPlot)
-	}
-	item, err = d.resolveSetting("/TV2/Sub")
-	if err != nil || item == nil {
-		t.Fatalf("expected setting for sub, got %v %v", item, err)
-	}
-	if item.AppendFileNameToPlot != nil {
-		t.Errorf("append must be blocked below tv folder, got %+v", item.AppendFileNameToPlot)
-	}
-}
-
-// TestResolveSettingTVBlockWithActorsAbove：阻断后继续向上收集演员。
-func TestResolveSettingTVBlockWithActorsAbove(t *testing.T) {
-	d := newTestWrapper()
-	tv := true
-	if err := UpsertEmbyDirSetting(d.ID, "/TVB4", "Z", "", "", nil, nil, nil); err != nil {
-		t.Fatalf("config parent: %v", err)
-	}
-	if err := UpsertEmbyDirSetting(d.ID, "/TVB4/Show", "", "", "", nil, nil, &tv); err != nil {
-		t.Fatalf("config TV folder: %v", err)
-	}
-	item, err := d.resolveSetting("/TVB4/Show/Sub")
-	if err != nil || item == nil {
-		t.Fatalf("expected setting, got %v %v", item, err)
-	}
-	if item.Actors != "Z" {
-		t.Errorf("actors above tv boundary must still inherit, got %q", item.Actors)
-	}
-	if item.Plot != "" {
-		t.Errorf("plot must stay blocked, got %q", item.Plot)
-	}
-}
-
-// TestResolveSettingTVBlockEmptyKeepsNil：仅阻断无配置时仍返回 nil（不产生空行）。
-func TestResolveSettingTVBlockEmptyKeepsNil(t *testing.T) {
-	d := newTestWrapper()
-	tv := true
-	if err := UpsertEmbyDirSetting(d.ID, "/TV5", "", "", "", nil, nil, &tv); err != nil {
-		t.Fatalf("config TV folder: %v", err)
-	}
-	item, err := d.resolveSetting("/TV5/Sub")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if item != nil {
-		t.Errorf("blocked-empty must resolve to nil, got %+v", item)
-	}
-}
-```
-
-- [ ] **Step 2: 运行确认失败**
-
-```bash
-cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -run 'TestResolveSettingTV' -count=1
-```
-
-Expected: FAIL（当前 resolveSetting 不阻断，plot/append 会继承到子目录）
-
-- [ ] **Step 3: 实现** `drivers/emby_wrapper/setting.go` —— `resolveSetting` 整体替换：
-
-```go
-// resolveSetting 返回 dirPath 生效的目录设置（分维度合并，各字段独立继承）。
-// 距离优先：自底向上遇到的第一个有效值即生效（用户确认的语义：近处设置优先于祖先设置）。
-// actors 维度：手动 actors 非空，或 use_name_as_actor 开启者（非 origin 自身，合成开启者之下
-// 第一段目录名）；plot 维度：最近的非空 Plot；append 维度：最近的显式 AppendFileNameToPlot
-// （*bool，nil=未配置，false=显式关闭并阻断上层继承）。
-// TV 边界：walk 经过 TvShow=true 且非 origin 的目录时，plot/append 维度停止收集
-// （剧集介绍属于该剧自身，不泄漏给子目录影片）；actors 维度不受影响。
-// 任一维度命中即返回合成行（DirPath = 被解析目录，仅作溯源；消费方只应读取 Actors/Plot/
-// AppendFileNameToPlot）；全部未命中返回 nil（阻断但无配置也返回 nil，不产生空行）。
-func (d *EmbyWrapper) resolveSetting(dirPath string) (*model.EmbyDirSetting, error) {
-	dirPath = utils.FixAndCleanPath(dirPath)
-	origin := dirPath
-	var actorsItem *model.EmbyDirSetting
-	plot := ""
-	var appendFlag *bool
-	plotBlocked := false
-	appendBlocked := false
-	for {
-		item, err := GetEmbyDirSetting(d.ID, dirPath)
-		if err != nil {
-			return nil, err
-		}
-		if item != nil {
-			if actorsItem == nil {
-				if strings.TrimSpace(item.Actors) != "" {
-					actorsItem = item
-				} else if item.UseNameAsActor && !utils.PathEqual(dirPath, origin) {
-					rel := strings.TrimPrefix(origin, dirPath)
-					rel = strings.TrimPrefix(rel, "/")
-					if idx := strings.Index(rel, "/"); idx != -1 {
-						rel = rel[:idx]
-					}
-					if rel != "" {
-						actorsItem = &model.EmbyDirSetting{Actors: rel}
-					}
-				}
-			}
-			if item.TvShow && !utils.PathEqual(dirPath, origin) {
-				plotBlocked = true
-				appendBlocked = true
-			}
-			if !plotBlocked && plot == "" {
-				plot = strings.TrimSpace(item.Plot)
-			}
-			if !appendBlocked && appendFlag == nil && item.AppendFileNameToPlot != nil {
-				appendFlag = item.AppendFileNameToPlot
-			}
-		}
-		if actorsItem != nil && (plotBlocked || plot != "") && (appendBlocked || appendFlag != nil) {
-			break
-		}
-		if utils.PathEqual(dirPath, "/") {
-			break
-		}
-		dirPath = stdpath.Dir(dirPath)
-	}
-	if actorsItem == nil && plot == "" && appendFlag == nil {
-		return nil, nil
-	}
-	result := &model.EmbyDirSetting{
-		StorageID:            d.ID,
-		DirPath:              origin,
-		Plot:                 plot,
-		AppendFileNameToPlot: appendFlag,
-	}
-	if actorsItem != nil {
-		result.Actors = actorsItem.Actors
-		result.UseNameAsActor = actorsItem.UseNameAsActor
-	}
-	return result, nil
-}
-```
-
-- [ ] **Step 4: 运行确认通过**
-
-```bash
-cd /Users/varg247/store/work-store/backend/openlist && /Library/Go/sdk/go1.25.4/bin/go test ./drivers/emby_wrapper/ -count=1
-```
-
-Expected: PASS（既有继承/use/plot 维度测试不回归——无 TV 标记时行为不变）
-
-- [ ] **Step 5: 提交**
-
-```bash
-cd /Users/varg247/store/work-store/backend/openlist && git add drivers/emby_wrapper/setting.go drivers/emby_wrapper/setting_test.go && git commit -m "feat(emby_wrapper): block plot and append inheritance below tv-show folders"
-```
-
----
-
-### Task 6: addition 展示 + MkdirConfig + 全量验证
+### Task 5: addition 展示 + MkdirConfig + 全量验证
 
 **Files:**
 - Modify: `drivers/emby_wrapper/folder.go`（wrapObj 签名扩展）
@@ -1535,7 +1670,7 @@ func wrapObj(obj model.Obj, path, actors, plot, tvShowName string, useNameAsActo
 			Name:    "tv_show",
 			Type:    conf.TypeBool,
 			Default: "false",
-			Help:    "标记该文件夹为电视剧：直接子文件按时间旧→新自动编号为剧集（原基础名-S01E01.mp4 格式，已含 SxxExx 编号的文件跳过），生成剧集 nfo（保留演员、无简介）与 tvshow.nfo（剧名/简介）；本地生效不继承，并阻断 plot/append 向子目录继承",
+			Help:    "标记该文件夹为电视剧：根目录直接文件为第 1 季，直接子文件夹按创建时间+名称排序分配季号（保留原名并生成 season.nfo 供 Emby 识别）；季内文件按创建时间编号为 原基础名-S{季}E{集}.mp4；生成剧集 nfo（保留演员、无简介）与 tvshow.nfo（剧名/简介）；本地生效不继承",
 		},
 		{
 			Name:    "tv_show_name",
@@ -1631,25 +1766,31 @@ cd /Users/varg247/store/work-store/backend/openlist && git add drivers/emby_wrap
 ## Self-Review
 
 **1. Spec coverage:**
-- tv_show/tv_show_name 设置（本地不继承）：Task 1 字段 + Task 4 tvShowInfo（只查本地行）✓
-- 时间旧→新编号 + 跳过已编号 + 同时间按名排序：Task 2 buildEpisodeIndex + TestBuildEpisodeIndex/TestTVShowSkipsNumbered ✓
-- 虚拟命名 `原基础名-S01E01.mp4`：Task 2 episodeVirtualName ✓
-- 剧集 nfo（episodedetails、title=原名、actors、无 plot）：Task 3 buildEpisodeNFO + Task 4 withTVShowNFOs + TestTVShowNFOsContent ✓
-- tvshow.nfo（剧名回退文件夹名、plot、actors）：Task 3 buildTVShowNFO + Task 4 + TestTVShowNameFallbackFolder ✓
-- 不物理改名、Get 唯一映射点、Link 还原真实文件：Task 4 virtualEpisode（GetPath=真实路径，Link 代码零改动）+ resolveEpisodePath + TestGetAndLinkVirtualEpisode + e2e ✓
-- 真实同名文件/nfo 优先：Task 4 realFiles/realNFO 检查 + TestTVShowRealFilePriority/TestGetEpisodeNFORealFileWins ✓
-- TV 边界阻断 plot/append（演员不阻断）：Task 5 + 三测试 ✓
-- 子文件夹/非视频原样展示：Task 4 withTVShowNFOs（IsDir/非视频原样追加）✓
-- 展示层 addition + MkdirConfig：Task 6 ✓
-- `-S01E01` 格式（Emby 可识别）：Spec 8，Task 2 命名实现 ✓
+- tv_show/tv_show_name 设置（本地不继承）：Task 1 字段 + Task 4 tvShowInfo/isTVDir/tvShowAncestor（只查本地行）✓
+- 创建时间+名称联合排序（文件与文件夹）：Task 2 byCreateTimeName + Task 4 buildTVIndex/collectSeasonVideos（CreateTime 回退 ModTime 由 model.Object 内置）✓
+- 根目录直接文件 = 第 1 季：Task 4 buildTVIndex（rootVideos → season 1，存在时子文件夹季号从 2 起）✓
+- 子文件夹 = 季（保留原名、不解析名字、按创建时间+名称分配连续季号）：Task 4 buildTVIndex（seasonDirs 排序 → seasonNo 连续分配）✓
+- 季内递归收集 + 原地展示 + 跳过嵌套 TV：Task 4 gatherVideos / collectSeasonVideos ✓
+- 跳过已编号文件（不消耗序号）：Task 4（isNumberedEpisode 分支）✓
+- 剧集 nfo（episodedetails、title=原名、actors、无 plot）：Task 3 buildEpisodeNFO + Task 4 withTVShowNFOs ✓
+- tvshow.nfo（剧名回退文件夹名、plot、actors，仅根目录）：Task 3 buildTVShowNFO + Task 4 ✓
+- season.nfo（seasonnumber + seasonname，仅直接子文件夹；真实同名 nfo 优先）：Task 3 buildSeasonNFO + Task 4（List 与 Get 两路径 + TestTVShowSeasonNFOContent / TestTVShowRealSeasonNFOFileWins）✓
+- 不物理改名、Get 唯一映射点、Link 还原真实文件：Task 4 virtualEpisode + resolveEpisodePath + TestGetAndLinkSeasonEpisode + e2e ✓
+- 真实同名文件/nfo 优先：Task 4 realFiles/realNFO 检查 + TestTVShowRealSeasonNFOFileWins ✓
+- 嵌套电视剧独立成剧：Task 4 gatherVideos/isTVDir + TestTVShowNestedTVSkipped ✓
+- 展示层 addition + MkdirConfig：Task 5 ✓
+- `-S{NN}E{MM}` 格式（Emby 可识别）：Spec 9，Task 2 episodeVirtualName 实现 ✓
 
-**2. Placeholder scan:** 无 TBD；所有代码与测试完整给出；sed 命令含回退说明（编译报错即未匹配，手动补参）。
+**2. Placeholder scan:** 无 TBD；所有代码与测试完整给出；sed 命令含回退说明（编译报错即未匹配，手动补参）；`newTVIndexForTest` 为 Task 2 测试辅助（Task 4 的 buildTVIndex 是驱动方法，测试中不复用）。
 
 **3. Type consistency:**
 - `UpsertEmbyDirSetting(storageID, dirPath, actors, plot, tvShowName string, useNameAsActor, appendFileNameToPlot, tvShow *bool)`：Task 1 定义，driver.go Rename 与全部测试调用点一致（8 参）✓
-- `buildEpisodeIndex(files []model.Obj, supportSuffix map[string]struct{}) *episodeIndex`：Task 2 定义；Task 4 withTVShowNFOs（传 decorated videos，byReal 键=包装路径，episodeName(o) 同对象一致）与 resolveEpisodePath/virtualNFOForPath（传 raw objs，只用 resolve/nfoBases/last）一致 ✓
-- `buildEpisodeNFO(title string, setting)` / `buildTVShowNFO(showName, plot string, setting)`：Task 3 定义，Task 4 调用 ✓
-- `wrapObj` 9 参（Task 6）：decorate 与 Get 两处调用点同步更新；Task 1-5 期间保持旧签名不受影响 ✓
-- `newVirtualEpisode(real model.Obj, name, path string) model.Obj`：Task 4 定义；withTVShowNFOs（name=虚拟名、path=o.GetPath() 真实路径）与 resolveEpisodePath（name=请求名、path=parentDir+真实名）一致 ✓
-- `virtualNFOForPath` 重构后保留原语义：非 TV 模式行为与原来一致（真实 nfo 扫描提前到公共位置，逻辑等价）✓
-- e2e 测试沿用 fs.Link 返回值 `(link, _, err)` 与 `http_range.Range{Length: -1}` 既有模式 ✓
+- `episodeVirtualName(fileName string, seasonNo, epNo int) string`：Task 2 定义；Task 4 三处调用（根季 1 / 季内）一致 ✓
+- `tvIndex.addEpisode(real model.Obj, canonicalPath, virtualName string)`：Task 2 定义；Task 4 buildTVIndex/collectSeasonVideos 传规范路径（`stdpath.Join` 构造，与 decorate 的路径一致）✓
+- `tvShowAncestor(dirPath string) (string, string, bool, error)`：Task 4 定义；List/Get/virtualNFOForPath/resolveEpisodePath 调用一致 ✓
+- `buildNFOWithRoot(root, title, plot string, setting) ([]byte, error)` / `buildEpisodeNFO` / `buildTVShowNFO`：Task 3 定义，Task 4 调用 ✓；`buildSeasonNFO(seasonNo int, name string) []byte` 无 error 返回，调用方不检查 err ✓
+- `wrapObj` 9 参（Task 5）：decorate 与 Get 两处调用点同步更新；Task 1-4 期间保持旧签名不受影响 ✓
+- `newVirtualEpisode(real model.Obj, name, path string) model.Obj`：Task 4 定义；withTVShowNFOs（name=epName、path=o.GetPath() 真实路径）与 resolveEpisodePath（name=请求名、path=parentDir+真实名）一致 ✓
+- `virtualNFOForPath` 重构后保留原语义：非 TV 树行为与原来一致（真实 nfo 扫描提前到公共位置，逻辑等价；`setting == nil && !isTV` 早退保留）✓
+- e2e 测试沿用 fs.Link 返回值 `(link, _, err)` 与 `http_range.Range{Length: -1}` 既有模式；`containsName` 辅助在同一文件定义 ✓
+- 测试时间控制：`writeEpisodeFile`/`writeDirOrdered`（15ms sleep）保证 local 驱动 birth time 排序确定（Global Constraints 已注明原因）✓
