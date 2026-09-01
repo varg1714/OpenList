@@ -9,6 +9,7 @@ type FolderAddition struct {
 	AppendFileNameToPlot *bool  `json:"append_file_name_to_plot"`
 	TvShow               *bool  `json:"tv_show"`
 	TvShowName           string `json:"tv_show_name"`
+	TvShowSubfolders     *bool  `json:"tv_show_subfolders"`
 }
 
 // wrappedObj 将下游对象包装进本驱动的路径命名空间（GetPath 返回本驱动相对路径）。

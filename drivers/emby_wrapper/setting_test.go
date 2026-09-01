@@ -16,7 +16,7 @@ func newTestWrapper() *EmbyWrapper {
 
 func TestResolveSettingInheritsAncestor(t *testing.T) {
 	d := newTestWrapper()
-	if err := UpsertEmbyDirSetting(d.ID, "/Movies", "演员A", "", "", nil, nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/Movies", "演员A", "", "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("set actors: %+v", err)
 	}
 	// 子目录没有自身设置，应继承 /Movies 的设置
@@ -28,7 +28,7 @@ func TestResolveSettingInheritsAncestor(t *testing.T) {
 		t.Errorf("expected inherited actors, got %q", item.Actors)
 	}
 	// 自身设置覆盖祖先
-	if err := UpsertEmbyDirSetting(d.ID, "/Movies/Sub", "演员B", "", "", nil, nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/Movies/Sub", "演员B", "", "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("set sub actors: %+v", err)
 	}
 	item, err = d.resolveSetting("/Movies/Sub")
@@ -48,7 +48,7 @@ func TestResolveSettingInheritsAncestor(t *testing.T) {
 func TestResolveSettingUseNameAsActor(t *testing.T) {
 	d := newTestWrapper()
 	// A 开启 use_name_as_actor
-	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "", "", boolPtr(true), nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "", "", boolPtr(true), nil, nil, nil); err != nil {
 		t.Fatalf("enable on A: %v", err)
 	}
 	// 直接子文件夹：actor = 自身名
@@ -92,10 +92,10 @@ func TestResolveSettingUseNameAsActor(t *testing.T) {
 
 func TestResolveSettingManualActorsWin(t *testing.T) {
 	d := newTestWrapper()
-	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "", "", boolPtr(true), nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "", "", boolPtr(true), nil, nil, nil); err != nil {
 		t.Fatalf("enable on A: %v", err)
 	}
-	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "手动演员", "", "", nil, nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "手动演员", "", "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("manual on A1: %v", err)
 	}
 	item, err := d.resolveSetting("/A/A1")
@@ -125,10 +125,10 @@ func TestResolveSettingManualActorsWin(t *testing.T) {
 
 func TestResolveSettingNearestEnablerWins(t *testing.T) {
 	d := newTestWrapper()
-	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "", "", boolPtr(true), nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "", "", boolPtr(true), nil, nil, nil); err != nil {
 		t.Fatalf("enable on A: %v", err)
 	}
-	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", "", "", boolPtr(true), nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", "", "", boolPtr(true), nil, nil, nil); err != nil {
 		t.Fatalf("enable on A1: %v", err)
 	}
 	// A 与 A1 都开启：A11 使用最近的开启者 A1 -> actor = A11
@@ -154,10 +154,10 @@ func TestResolveSettingNearestEnablerWins(t *testing.T) {
 func TestResolveSettingDistancePriorityMixed(t *testing.T) {
 	d := newTestWrapper()
 	// 祖先手动 actors + 近处 use_name_as_actor
-	if err := UpsertEmbyDirSetting(d.ID, "/A", "X", "", "", nil, nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A", "X", "", "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("manual on A: %v", err)
 	}
-	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", "", "", boolPtr(true), nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", "", "", boolPtr(true), nil, nil, nil); err != nil {
 		t.Fatalf("enable on A1: %v", err)
 	}
 	// 近处 use 生效：A11 用 A1 的开关 -> actor = A11
@@ -190,10 +190,10 @@ func TestResolveSettingDistancePriorityMixed(t *testing.T) {
 func TestResolveSettingPlotDimension(t *testing.T) {
 	d := newTestWrapper()
 	// /A 设置 plot=P；/A/A1 只设置 actors=Y
-	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "P", "", nil, nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "P", "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("set plot on A: %v", err)
 	}
-	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "Y", "", "", nil, nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "Y", "", "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("set actors on A1: %v", err)
 	}
 	// A1 影片：actor=Y（近处），plot=P（独立继承）
@@ -224,7 +224,7 @@ func TestResolveSettingAppendDimension(t *testing.T) {
 	d := newTestWrapper()
 	tf := true
 	// /A 开 append + plot=P
-	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "P", "", nil, &tf, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "P", "", nil, &tf, nil, nil); err != nil {
 		t.Fatalf("config A: %v", err)
 	}
 	item, err := d.resolveSetting("/A/A1")
@@ -236,7 +236,7 @@ func TestResolveSettingAppendDimension(t *testing.T) {
 	}
 	// A1 设 actors=Y + 显式关闭 append：行保留，阻断继承
 	ff := false
-	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "Y", "", "", nil, &ff, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "Y", "", "", nil, &ff, nil, nil); err != nil {
 		t.Fatalf("disable append on A1: %v", err)
 	}
 	item, err = d.resolveSetting("/A/A1")
@@ -254,7 +254,7 @@ func TestResolveSettingAppendDimension(t *testing.T) {
 		t.Errorf("plot must still inherit P, got %q", item.Plot)
 	}
 	// 全清 A1 行（删行）：恢复继承 A 的 append=true
-	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", "", "", nil, nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A/A1", "", "", "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("clear A1: %v", err)
 	}
 	item, err = d.resolveSetting("/A/A1")
@@ -269,7 +269,7 @@ func TestResolveSettingAppendDimension(t *testing.T) {
 // TestResolveSettingPlotWithNameAsActor：use 合成 actor 与 plot 独立并存。
 func TestResolveSettingPlotWithNameAsActor(t *testing.T) {
 	d := newTestWrapper()
-	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "P", "", boolPtr(true), nil, nil); err != nil {
+	if err := UpsertEmbyDirSetting(d.ID, "/A", "", "P", "", boolPtr(true), nil, nil, nil); err != nil {
 		t.Fatalf("config A: %v", err)
 	}
 	item, err := d.resolveSetting("/A/A1")

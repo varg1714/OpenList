@@ -354,6 +354,12 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Default: "",
 			Help:    "电视剧名称，写入 tvshow.nfo 的 title；为空时使用文件夹名",
 		},
+		{
+			Name:    "tv_show_subfolders",
+			Type:    conf.TypeBool,
+			Default: "false",
+			Help:    "开启后该目录的直接子文件夹自动视为电视剧（动态继承：新增子文件夹同样生效，仅作用于直接子文件夹一层）；子文件夹自身标记与继承并存",
+		},
 	}
 }
 
@@ -365,7 +371,7 @@ func (d *EmbyWrapper) Rename(ctx context.Context, srcObj model.Obj, newName stri
 	if err := utils.Json.UnmarshalFromString(newName, &req); err != nil {
 		return errors.Wrap(err, "invalid folder emby setting")
 	}
-	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors, req.Plot, req.TvShowName, req.UseNameAsActor, req.AppendFileNameToPlot, req.TvShow)
+	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors, req.Plot, req.TvShowName, req.UseNameAsActor, req.AppendFileNameToPlot, req.TvShow, req.TvShowSubfolders)
 }
 
 var (

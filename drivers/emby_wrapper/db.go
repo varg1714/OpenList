@@ -22,9 +22,9 @@ func GetEmbyDirSetting(storageID uint, dirPath string) (*model.EmbyDirSetting, e
 }
 
 // UpsertEmbyDirSetting 保存目录设置。各字段独立合并：
-// actors/plot/tvShowName 去空格后为空表示清除对应字段；useNameAsActor/appendFileNameToPlot/tvShow 为 nil 表示未提供（保持原值）。
+// actors/plot/tvShowName 去空格后为空表示清除对应字段；useNameAsActor/appendFileNameToPlot/tvShow/tvShowSubfolders 为 nil 表示未提供（保持原值）。
 // 所有字段均未配置时删除该目录的设置行。
-func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName string, useNameAsActor, appendFileNameToPlot *bool, tvShow *bool) error {
+func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName string, useNameAsActor, appendFileNameToPlot, tvShow, tvShowSubfolders *bool) error {
 	actors = strings.TrimSpace(actors)
 	plot = strings.TrimSpace(plot)
 	tvShowName = strings.TrimSpace(tvShowName)
@@ -35,10 +35,12 @@ func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName stri
 	use := false
 	var appendFlag *bool
 	tv := false
+	tvSub := false
 	if item != nil {
 		use = item.UseNameAsActor
 		appendFlag = item.AppendFileNameToPlot
 		tv = item.TvShow
+		tvSub = item.TvShowSubfolders
 	}
 	if useNameAsActor != nil {
 		use = *useNameAsActor
@@ -49,7 +51,10 @@ func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName stri
 	if tvShow != nil {
 		tv = *tvShow
 	}
-	if actors == "" && plot == "" && tvShowName == "" && !use && !tv && (appendFlag == nil || !*appendFlag) {
+	if tvShowSubfolders != nil {
+		tvSub = *tvShowSubfolders
+	}
+	if actors == "" && plot == "" && tvShowName == "" && !use && !tv && !tvSub && (appendFlag == nil || !*appendFlag) {
 		return db.GetDb().Where("storage_id = ? AND dir_path = ?", storageID, dirPath).Delete(&model.EmbyDirSetting{}).Error
 	}
 	if item != nil {
@@ -59,6 +64,7 @@ func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName stri
 		item.UseNameAsActor = use
 		item.AppendFileNameToPlot = appendFlag
 		item.TvShow = tv
+		item.TvShowSubfolders = tvSub
 		return db.GetDb().Save(item).Error
 	}
 	return db.GetDb().Create(&model.EmbyDirSetting{
@@ -70,6 +76,7 @@ func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName stri
 		UseNameAsActor:       use,
 		AppendFileNameToPlot: appendFlag,
 		TvShow:               tv,
+		TvShowSubfolders:     tvSub,
 	}).Error
 }
 
