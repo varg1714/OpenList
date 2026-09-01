@@ -45,7 +45,6 @@ func byCreateTimeName(a, b model.Obj) bool {
 type tvIndex struct {
 	root     string               // 剧集根目录规范路径
 	byPath   map[string]model.Obj // 小写规范虚拟路径 → 真实对象（按目录限定，防跨季同名碰撞）
-	titles   map[string]string    // 小写虚拟名 → 集名（原文件名去扩展名）
 	nfoBases map[string]string    // 小写虚拟名去扩展名 → 虚拟名
 	byReal   map[string]string    // 规范真实路径 → 虚拟名
 	seasonNo map[string]int       // 直接子文件夹规范路径 → 季号
@@ -55,10 +54,7 @@ type tvIndex struct {
 // addEpisode 将真实对象登记为一个剧集条目（虚拟名 → 真实对象及各派生映射）。
 // canonicalPath 为 wrapper 命名空间下的真实路径。
 func (idx *tvIndex) addEpisode(real model.Obj, canonicalPath, virtualName string) {
-	key := strings.ToLower(virtualName)
 	idx.byPath[strings.ToLower(stdpath.Join(stdpath.Dir(canonicalPath), virtualName))] = real
-	ext := stdpath.Ext(real.GetName())
-	idx.titles[key] = strings.TrimSuffix(real.GetName(), ext)
 	idx.nfoBases[strings.ToLower(strings.TrimSuffix(virtualName, stdpath.Ext(virtualName)))] = virtualName
 	idx.byReal[canonicalPath] = virtualName
 	idx.last = real
@@ -85,7 +81,6 @@ func (d *EmbyWrapper) buildTVIndex(ctx context.Context, rootPath string) (*tvInd
 	idx := &tvIndex{
 		root:     rootPath,
 		byPath:   map[string]model.Obj{},
-		titles:   map[string]string{},
 		nfoBases: map[string]string{},
 		byReal:   map[string]string{},
 		seasonNo: map[string]int{},
@@ -256,7 +251,7 @@ func (d *EmbyWrapper) withTVShowNFOs(ctx context.Context, dir model.Obj, rootPat
 		if realNFO[strings.ToLower(nfoName)] || addedNFO[nfoName] {
 			continue
 		}
-		content, err := buildEpisodeNFO(idx.titles[strings.ToLower(epName)], setting)
+		content, err := buildEpisodeNFO(strings.TrimSuffix(name, stdpath.Ext(name)), setting)
 		if err != nil {
 			utils.Log.Warnf("emby wrapper: build episode nfo %s: %+v", nfoName, err)
 			continue

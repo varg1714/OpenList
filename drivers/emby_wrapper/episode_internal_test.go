@@ -1,6 +1,7 @@
 package emby_wrapper
 
 import (
+	stdpath "path"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +85,7 @@ func TestTVIndexAddAndResolve(t *testing.T) {
 	if got := idx.byPath["/r/a.mp4"]; got != nil {
 		t.Errorf("original name must not be a byPath key, got %v", got)
 	}
-	if got := idx.titles["a-s01e01.mp4"]; got != "A" {
+	if got := strings.TrimSuffix(real.GetName(), stdpath.Ext(real.GetName())); got != "A" {
 		t.Errorf("title must be original base name, got %q", got)
 	}
 	if got := idx.nfoBases["a-s01e01"]; got != "A-S01E01.mp4" {
@@ -100,7 +101,6 @@ func newTVIndexForTest(root string) *tvIndex {
 	return &tvIndex{
 		root:     root,
 		byPath:   map[string]model.Obj{},
-		titles:   map[string]string{},
 		nfoBases: map[string]string{},
 		byReal:   map[string]string{},
 		seasonNo: map[string]int{},

@@ -2,6 +2,7 @@ package emby_wrapper_test
 
 import (
 	"context"
+	"io"
 	"os"
 	stdpath "path"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/emby_wrapper"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 )
 
 // writeEpisodeFile 写下游文件并等待 15ms：local 驱动取文件系统 birth time 作为
@@ -362,5 +364,39 @@ func TestTVShowDuplicateVirtualNameAcrossSeasons(t *testing.T) {
 	// 季 3 的真实文件直接播放
 	if got := readNFOLink(t, d, "/Movies/2025年/A1-S02E01.mp4"); got != "real" {
 		t.Errorf("real numbered file must play directly, got %q", got)
+	}
+	// List 路径：withTVShowNFOs 为季 2 列表构建的剧集 nfo 内容，标题必须来自 A1.mp4
+	objs, err := d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 2024年: %+v", err)
+	}
+	var epNFO model.Obj
+	for _, o := range objs {
+		if o.GetName() == "A1-S02E01.nfo" {
+			epNFO = o
+			break
+		}
+	}
+	if epNFO == nil {
+		t.Fatal("A1-S02E01.nfo must appear in season 2 listing")
+	}
+	link, err := d.Link(context.Background(), epNFO, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("link listed nfo: %+v", err)
+	}
+	rc, err := link.RangeReader.RangeRead(context.Background(), http_range.Range{Length: -1})
+	if err != nil {
+		t.Fatalf("range read: %+v", err)
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read: %+v", err)
+	}
+	if !strings.Contains(string(body), "<![CDATA[A1]]>") {
+		t.Errorf("listed season 2 episode nfo title must come from A1.mp4, got %s", body)
+	}
+	if strings.Contains(string(body), "<![CDATA[A1-S02E01]]>") {
+		t.Errorf("listed season 2 episode nfo title must not be the colliding name, got %s", body)
 	}
 }
