@@ -255,7 +255,7 @@ func (d *EmbyWrapper) Rename(ctx context.Context, srcObj model.Obj, newName stri
 	if err := utils.Json.UnmarshalFromString(newName, &req); err != nil {
 		return errors.Wrap(err, "invalid folder emby setting")
 	}
-	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors, req.Plot, req.UseNameAsActor, req.AppendFileNameToPlot)
+	return UpsertEmbyDirSetting(d.ID, srcObj.GetPath(), req.Actors, req.Plot, req.TvShowName, req.UseNameAsActor, req.AppendFileNameToPlot, req.TvShow)
 }
 
 var (

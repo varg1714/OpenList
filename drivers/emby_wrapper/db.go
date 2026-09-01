@@ -22,36 +22,43 @@ func GetEmbyDirSetting(storageID uint, dirPath string) (*model.EmbyDirSetting, e
 }
 
 // UpsertEmbyDirSetting 保存目录设置。各字段独立合并：
-// actors/plot 去空格后为空表示清除对应字段；useNameAsActor/appendFileNameToPlot 为 nil 表示未提供（保持原值）。
+// actors/plot/tvShowName 去空格后为空表示清除对应字段；useNameAsActor/appendFileNameToPlot/tvShow 为 nil 表示未提供（保持原值）。
 // 所有字段均未配置时删除该目录的设置行。
-func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot string, useNameAsActor, appendFileNameToPlot *bool) error {
+func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot, tvShowName string, useNameAsActor, appendFileNameToPlot *bool, tvShow *bool) error {
 	actors = strings.TrimSpace(actors)
 	plot = strings.TrimSpace(plot)
+	tvShowName = strings.TrimSpace(tvShowName)
 	item, err := GetEmbyDirSetting(storageID, dirPath)
 	if err != nil {
 		return err
 	}
 	use := false
 	var appendFlag *bool
+	tv := false
 	if item != nil {
 		use = item.UseNameAsActor
 		appendFlag = item.AppendFileNameToPlot
+		tv = item.TvShow
 	}
 	if useNameAsActor != nil {
 		use = *useNameAsActor
 	}
 	if appendFileNameToPlot != nil {
-		// false 落库：显式关闭，阻断上层继承；全字段清空时删行可恢复继承
 		appendFlag = appendFileNameToPlot
 	}
-	if actors == "" && plot == "" && !use && (appendFlag == nil || !*appendFlag) {
+	if tvShow != nil {
+		tv = *tvShow
+	}
+	if actors == "" && plot == "" && tvShowName == "" && !use && !tv && (appendFlag == nil || !*appendFlag) {
 		return db.GetDb().Where("storage_id = ? AND dir_path = ?", storageID, dirPath).Delete(&model.EmbyDirSetting{}).Error
 	}
 	if item != nil {
 		item.Actors = actors
 		item.Plot = plot
+		item.TvShowName = tvShowName
 		item.UseNameAsActor = use
 		item.AppendFileNameToPlot = appendFlag
+		item.TvShow = tv
 		return db.GetDb().Save(item).Error
 	}
 	return db.GetDb().Create(&model.EmbyDirSetting{
@@ -59,8 +66,10 @@ func UpsertEmbyDirSetting(storageID uint, dirPath, actors, plot string, useNameA
 		DirPath:              dirPath,
 		Actors:               actors,
 		Plot:                 plot,
+		TvShowName:           tvShowName,
 		UseNameAsActor:       use,
 		AppendFileNameToPlot: appendFlag,
+		TvShow:               tv,
 	}).Error
 }
 
