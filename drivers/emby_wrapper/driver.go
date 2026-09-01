@@ -122,16 +122,18 @@ func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
 		}
 		return nil, err
 	}
-	actors, use, plot, appendFlag := "", false, "", (*bool)(nil)
+	actors, use, plot, tvShowName, tvShow := "", false, "", "", false
+	var appendFlag *bool
 	if obj.IsDir() {
 		if item, e := GetEmbyDirSetting(d.ID, path); e != nil {
 			utils.Log.Warnf("emby wrapper: get dir setting %s: %+v", path, e)
 		} else if item != nil {
 			actors, use, plot = item.Actors, item.UseNameAsActor, item.Plot
 			appendFlag = item.AppendFileNameToPlot
+			tvShowName, tvShow = item.TvShowName, item.TvShow
 		}
 	}
-	return wrapObj(obj, path, actors, use, plot, appendFlag, obj.IsDir()), nil
+	return wrapObj(obj, path, actors, plot, tvShowName, use, appendFlag, tvShow, obj.IsDir()), nil
 }
 
 // virtualNFOForPath 尝试为 .nfo 路径构建虚拟对象。
@@ -299,12 +301,14 @@ func (d *EmbyWrapper) decorate(dirPath string, objs []model.Obj) []model.Obj {
 	for i, o := range objs {
 		p := stdpath.Join(dirPath, o.GetName())
 		s, ok := settings[p]
-		actors, use, plot, appendFlag := "", false, "", (*bool)(nil)
+		actors, use, plot, tvShowName, tvShow := "", false, "", "", false
+		var appendFlag *bool
 		if ok {
 			actors, use, plot = s.Actors, s.UseNameAsActor, s.Plot
 			appendFlag = s.AppendFileNameToPlot
+			tvShowName, tvShow = s.TvShowName, s.TvShow
 		}
-		out[i] = wrapObj(o, p, actors, use, plot, appendFlag, o.IsDir())
+		out[i] = wrapObj(o, p, actors, plot, tvShowName, use, appendFlag, tvShow, o.IsDir())
 	}
 	return out
 }
@@ -334,6 +338,18 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Type:    conf.TypeBool,
 			Default: "false",
 			Help:    "将去扩展名的影片文件名追加到 plot（格式：plot-文件名；plot 未设置时直接以文件名为 plot）",
+		},
+		{
+			Name:    "tv_show",
+			Type:    conf.TypeBool,
+			Default: "false",
+			Help:    "标记该文件夹为电视剧：根目录直接文件为第 1 季，直接子文件夹按创建时间+名称排序分配季号（保留原名并生成 season.nfo 供 Emby 识别）；季内文件按创建时间编号为 原基础名-S{季}E{集}.mp4；生成剧集 nfo（保留演员、无简介）与 tvshow.nfo（剧名/简介）；本地生效不继承",
+		},
+		{
+			Name:    "tv_show_name",
+			Type:    conf.TypeString,
+			Default: "",
+			Help:    "电视剧名称，写入 tvshow.nfo 的 title；为空时使用文件夹名",
 		},
 	}
 }

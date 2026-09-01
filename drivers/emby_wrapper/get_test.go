@@ -151,3 +151,29 @@ func TestGetFolderExposesPlotAndAppend(t *testing.T) {
 		t.Error("Get must expose append_file_name_to_plot=true")
 	}
 }
+
+// TestGetFolderExposesTVShow：Get 的文件夹 addition 暴露 tv_show 与 tv_show_name。
+func TestGetFolderExposesTVShow(t *testing.T) {
+	d := setup(t)
+	if err := d.Rename(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, `{"tv_show":true,"tv_show_name":"测试剧"}`); err != nil {
+		t.Fatalf("config: %+v", err)
+	}
+	obj, err := d.Get(context.Background(), "/Movies")
+	if err != nil {
+		t.Fatalf("get folder: %+v", err)
+	}
+	add, ok := obj.(model.ObjAdditional)
+	if !ok {
+		t.Fatal("folder must expose additional")
+	}
+	fa, ok := add.GetAddition().(emby_wrapper.FolderAddition)
+	if !ok {
+		t.Fatalf("unexpected addition type %T", add.GetAddition())
+	}
+	if fa.TvShow == nil || !*fa.TvShow {
+		t.Error("Get must expose tv_show=true")
+	}
+	if fa.TvShowName != "测试剧" {
+		t.Errorf("expected tv_show_name=测试剧, got %q", fa.TvShowName)
+	}
+}

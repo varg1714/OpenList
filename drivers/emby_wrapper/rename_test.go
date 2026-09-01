@@ -10,8 +10,8 @@ import (
 func TestMkdirConfigHasActors(t *testing.T) {
 	d := setup(t)
 	items := d.MkdirConfig()
-	if len(items) != 4 {
-		t.Fatalf("expected 4 mkdir config items, got %d", len(items))
+	if len(items) != 6 {
+		t.Fatalf("expected 6 mkdir config items, got %d", len(items))
 	}
 	if items[0].Name != "actors" {
 		t.Errorf("expected actors field, got %q", items[0].Name)
@@ -24,6 +24,12 @@ func TestMkdirConfigHasActors(t *testing.T) {
 	}
 	if items[3].Name != "append_file_name_to_plot" || items[3].Type != "bool" {
 		t.Errorf("expected bool append_file_name_to_plot field, got %+v", items[3])
+	}
+	if items[4].Name != "tv_show" || items[4].Type != "bool" {
+		t.Errorf("expected bool tv_show field, got %+v", items[4])
+	}
+	if items[5].Name != "tv_show_name" || items[5].Type != "string" {
+		t.Errorf("expected string tv_show_name field, got %+v", items[5])
 	}
 }
 

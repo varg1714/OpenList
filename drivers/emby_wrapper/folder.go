@@ -33,7 +33,7 @@ func (f *embyFolder) GetAddition() model.Additional {
 	return f.addition
 }
 
-func wrapObj(obj model.Obj, path, actors string, useNameAsActor bool, plot string, appendFileNameToPlot *bool, folder bool) model.Obj {
+func wrapObj(obj model.Obj, path, actors, plot, tvShowName string, useNameAsActor bool, appendFileNameToPlot *bool, tvShow bool, folder bool) model.Obj {
 	wrapped := &wrappedObj{Obj: obj, path: path}
 	if !folder {
 		return wrapped
@@ -44,6 +44,8 @@ func wrapObj(obj model.Obj, path, actors string, useNameAsActor bool, plot strin
 		UseNameAsActor:       &use,
 		Plot:                 plot,
 		AppendFileNameToPlot: appendFileNameToPlot,
+		TvShow:               &tvShow,
+		TvShowName:           tvShowName,
 	}}
 }
 
