@@ -400,3 +400,117 @@ func TestTVShowDuplicateVirtualNameAcrossSeasons(t *testing.T) {
 		t.Errorf("listed season 2 episode nfo title must not be the colliding name, got %s", body)
 	}
 }
+
+// TestTVShowSubfoldersDynamicInheritance：父目录开选项后直接子文件夹自动成剧
+// （剧集+tvshow.nfo，剧名回退文件夹名）；父目录自身列表正常；后新增子文件夹同样自动生效。
+func TestTVShowSubfoldersDynamicInheritance(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/演员"); err != nil {
+		t.Fatalf("mkdir 演员: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/演员/剧1/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := d.Rename(context.Background(), &model.Object{Name: "演员", Path: "/Movies/演员", IsFolder: true}, `{"tv_show_subfolders":true}`); err != nil {
+		t.Fatalf("enable subfolders option: %+v", err)
+	}
+	// 剧1 自动成剧：第 1 季 + tvshow.nfo
+	objs, err := d.List(context.Background(), &model.Object{Name: "剧1", Path: "/Movies/演员/剧1", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 剧1: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S01E01.mp4", "A1-S01E01.nfo", "tvshow.nfo"}) {
+		t.Errorf("subfolder must auto-become a tv show, got %v", got)
+	}
+	show := readNFOLink(t, d, "/Movies/演员/剧1/tvshow.nfo")
+	if !strings.Contains(show, "<![CDATA[剧1]]>") {
+		t.Errorf("inherited show name must be folder name, got %s", show)
+	}
+	// 父目录自身：不是剧，列表正常
+	objs, err = d.List(context.Background(), &model.Object{Name: "演员", Path: "/Movies/演员", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 演员: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"剧1"}) {
+		t.Errorf("option holder itself must list normally, got %v", got)
+	}
+	// 动态性：后新增子文件夹自动生效
+	if err := writeDirOrdered(t, "/Movies/演员/剧2"); err != nil {
+		t.Fatalf("mkdir 剧2: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/演员/剧2/B1.mp4", "b1"); err != nil {
+		t.Fatalf("write B1: %v", err)
+	}
+	objs, err = d.List(context.Background(), &model.Object{Name: "剧2", Path: "/Movies/演员/剧2", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 剧2: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"B1-S01E01.mp4", "B1-S01E01.nfo", "tvshow.nfo"}) {
+		t.Errorf("new subfolder must auto-become a show, got %v", got)
+	}
+}
+
+// TestTVShowSubfoldersExcludedFromSeasons：父目录同时标记为电视剧时，
+// 继承成剧的直接子文件夹从季分配中排除（各自独立成剧），父剧只保留自身文件与 tvshow.nfo。
+func TestTVShowSubfoldersExcludedFromSeasons(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/演员"); err != nil {
+		t.Fatalf("mkdir 演员: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/演员/剧1/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	markTVShowAt(t, d, "/Movies/演员", `{"tv_show":true,"tv_show_subfolders":true}`)
+	// 剧1 继承为剧 → 从 演员 的季分配排除 → 无季文件夹，只有 剧1 文件夹 + tvshow.nfo
+	objs, err := d.List(context.Background(), &model.Object{Name: "演员", Path: "/Movies/演员", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 演员: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"tvshow.nfo", "剧1"}) {
+		t.Errorf("inherited subfolders must be excluded from seasons, got %v", got)
+	}
+	// 剧1 自身独立成剧
+	objs, err = d.List(context.Background(), &model.Object{Name: "剧1", Path: "/Movies/演员/剧1", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list 剧1: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S01E01.mp4", "A1-S01E01.nfo", "tvshow.nfo"}) {
+		t.Errorf("剧1 must be its own show, got %v", got)
+	}
+}
+
+// TestFolderAdditionReflectsInheritedTVShow：List 的文件夹 addition 反映继承后的生效状态。
+func TestFolderAdditionReflectsInheritedTVShow(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/演员"); err != nil {
+		t.Fatalf("mkdir 演员: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/演员/剧1/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := d.Rename(context.Background(), &model.Object{Name: "演员", Path: "/Movies/演员", IsFolder: true}, `{"tv_show_subfolders":true}`); err != nil {
+		t.Fatalf("enable option: %+v", err)
+	}
+	objs, err := d.List(context.Background(), &model.Object{Name: "演员", Path: "/Movies/演员", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list: %+v", err)
+	}
+	for _, o := range objs {
+		if o.GetName() != "剧1" {
+			continue
+		}
+		add, ok := o.(model.ObjAdditional)
+		if !ok {
+			t.Fatal("folder must expose additional")
+		}
+		fa, ok := add.GetAddition().(emby_wrapper.FolderAddition)
+		if !ok {
+			t.Fatalf("unexpected addition type %T", add.GetAddition())
+		}
+		if fa.TvShow == nil || !*fa.TvShow {
+			t.Error("inherited tv_show must be reflected in addition")
+		}
+		return
+	}
+	t.Fatal("剧1 folder not found")
+}

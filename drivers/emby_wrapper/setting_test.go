@@ -280,3 +280,68 @@ func TestResolveSettingPlotWithNameAsActor(t *testing.T) {
 		t.Errorf("expected actors=A1 plot=P, got %+v", item)
 	}
 }
+
+// TestTVShowInfoInheritedSubfolders：直接父目录开启 tv_show_subfolders 时，
+// 直接子文件夹视同电视剧（剧名回退文件夹名）；孙级不继承；父目录自身不是剧；无选项父不生效。
+func TestTVShowInfoInheritedSubfolders(t *testing.T) {
+	d := newTestWrapper()
+	tf := true
+	if err := UpsertEmbyDirSetting(d.ID, "/演员", "", "", "", nil, nil, nil, &tf); err != nil {
+		t.Fatalf("config 演员: %v", err)
+	}
+	// 直接子文件夹：继承为剧，剧名=文件夹名
+	name, ok, err := d.tvShowInfo("/演员/剧1")
+	if err != nil || !ok {
+		t.Fatalf("direct subfolder must inherit, got %q %v %v", name, ok, err)
+	}
+	if name != "剧1" {
+		t.Errorf("inherited show name must fall back to folder name, got %q", name)
+	}
+	// 孙级：不继承
+	if _, ok, err := d.tvShowInfo("/演员/剧1/季1"); err != nil || ok {
+		t.Errorf("grandchild must not inherit, got %v %v", ok, err)
+	}
+	// 父目录自身：不是剧（选项只作用于子文件夹）
+	if _, ok, err := d.tvShowInfo("/演员"); err != nil || ok {
+		t.Errorf("option holder itself must not be a show, got %v %v", ok, err)
+	}
+	// 无选项的父目录：不生效
+	if _, ok, err := d.tvShowInfo("/其他/子"); err != nil || ok {
+		t.Errorf("parent without option must not inherit, got %v %v", ok, err)
+	}
+}
+
+// TestTVShowInfoInheritedWithOwnName：自身行 TvShowName 优先于继承回退。
+func TestTVShowInfoInheritedWithOwnName(t *testing.T) {
+	d := newTestWrapper()
+	tf := true
+	if err := UpsertEmbyDirSetting(d.ID, "/演员", "", "", "", nil, nil, nil, &tf); err != nil {
+		t.Fatalf("config 演员: %v", err)
+	}
+	if err := UpsertEmbyDirSetting(d.ID, "/演员/剧1", "", "", "别名", nil, nil, nil, nil); err != nil {
+		t.Fatalf("config 剧1: %v", err)
+	}
+	name, ok, err := d.tvShowInfo("/演员/剧1")
+	if err != nil || !ok {
+		t.Fatalf("must be a show, got %v %v", ok, err)
+	}
+	if name != "别名" {
+		t.Errorf("own TvShowName must win, got %q", name)
+	}
+}
+
+// TestIsTVDirInherited：isTVDir 与 tvShowInfo 同规则（buildTVIndex/gatherVideos 依赖）。
+func TestIsTVDirInherited(t *testing.T) {
+	d := newTestWrapper()
+	tf := true
+	if err := UpsertEmbyDirSetting(d.ID, "/演员", "", "", "", nil, nil, nil, &tf); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	ok, err := d.isTVDir("/演员/剧1")
+	if err != nil || !ok {
+		t.Errorf("isTVDir must inherit, got %v %v", ok, err)
+	}
+	if ok, err := d.isTVDir("/演员/剧1/季1"); err != nil || ok {
+		t.Errorf("isTVDir must not inherit to grandchild, got %v %v", ok, err)
+	}
+}

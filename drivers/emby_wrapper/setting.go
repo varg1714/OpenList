@@ -73,29 +73,41 @@ func (d *EmbyWrapper) resolveSetting(dirPath string) (*model.EmbyDirSetting, err
 }
 
 // tvShowInfo 返回 dirPath 是否为电视剧文件夹及剧名（自定义剧名为空时回退文件夹名）。
-// 本地生效，不继承（子文件夹是否为电视剧由自身标记决定）。
+// 判定规则：自身行 TvShow=true，或直接父目录行 TvShowSubfolders=true（动态继承，
+// 仅一层；自身标记与继承并存，显式排除不支持）。
 func (d *EmbyWrapper) tvShowInfo(dirPath string) (string, bool, error) {
 	item, err := GetEmbyDirSetting(d.ID, dirPath)
 	if err != nil {
 		return "", false, err
 	}
-	if item == nil || !item.TvShow {
+	isTV := item != nil && item.TvShow
+	if !isTV {
+		parent := stdpath.Dir(dirPath)
+		if !utils.PathEqual(parent, dirPath) {
+			parentItem, e := GetEmbyDirSetting(d.ID, parent)
+			if e != nil {
+				return "", false, e
+			}
+			isTV = parentItem != nil && parentItem.TvShowSubfolders
+		}
+	}
+	if !isTV {
 		return "", false, nil
 	}
-	name := strings.TrimSpace(item.TvShowName)
+	name := ""
+	if item != nil {
+		name = strings.TrimSpace(item.TvShowName)
+	}
 	if name == "" {
 		name = stdpath.Base(dirPath)
 	}
 	return name, true, nil
 }
 
-// isTVDir 判断 dirPath 是否被标记为电视剧（本地标记，不继承）。
+// isTVDir 判断 dirPath 是否被标记为电视剧（与 tvShowInfo 同规则：自身标记或父目录选项动态继承）。
 func (d *EmbyWrapper) isTVDir(dirPath string) (bool, error) {
-	item, err := GetEmbyDirSetting(d.ID, dirPath)
-	if err != nil {
-		return false, err
-	}
-	return item != nil && item.TvShow, nil
+	_, ok, err := d.tvShowInfo(dirPath)
+	return ok, err
 }
 
 // tvShowAncestor 返回 dirPath 最近的电视剧祖先（含自身）：根路径 + 剧名。

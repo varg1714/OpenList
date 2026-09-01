@@ -122,7 +122,7 @@ func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
 		}
 		return nil, err
 	}
-	actors, use, plot, tvShowName, tvShow := "", false, "", "", false
+	actors, use, plot, tvShowName, tvShow, tvShowSubfolders := "", false, "", "", false, false
 	var appendFlag *bool
 	if obj.IsDir() {
 		if item, e := GetEmbyDirSetting(d.ID, path); e != nil {
@@ -131,9 +131,16 @@ func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
 			actors, use, plot = item.Actors, item.UseNameAsActor, item.Plot
 			appendFlag = item.AppendFileNameToPlot
 			tvShowName, tvShow = item.TvShowName, item.TvShow
+			tvShowSubfolders = item.TvShowSubfolders
+		}
+		// 展示层反映动态继承：直接父目录开启 tv_show_subfolders 时本文件夹视同电视剧
+		if !tvShow {
+			if pitem, e := GetEmbyDirSetting(d.ID, stdpath.Dir(path)); e == nil && pitem != nil && pitem.TvShowSubfolders {
+				tvShow = true
+			}
 		}
 	}
-	return wrapObj(obj, path, actors, plot, tvShowName, use, appendFlag, tvShow, obj.IsDir()), nil
+	return wrapObj(obj, path, actors, plot, tvShowName, use, appendFlag, tvShow, tvShowSubfolders, obj.IsDir()), nil
 }
 
 // virtualNFOForPath 尝试为 .nfo 路径构建虚拟对象。
@@ -294,24 +301,34 @@ func (d *EmbyWrapper) Link(ctx context.Context, file model.Obj, args model.LinkA
 }
 
 // decorate 将下游对象包装进本驱动路径命名空间，并给文件夹附带目录设置（用于 UI 展示与表单预填）。
+// TvShow 展示继承后的生效状态：本目录行开启 tv_show_subfolders 时，直接子文件夹视同电视剧。
 func (d *EmbyWrapper) decorate(dirPath string, objs []model.Obj) []model.Obj {
 	settings, err := ListEmbyDirSettings(d.ID)
 	if err != nil {
 		utils.Log.Warnf("emby wrapper: list dir settings: %+v", err)
 		settings = map[string]model.EmbyDirSetting{}
 	}
+	// 展示层反映动态继承：本目录行的 tv_show_subfolders 决定其直接子文件夹的生效状态
+	dirTvSub := false
+	if dirItem, e := GetEmbyDirSetting(d.ID, dirPath); e == nil && dirItem != nil {
+		dirTvSub = dirItem.TvShowSubfolders
+	}
 	out := make([]model.Obj, len(objs))
 	for i, o := range objs {
 		p := stdpath.Join(dirPath, o.GetName())
 		s, ok := settings[p]
-		actors, use, plot, tvShowName, tvShow := "", false, "", "", false
+		actors, use, plot, tvShowName, tvShow, tvShowSubfolders := "", false, "", "", false, false
 		var appendFlag *bool
 		if ok {
 			actors, use, plot = s.Actors, s.UseNameAsActor, s.Plot
 			appendFlag = s.AppendFileNameToPlot
 			tvShowName, tvShow = s.TvShowName, s.TvShow
+			tvShowSubfolders = s.TvShowSubfolders
 		}
-		out[i] = wrapObj(o, p, actors, plot, tvShowName, use, appendFlag, tvShow, o.IsDir())
+		if o.IsDir() && !tvShow && dirTvSub {
+			tvShow = true // 动态继承：直接子文件夹视同电视剧（展示层）
+		}
+		out[i] = wrapObj(o, p, actors, plot, tvShowName, use, appendFlag, tvShow, tvShowSubfolders, o.IsDir())
 	}
 	return out
 }
