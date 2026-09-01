@@ -96,15 +96,19 @@ func buildTVShowNFO(showName, plot string, setting *model.EmbyDirSetting) ([]byt
 	return buildNFOWithRoot("tvshow", showName, plot, setting)
 }
 
-// buildSeasonNFO 构建季 nfo：<season><seasonnumber>N</seasonnumber><seasonname>名称</seasonname></season>。
-// Emby 的 SeasonNfoParser 读取 seasonnumber 设置季号、seasonname 设置显示名，
-// 使任意命名的文件夹（如"2024年"）被识别为指定季。
+// buildSeasonNFO 构建季 nfo：<season><seasonnumber>N</seasonnumber>[<seasonname>]</season>。
+// Emby 的 SeasonNfoParser 读取 seasonnumber 设置季号、seasonname 设置显示名。
+// 2026-09-02 修订：季目录已虚拟映射为 S{季号}（Emby 原生识别），season.nfo 仅作
+// 双保险；name 为空时省略 seasonname（不再保留原文件夹名）。
 func buildSeasonNFO(seasonNo int, name string) []byte {
-	return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<season>
-  <seasonnumber>%d</seasonnumber>
-  <seasonname><![CDATA[%s]]></seasonname>
-</season>`, seasonNo, name))
+	var sb strings.Builder
+	sb.WriteString("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n<season>\n")
+	fmt.Fprintf(&sb, "  <seasonnumber>%d</seasonnumber>\n", seasonNo)
+	if name != "" {
+		fmt.Fprintf(&sb, "  <seasonname><![CDATA[%s]]></seasonname>\n", name)
+	}
+	sb.WriteString("</season>")
+	return []byte(sb.String())
 }
 
 // withVirtualNFOs 为 dirPath 下每个影片文件追加一个虚拟 nfo；

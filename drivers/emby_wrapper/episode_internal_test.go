@@ -75,34 +75,58 @@ func TestByCreateTimeName(t *testing.T) {
 func TestTVIndexAddAndResolve(t *testing.T) {
 	idx := newTVIndexForTest("/R")
 	real := &model.Object{Name: "A.mp4", Path: "/R/A.mp4", Modified: time.Now()}
-	idx.addEpisode(real, "/R/A.mp4", "A-S01E01.mp4")
-	if got := idx.byPath["/r/a-s01e01.mp4"]; got != real {
-		t.Errorf("byPath must resolve canonical virtual path to the real object, got %v", got)
+	idx.addEpisode(real, "/R/A.mp4", "/R", "A-S01E01.mp4")
+	e, ok := idx.entry("/R/A-S01E01.mp4")
+	if !ok || e.real != real || e.name != "A-S01E01.mp4" || e.path != "/R/A.mp4" {
+		t.Errorf("entry must resolve canonical virtual path, got %+v %v", e, ok)
 	}
-	if got := idx.byPath[strings.ToLower("/r/A-S01E01.MP4")]; got != real {
-		t.Errorf("byPath must be case-insensitive, got %v", got)
+	if _, ok := idx.entry("/r/a-s01e01.mp4"); !ok {
+		t.Errorf("entry must be case-insensitive")
 	}
-	if got := idx.byPath["/r/a.mp4"]; got != nil {
-		t.Errorf("original name must not be a byPath key, got %v", got)
+	if _, ok := idx.entry("/R/A.mp4"); ok {
+		t.Errorf("original real path must not be an entry key")
 	}
 	if got := strings.TrimSuffix(real.GetName(), stdpath.Ext(real.GetName())); got != "A" {
 		t.Errorf("title must be original base name, got %q", got)
 	}
-	if got := idx.nfoBases["a-s01e01"]; got != "A-S01E01.mp4" {
-		t.Errorf("nfo base must map to virtual name, got %q", got)
+	if got := idx.nfoBases["/r/a-s01e01"]; got != "A-S01E01.mp4" {
+		t.Errorf("nfo base must map virtual nfo path to virtual name, got %q", got)
 	}
 	if got, ok := idx.episodeName(real); !ok || got != "A-S01E01.mp4" {
 		t.Errorf("episodeName by real path must work, got %q %v", got, ok)
 	}
 }
 
-// newTVIndexForTest 构造空索引（测试辅助，Task 4 的 buildTVIndex 是驱动方法）。
+// TestTVIndexAddEpisodeCollision：虚拟路径冲突时真实同名条目优先；已有真实同名条目不被覆盖。
+func TestTVIndexAddEpisodeCollision(t *testing.T) {
+	idx := newTVIndexForTest("/R")
+	gen := &model.Object{Name: "A1.mp4", Path: "/R/2024年/A1.mp4", Modified: time.Now()}
+	realFile := &model.Object{Name: "S01E01.mp4", Path: "/R/2024年/S01E01.mp4", Modified: time.Now()}
+	// 先生成名、后真实同名：真实同名条目占用虚拟路径
+	idx.addEpisode(gen, "/R/2024年/A1.mp4", "/R/S01", "S01E01.mp4")
+	idx.addEpisode(realFile, "/R/2024年/S01E01.mp4", "/R/S01", "S01E01.mp4")
+	e, _ := idx.entry("/R/S01/S01E01.mp4")
+	if e.real != realFile {
+		t.Errorf("real-named entry must win the virtual path, got %+v", e)
+	}
+	// 先真实同名、后生成名：不被覆盖
+	idx2 := newTVIndexForTest("/R")
+	idx2.addEpisode(realFile, "/R/2024年/S01E01.mp4", "/R/S01", "S01E01.mp4")
+	idx2.addEpisode(gen, "/R/2024年/A1.mp4", "/R/S01", "S01E01.mp4")
+	e, _ = idx2.entry("/R/S01/S01E01.mp4")
+	if e.real != realFile {
+		t.Errorf("existing real-named entry must not be overwritten, got %+v", e)
+	}
+}
+
+// newTVIndexForTest 构造空索引（测试辅助，buildTVIndex 是驱动方法）。
 func newTVIndexForTest(root string) *tvIndex {
 	return &tvIndex{
-		root:     root,
-		byPath:   map[string]model.Obj{},
-		nfoBases: map[string]string{},
-		byReal:   map[string]string{},
-		seasonNo: map[string]int{},
+		root:        root,
+		byVirtual:   map[string]tvEntry{},
+		nfoBases:    map[string]string{},
+		byReal:      map[string]string{},
+		seasonNo:    map[string]int{},
+		seasonAlias: map[string]string{},
 	}
 }

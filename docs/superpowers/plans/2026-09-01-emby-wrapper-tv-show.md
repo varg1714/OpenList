@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 文件夹可标记为电视剧（`tv_show` + 自定义剧名 `tv_show_name`）：根目录直接文件 = 第 1 季，直接子文件夹按"创建时间+名称"排序分配季号（保留原名），季内文件按"创建时间+名称"编号为 `S{NN}E{MM}.mp4`（纯编号，原文件名经剧集 nfo title 保留）；生成剧集 nfo（`<episodedetails>`：title=原名、actors、无 plot）、`tvshow.nfo`（`<tvshow>`：剧名+简介+actors）与 `season.nfo`（`<season>`：seasonnumber+seasonname，让 Emby 识别任意命名文件夹为指定季）；文件不物理改名，下游 Get/Link 还原真实路径。
+**Goal:** 文件夹可标记为电视剧（`tv_show` + 自定义剧名 `tv_show_name`）：根目录直接文件 = 第 1 季，直接子文件夹按"创建时间+名称"排序分配季号并**虚拟映射为 `S{季}` 目录**（原文件夹名不再展示），季内文件**递归收集并扁平化**到季目录，视频按"创建时间+名称"编号为 `S{NN}E{MM}.mp4`（纯编号，原文件名经剧集 nfo title 保留）、非视频保留原名；生成剧集 nfo（`<episodedetails>`：title=原名、actors、无 plot）、`tvshow.nfo`（`<tvshow>`：剧名+简介+actors）与 `season.nfo`（`<season>`：seasonnumber，双保险）；文件不物理改名，下游 Get/Link 还原真实路径。
 
 **Architecture:** 沿用现有虚拟 nfo 模式：`EmbyDirSetting` 新增 `TvShow bool` 与 `TvShowName string`（本地生效不继承）；新增 `episode.go` 构建整棵剧集树索引（`tvIndex`：根文件=季 1 + 直接子文件夹按创建时间+名称分配连续季号 + 季内递归收集按时间编号），一次构建供 List 展示与 Get 反查共用；`virtual_file.RenderNFO` 根元素参数化支持 `tvshow`/`episodedetails`（`season.nfo` 结构简单，直接手写 XML）；`Get` 是虚拟→真实路径的唯一映射点（`virtualEpisode.GetPath()` 返回真实路径，Link 现有代码零改动）；任一目录的 List/Get 先查"最近的电视剧祖先"再决定走 TV 分支还是影片分支。
 
@@ -11,11 +11,11 @@
 **Spec:** 用户需求（2026-09-01 逐项确认）：
 1. 文件夹新增设置 `tv_show`（bool，标记为电视剧）与 `tv_show_name`（string，自定义剧名，为空回退文件夹名）；**本地生效，不继承**（子文件夹是否为电视剧由自身标记决定，嵌套电视剧独立成剧、被父剧索引跳过）
 2. **排序**：文件与文件夹一律按 **`CreateTime()`（创建时间，驱动未提供时自动回退 `ModTime()`）+ 名称升序** 联合排序（用户确认：同一时间多个文件不能单靠时间，联合排序保证确定性、不随整理动作漂移）
-3. **结构**：根目录直接文件 = 第 1 季（`S01E<季内时间序>`）；**直接子文件夹 = 季**——保留原名、不解析文件夹名，按创建时间+名称排序分配**连续季号**（旧的季号更小；根目录存在直接视频时子文件夹从第 2 季起，否则从第 1 季起）；季内文件**递归收集**（嵌套子文件夹如 `季/专题/` 中的文件并入该季；递归时跳过自身标记为 TV 的子文件夹），按创建时间+名称编号 `S{NN}E{MM}.mp4`（纯编号），**原地虚拟展示**（文件留在自己的文件夹里）
+3. **结构**：根目录直接文件 = 第 1 季（`S01E<季内时间序>`）；**直接子文件夹 = 季**——不解析文件夹名，按创建时间+名称排序分配**连续季号**（旧的季号更小；根目录存在直接视频时子文件夹从第 2 季起，否则从第 1 季起），**2026-09-02 修订：虚拟映射为 `S{季号}` 别名目录**（原文件夹名不再展示，Emby 原生识别 S{NN} 目录为季；展示层/Get 路径统一走别名，映射到真实文件夹）；季内文件**递归收集**（嵌套子文件夹如 `季/专题/` 中的文件**扁平化提取**到季目录展示；递归时跳过自身标记为 TV 的子文件夹），按创建时间+名称编号 `S{NN}E{MM}.mp4`（纯编号），非视频文件保留原名
 4. **已含 `SxxExx`/`NxNN` 编号的文件跳过**、保持原名（含其同名 nfo 生成），不消耗序号
 5. **剧集 nfo**：每个剧集文件生成虚拟 nfo（`S{NN}E{MM}.nfo`）：根元素 `<episodedetails>`，title=原文件名去扩展名，actors=现有继承解析结果（`resolveSetting`），**无 plot**；`-cd` 多段不合并（一文件一集）
 6. **tvshow.nfo**（剧集根目录）：根元素 `<tvshow>`，title=自定义剧名（空→文件夹名），plot=该目录解析出的 plot（剧集介绍），actors 同
-7. **season.nfo**（每个直接子文件夹，虚拟）：根元素 `<season>`，含 `<seasonnumber>NN</seasonnumber>`（该文件夹分配的季号）+ `<seasonname>原文件夹名</seasonname>`——Emby 的 `SeasonNfoParser` 读取这两项设置季号与显示名（已核实：季识别基于文件夹名，任意命名文件夹只要有视频即创建为"无编号季"，season.nfo 在元数据刷新时填入季号；文件名中的 `S{NN}E{MM}` 是双保险——Emby 文件名季号优先）
+7. **season.nfo**（每个季，虚拟）：根元素 `<season>`，含 `<seasonnumber>NN</seasonnumber>`；**2026-09-02 修订：省略 `<seasonname>`**（季目录已虚拟映射为 `S{NN}`，Emby 原生识别；season.nfo 仅作双保险，真实目录下存在同名真实 season.nfo 时优先转发下游）
 8. **不物理改名**：虚拟名只存在于展示层（List/Get 返回的对象名）；`virtualEpisode.GetPath()` 返回真实路径，Link 直接转发真实文件（`op.Link` 前必经 Get，Get 是唯一映射点）；真实同名文件/nfo 优先（同目录存在同名真实文件或 nfo 时跳过虚拟生成）
 9. 剧集命名格式用 `S{NN}E{MM}` 纯编号（Emby 官方文档+解析器确认 `-E01` 不被识别；`anything_s01e02` 是受支持模式）。**2026-09-02 修订**：早期版本为 `原基础名-S{NN}E{MM}`，实测 Emby 的 EpisodePathParser 会把 `SxxExx` 前的任意前缀捕获为 seriesname（剧集名），前缀与剧名不符时剧集归属错乱（`xx1-S01E01.mp4` 被识别为名为 xx1 的剧）；改为纯编号后文件名不含可解析的剧名，归属完全来自文件夹层级，原文件名经剧集 nfo 的 `<title>`（=原文件名去扩展名）保留
 10. **不需要** TV 边界阻断 plot/append 继承（早期设计的遗留需求，方案 B 下 TV 树内任何目录都不再走影片模式 nfo 生成，无泄漏场景）

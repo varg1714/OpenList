@@ -81,11 +81,11 @@ func TestTVShowSeasonsAndRootEpisodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list root: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"2024年", "2025年", "S01E01.mkv", "S01E01.nfo", "tvshow.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S01E01.mkv", "S01E01.nfo", "S02", "S03", "tvshow.nfo"}) {
 		t.Errorf("root listing mismatch, got %v", got)
 	}
 	// 季 2（2024年）：A1 先建 → E01；含 season.nfo
-	objs, err = d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	objs, err = d.List(context.Background(), &model.Object{Name: "S02", Path: "/Movies/S02", IsFolder: true}, model.ListArgs{Refresh: true})
 	if err != nil {
 		t.Fatalf("list 2024年: %+v", err)
 	}
@@ -93,7 +93,7 @@ func TestTVShowSeasonsAndRootEpisodes(t *testing.T) {
 		t.Errorf("season 2 listing mismatch, got %v", got)
 	}
 	// 季 3（2025年）
-	objs, err = d.List(context.Background(), &model.Object{Name: "2025年", Path: "/Movies/2025年", IsFolder: true}, model.ListArgs{Refresh: true})
+	objs, err = d.List(context.Background(), &model.Object{Name: "S03", Path: "/Movies/S03", IsFolder: true}, model.ListArgs{Refresh: true})
 	if err != nil {
 		t.Fatalf("list 2025年: %+v", err)
 	}
@@ -115,7 +115,7 @@ func TestTVShowNoRootVideos(t *testing.T) {
 		t.Fatalf("write A1: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	objs, err := d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	objs, err := d.List(context.Background(), &model.Object{Name: "S01", Path: "/Movies/S01", IsFolder: true}, model.ListArgs{Refresh: true})
 	if err != nil {
 		t.Fatalf("list: %+v", err)
 	}
@@ -124,7 +124,8 @@ func TestTVShowNoRootVideos(t *testing.T) {
 	}
 }
 
-// TestTVShowNestedFolderInSeason：季内的嵌套子文件夹文件并入该季编号（原地展示）。
+// TestTVShowNestedFolderInSeason：季内嵌套子文件夹的文件提取（扁平化）到季目录——
+// 不再保留嵌套文件夹，全部条目按创建时间统一编号后展示于季别名目录下。
 func TestTVShowNestedFolderInSeason(t *testing.T) {
 	d := setup(t)
 	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
@@ -140,21 +141,13 @@ func TestTVShowNestedFolderInSeason(t *testing.T) {
 		t.Fatalf("write D: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	// C 先建 → 季 2 的 E01；D 后建 → E02，显示在 专题 内
-	objs, err := d.List(context.Background(), &model.Object{Name: "专题", Path: "/Movies/2024年/专题", IsFolder: true}, model.ListArgs{Refresh: true})
+	// C 先建 → 季 2 的 E01；D 后建 → E02；两者都提取到 S02 目录下（专题 不再展示）
+	objs, err := d.List(context.Background(), &model.Object{Name: "S02", Path: "/Movies/S02", IsFolder: true}, model.ListArgs{Refresh: true})
 	if err != nil {
-		t.Fatalf("list 专题: %+v", err)
+		t.Fatalf("list S02: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E02.mp4", "S02E02.nfo"}) {
-		t.Errorf("nested folder episodes mismatch, got %v", got)
-	}
-	// 2024年 自身列表：C 在根、专题文件夹原样（无 season.nfo——只有直接子文件夹是季）
-	objs, err = d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
-	if err != nil {
-		t.Fatalf("list 2024年: %+v", err)
-	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E01.mp4", "S02E01.nfo", "season.nfo", "专题"}) {
-		t.Errorf("season listing with nested dir mismatch, got %v", got)
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E01.mp4", "S02E01.nfo", "S02E02.mp4", "S02E02.nfo", "season.nfo"}) {
+		t.Errorf("nested files must be flattened into the season, got %v", got)
 	}
 }
 
@@ -168,12 +161,12 @@ func TestTVShowSeasonNFOContent(t *testing.T) {
 		t.Fatalf("write A1: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	got := readNFOLink(t, d, "/Movies/2024年/season.nfo")
+	got := readNFOLink(t, d, "/Movies/S02/season.nfo")
 	if !strings.Contains(got, "<seasonnumber>2</seasonnumber>") {
 		t.Errorf("season.nfo must carry assigned season number, got %s", got)
 	}
-	if !strings.Contains(got, "<seasonname><![CDATA[2024年]]></seasonname>") {
-		t.Errorf("season.nfo must carry original folder name, got %s", got)
+	if strings.Contains(got, "seasonname") {
+		t.Errorf("season.nfo must not carry original folder name (S-alias structure), got %s", got)
 	}
 }
 
@@ -187,7 +180,7 @@ func TestTVShowNFOsContent(t *testing.T) {
 		t.Fatalf("write A1: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true,"tv_show_name":"测试剧","plot":"剧集介绍","actors":"演员A"}`)
-	ep := readNFOLink(t, d, "/Movies/2024年/S02E01.nfo")
+	ep := readNFOLink(t, d, "/Movies/S02/S02E01.nfo")
 	if !strings.Contains(ep, "<episodedetails>") {
 		t.Errorf("episode nfo must use episodedetails root, got %s", ep)
 	}
@@ -229,7 +222,7 @@ func TestTVShowSkipsNumbered(t *testing.T) {
 		t.Fatalf("write numbered: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	objs, err := d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	objs, err := d.List(context.Background(), &model.Object{Name: "S02", Path: "/Movies/S02", IsFolder: true}, model.ListArgs{Refresh: true})
 	if err != nil {
 		t.Fatalf("list: %+v", err)
 	}
@@ -247,11 +240,11 @@ func TestTVShowRealSeasonNFOFileWins(t *testing.T) {
 	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
 		t.Fatalf("write A1: %v", err)
 	}
-	if err := writeDownstreamFile(t, "/Movies/2024年/season.nfo", "real-content"); err != nil {
+	if err := writeDownstreamFile(t, "/Movies/S02/season.nfo", "real-content"); err != nil {
 		t.Fatalf("write real season.nfo: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	if got := readNFOLink(t, d, "/Movies/2024年/season.nfo"); got != "real-content" {
+	if got := readNFOLink(t, d, "/Movies/S02/season.nfo"); got != "real-content" {
 		t.Errorf("real season.nfo must win, got %q", got)
 	}
 }
@@ -266,7 +259,7 @@ func TestGetAndLinkSeasonEpisode(t *testing.T) {
 		t.Fatalf("write A1: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	if got := readNFOLink(t, d, "/Movies/2024年/S02E01.mp4"); got != "a1" {
+	if got := readNFOLink(t, d, "/Movies/S02/S02E01.mp4"); got != "a1" {
 		t.Errorf("episode must play real file content, got %q", got)
 	}
 }
@@ -297,7 +290,7 @@ func TestTVShowNestedTVSkipped(t *testing.T) {
 		t.Errorf("nested tv show must be independent, got %v", got)
 	}
 	// 父剧的季 2：X 不参与编号
-	objs, err = d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	objs, err = d.List(context.Background(), &model.Object{Name: "S02", Path: "/Movies/S02", IsFolder: true}, model.ListArgs{Refresh: true})
 	if err != nil {
 		t.Fatalf("list 2024年: %+v", err)
 	}
@@ -327,7 +320,7 @@ func TestGetVirtualEpisodeWrongDirectory(t *testing.T) {
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
 	// AAA.mkv 位于剧集根（季 1），其虚拟名在季 2 目录下不可解析
-	if _, err := d.Get(context.Background(), "/Movies/2024年/S01E01.mkv"); err == nil {
+	if _, err := d.Get(context.Background(), "/Movies/S02/S01E01.mkv"); err == nil {
 		t.Fatal("virtual episode under the wrong directory must not be served")
 	}
 	if _, err := d.Get(context.Background(), "/Movies/2024年/S01E01.nfo"); err == nil {
@@ -349,24 +342,24 @@ func TestTVShowDuplicateVirtualNameAcrossSeasons(t *testing.T) {
 		t.Fatalf("mkdir 2025年: %v", err)
 	}
 	// 真实编号文件保留原名，与季 2 的虚拟名相同（重名跨季冲突）
-	if err := writeEpisodeFile(t, "/Movies/2025年/S02E01.mp4", "real"); err != nil {
+	if err := writeEpisodeFile(t, "/Movies/S03/S02E01.mp4", "real"); err != nil {
 		t.Fatalf("write numbered: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
 	// 季 2 的虚拟剧集播放它自己的文件，而非季 3 的同名真实文件
-	if got := readNFOLink(t, d, "/Movies/2024年/S02E01.mp4"); got != "a1" {
+	if got := readNFOLink(t, d, "/Movies/S02/S02E01.mp4"); got != "a1" {
 		t.Errorf("season 2 virtual episode must play its own file, got %q", got)
 	}
 	// 季 2 的剧集 nfo 标题来自 A1.mp4，而非季 3 的文件名
-	if got := readNFOLink(t, d, "/Movies/2024年/S02E01.nfo"); !strings.Contains(got, "<![CDATA[A1]]>") {
+	if got := readNFOLink(t, d, "/Movies/S02/S02E01.nfo"); !strings.Contains(got, "<![CDATA[A1]]>") {
 		t.Errorf("season 2 episode nfo title must come from A1.mp4, got %s", got)
 	}
 	// 季 3 的真实文件直接播放
-	if got := readNFOLink(t, d, "/Movies/2025年/S02E01.mp4"); got != "real" {
+	if got := readNFOLink(t, d, "/Movies/S03/S02E01.mp4"); got != "real" {
 		t.Errorf("real numbered file must play directly, got %q", got)
 	}
 	// List 路径：withTVShowNFOs 为季 2 列表构建的剧集 nfo 内容，标题必须来自 A1.mp4
-	objs, err := d.List(context.Background(), &model.Object{Name: "2024年", Path: "/Movies/2024年", IsFolder: true}, model.ListArgs{Refresh: true})
+	objs, err := d.List(context.Background(), &model.Object{Name: "S02", Path: "/Movies/S02", IsFolder: true}, model.ListArgs{Refresh: true})
 	if err != nil {
 		t.Fatalf("list 2024年: %+v", err)
 	}

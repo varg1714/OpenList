@@ -85,17 +85,26 @@ func (d *EmbyWrapper) List(ctx context.Context, dir model.Obj, args model.ListAr
 	if err != nil {
 		return nil, err
 	}
-	objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dir.GetPath()), args)
+	pc, idx, err := d.tvContext(ctx, dir.GetPath())
 	if err != nil {
 		return nil, err
 	}
-	objs = d.decorate(dir.GetPath(), objs)
-	if rootPath, showName, ok, err := d.tvShowAncestor(dir.GetPath()); err != nil {
-		utils.Log.Warnf("emby wrapper: tv show ancestor %s: %+v", dir.GetPath(), err)
-	} else if ok {
-		return d.withTVShowNFOs(ctx, dir, rootPath, showName, objs), nil
+	if pc == nil {
+		// 非 TV 树：原流程
+		objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, dir.GetPath()), args)
+		if err != nil {
+			return nil, err
+		}
+		objs = d.decorate(dir.GetPath(), objs)
+		return d.withVirtualNFOs(dir.GetPath(), objs), nil
 	}
-	return d.withVirtualNFOs(dir.GetPath(), objs), nil
+	// TV 树：列出解析后的真实目录，按展示视图发射
+	objs, err := op.List(ctx, remoteStorage, stdpath.Join(remoteActualPath, pc.realDir), args)
+	if err != nil {
+		return nil, err
+	}
+	objs = d.decorate(pc.realDir, objs)
+	return d.withTVShowNFOs(ctx, dir, pc, idx, objs), nil
 }
 
 func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
@@ -115,7 +124,7 @@ func (d *EmbyWrapper) Get(ctx context.Context, path string) (model.Obj, error) {
 	}
 	obj, err := op.Get(ctx, remoteStorage, stdpath.Join(remoteActualPath, path))
 	if err != nil {
-		if ep, ok, e2 := d.resolveEpisodePath(ctx, path); e2 != nil {
+		if ep, ok, e2 := d.resolveVirtualPath(ctx, path); e2 != nil {
 			return nil, e2
 		} else if ok {
 			return ep, nil
@@ -152,15 +161,15 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 	if err != nil {
 		return nil, false, err
 	}
+	if isTV {
+		return d.tvNFOForPath(ctx, path, parentDir, base, rootPath, showName)
+	}
 	setting, err := d.resolveSetting(parentDir)
 	if err != nil {
 		return nil, false, err
 	}
-	if setting == nil && !isTV {
-		return nil, false, nil
-	}
 	if setting == nil {
-		setting = &model.EmbyDirSetting{}
+		return nil, false, nil
 	}
 	remoteStorage, remoteActualPath, err := d.remote()
 	if err != nil {
@@ -170,7 +179,7 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 	if err != nil {
 		return nil, false, err
 	}
-	// 真实 nfo 优先：下游存在同名真实 nfo 时交给下游 Get（含 tvshow.nfo/season.nfo）
+	// 真实 nfo 优先：下游存在同名真实 nfo 时交给下游 Get
 	for _, o := range objs {
 		if o.IsDir() {
 			continue
@@ -178,49 +187,6 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 		if strings.EqualFold(utils.Ext(o.GetName()), "nfo") && strings.EqualFold(nfoBaseName(o.GetName()), base) {
 			return nil, false, nil
 		}
-	}
-	// TV 模式分支
-	if isTV {
-		idx, err := d.buildTVIndex(ctx, rootPath)
-		if err != nil {
-			return nil, false, err
-		}
-		// tvshow.nfo：仅剧集根目录
-		if utils.PathEqual(parentDir, rootPath) && strings.EqualFold(base, "tvshow") {
-			content, err := buildTVShowNFO(showName, setting.Plot, setting)
-			if err != nil {
-				return nil, false, err
-			}
-			modified := time.Time{}
-			if idx.last != nil {
-				modified = idx.last.ModTime()
-			}
-			return d.newVirtualNFO(path, content, modified), true, nil
-		}
-		// season.nfo：直接子文件夹（季）
-		if !utils.PathEqual(parentDir, rootPath) && utils.PathEqual(stdpath.Dir(parentDir), rootPath) && strings.EqualFold(base, "season") {
-			if seasonNo, ok := idx.seasonNo[parentDir]; ok {
-				modified := time.Time{}
-				if idx.last != nil {
-					modified = idx.last.ModTime()
-				}
-				return d.newVirtualNFO(path, buildSeasonNFO(seasonNo, stdpath.Base(parentDir)), modified), true, nil
-			}
-		}
-		// 剧集 nfo：虚拟名匹配（按目录限定解析，防跨季同名碰撞）
-		epName, ok := idx.nfoBases[strings.ToLower(base)]
-		if !ok {
-			return nil, false, nil
-		}
-		real := idx.byPath[strings.ToLower(stdpath.Join(parentDir, epName))]
-		if real == nil {
-			return nil, false, nil
-		}
-		content, err := buildEpisodeNFO(strings.TrimSuffix(real.GetName(), stdpath.Ext(real.GetName())), setting)
-		if err != nil {
-			return nil, false, err
-		}
-		return d.newVirtualNFO(path, content, real.ModTime()), true, nil
 	}
 	// 影片模式（原有逻辑）：basename 匹配真实影片文件
 	var movieObj model.Obj
@@ -244,9 +210,80 @@ func (d *EmbyWrapper) virtualNFOForPath(ctx context.Context, path string) (model
 	return d.newVirtualNFO(path, content, movieObj.ModTime()), true, nil
 }
 
-// resolveEpisodePath 在父目录处于某部电视剧内时按虚拟名反查真实文件。
-// 返回 (包装对象, true, nil)：命中虚拟剧集；(nil, false, nil)：非 TV 树或未命中。
-func (d *EmbyWrapper) resolveEpisodePath(ctx context.Context, path string) (model.Obj, bool, error) {
+// tvNFOForPath TV 树内的 nfo 分支：tvshow.nfo（剧集根）/ season.nfo（季别名或真实季目录）/ 剧集 nfo。
+// 真实同名 nfo 优先：真实目录下存在同名 nfo 时返回其包装对象（真实路径，Link 直接转发）。
+func (d *EmbyWrapper) tvNFOForPath(ctx context.Context, path, parentDir, base, rootPath, showName string) (model.Obj, bool, error) {
+	idx, err := d.buildTVIndex(ctx, rootPath)
+	if err != nil {
+		return nil, false, err
+	}
+	remoteStorage, remoteActualPath, err := d.remote()
+	if err != nil {
+		return nil, false, err
+	}
+	// tvshow.nfo：仅剧集根目录
+	if utils.PathEqual(parentDir, rootPath) && strings.EqualFold(base, "tvshow") {
+		setting, err := d.resolveSetting(rootPath)
+		if err != nil {
+			return nil, false, err
+		}
+		if setting == nil {
+			setting = &model.EmbyDirSetting{}
+		}
+		content, err := buildTVShowNFO(showName, setting.Plot, setting)
+		if err != nil {
+			return nil, false, err
+		}
+		modified := time.Time{}
+		if idx.last != nil {
+			modified = idx.last.ModTime()
+		}
+		return d.newVirtualNFO(path, content, modified), true, nil
+	}
+	// season.nfo：季（别名或真实路径），真实同名 nfo 优先
+	if seasonReal, ok := idx.seasonRealOf(parentDir); ok && strings.EqualFold(base, "season") {
+		realNFO := stdpath.Join(seasonReal, "season.nfo")
+		if obj, err := op.Get(ctx, remoteStorage, stdpath.Join(remoteActualPath, realNFO)); err == nil {
+			return &wrappedObj{Obj: obj, path: realNFO}, true, nil
+		}
+		modified := time.Time{}
+		if idx.last != nil {
+			modified = idx.last.ModTime()
+		}
+		return d.newVirtualNFO(path, buildSeasonNFO(idx.seasonNo[seasonReal], ""), modified), true, nil
+	}
+	// 剧集 nfo：虚拟 nfo 路径匹配（含季别名段，天然按目录限定）
+	epName, ok := idx.nfoBases[strings.ToLower(stdpath.Join(parentDir, base))]
+	if !ok {
+		return nil, false, nil
+	}
+	e, ok := idx.entry(stdpath.Join(parentDir, epName))
+	if !ok {
+		return nil, false, nil
+	}
+	// 真实同名 nfo 优先：真实目录下存在同名 nfo 时返回其包装对象
+	realNFO := stdpath.Join(stdpath.Dir(e.path), base+".nfo")
+	if obj, err := op.Get(ctx, remoteStorage, stdpath.Join(remoteActualPath, realNFO)); err == nil {
+		return &wrappedObj{Obj: obj, path: realNFO}, true, nil
+	}
+	setting, err := d.resolveSetting(stdpath.Dir(e.path))
+	if err != nil {
+		return nil, false, err
+	}
+	if setting == nil {
+		setting = &model.EmbyDirSetting{}
+	}
+	content, err := buildEpisodeNFO(strings.TrimSuffix(e.real.GetName(), stdpath.Ext(e.real.GetName())), setting)
+	if err != nil {
+		return nil, false, err
+	}
+	return d.newVirtualNFO(path, content, e.real.ModTime()), true, nil
+}
+
+// resolveVirtualPath 在父目录处于某部电视剧内时按虚拟路径反查：
+// 文件（剧集/提取的非视频）命中索引条目；季别名目录命中真实季文件夹。
+// 返回 (包装对象, true, nil)：命中；(nil, false, nil)：非 TV 树或未命中。
+func (d *EmbyWrapper) resolveVirtualPath(ctx context.Context, path string) (model.Obj, bool, error) {
 	parentDir := stdpath.Dir(path)
 	rootPath, _, ok, err := d.tvShowAncestor(parentDir)
 	if err != nil {
@@ -259,11 +296,23 @@ func (d *EmbyWrapper) resolveEpisodePath(ctx context.Context, path string) (mode
 	if err != nil {
 		return nil, false, err
 	}
-	real := idx.byPath[strings.ToLower(stdpath.Join(parentDir, stdpath.Base(path)))]
-	if real == nil {
-		return nil, false, nil
+	// 文件条目（剧集或提取的非视频）
+	if e, ok := idx.entry(path); ok {
+		return newVirtualObj(e.real, e.name, e.path), true, nil
 	}
-	return newVirtualEpisode(real, stdpath.Base(path), stdpath.Join(parentDir, real.GetName())), true, nil
+	// 季别名目录
+	if seasonReal, ok := idx.seasonRealOf(path); ok {
+		remoteStorage, remoteActualPath, err := d.remote()
+		if err != nil {
+			return nil, false, err
+		}
+		obj, err := op.Get(ctx, remoteStorage, stdpath.Join(remoteActualPath, seasonReal))
+		if err != nil {
+			return nil, false, err
+		}
+		return newVirtualObj(obj, stdpath.Base(path), seasonReal), true, nil
+	}
+	return nil, false, nil
 }
 
 // newVirtualNFO 构造虚拟 nfo 对象。
@@ -363,7 +412,7 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Name:    "tv_show",
 			Type:    conf.TypeBool,
 			Default: "false",
-			Help:    "标记该文件夹为电视剧：根目录直接文件为第 1 季，直接子文件夹按创建时间+名称排序分配季号（保留原名并生成 season.nfo 供 Emby 识别）；季内文件按创建时间编号为 S{季}E{集}.mp4（纯编号，原文件名经剧集 nfo 的 title 保留）；生成剧集 nfo（保留演员、无简介）与 tvshow.nfo（剧名/简介）；本地生效不继承",
+			Help:    "标记该文件夹为电视剧：根目录直接文件为第 1 季，直接子文件夹按创建时间+名称排序分配季号并虚拟映射为 S{季} 目录（原文件夹名不再展示，季内全部文件提取到该目录，视频编号为 S{季}E{集}.mp4、非视频保留原名）；生成剧集 nfo（保留演员、无简介）、tvshow.nfo（剧名/简介）与 season.nfo（双保险）；本地生效不继承",
 		},
 		{
 			Name:    "tv_show_name",

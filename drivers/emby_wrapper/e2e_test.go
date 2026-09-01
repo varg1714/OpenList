@@ -77,7 +77,7 @@ func TestEndToEndTVShowThroughFS(t *testing.T) {
 			episodeFound = true
 		case "tvshow.nfo":
 			tvshowFound = true
-		case "2024年":
+		case "S02":
 			seasonFound = true
 		}
 	}
@@ -85,7 +85,7 @@ func TestEndToEndTVShowThroughFS(t *testing.T) {
 		t.Fatalf("fs list must contain episode/tvshow.nfo/season folder, got %v", names(objs))
 	}
 	// 季文件夹：虚拟剧集 + season.nfo
-	objs, err = fs.List(context.Background(), "/ew/Movies/2024年", &fs.ListArgs{})
+	objs, err = fs.List(context.Background(), "/ew/Movies/S02", &fs.ListArgs{})
 	if err != nil {
 		t.Fatalf("fs list season: %+v", err)
 	}
@@ -93,7 +93,7 @@ func TestEndToEndTVShowThroughFS(t *testing.T) {
 		t.Fatalf("season folder listing mismatch, got %v", names(objs))
 	}
 	// 播放链路：季内虚拟剧集路径 → 还原真实文件内容
-	link, _, err := fs.Link(context.Background(), "/ew/Movies/2024年/S02E01.mp4", model.LinkArgs{})
+	link, _, err := fs.Link(context.Background(), "/ew/Movies/S02/S02E01.mp4", model.LinkArgs{})
 	if err != nil {
 		t.Fatalf("fs link episode: %+v", err)
 	}
