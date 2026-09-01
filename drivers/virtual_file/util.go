@@ -1,6 +1,7 @@
 package virtual_file
 
 import (
+	"bytes"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -578,10 +579,27 @@ func mediaToXML(m *Media) ([]byte, error) {
 	return x, nil
 }
 
-// RenderMediaNFO 将 Media 结构渲染为完整的 NFO XML 文档（含 XML 头）。
-// 供其他驱动（如 emby_wrapper）构建内存 nfo，保证与 javdb 落盘 nfo 格式一致。
+// RenderNFO 将 Media 结构渲染为指定根元素（movie/tvshow/episodedetails）的 NFO XML 文档（含 XML 头）。
+// 拷贝语义：不突变入参。
+// 注意：不能通过修改 copy.XMLName 来切换根元素——encoding/xml 中 XMLName 字段的
+// 结构体标签（xml:"movie"）优先级高于字段值，故改用 EncodeElement 的 start 参数覆盖根元素。
+func RenderNFO(root string, m *Media) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := xml.NewEncoder(&buf)
+	enc.Indent("", "  ")
+	if err := enc.EncodeElement(m, xml.StartElement{Name: xml.Name{Local: root}}); err != nil {
+		return nil, err
+	}
+	if err := enc.Flush(); err != nil {
+		return nil, err
+	}
+	return append([]byte(xml.Header), buf.Bytes()...), nil
+}
+
+// RenderMediaNFO 渲染 <movie> 根元素的 NFO XML 文档（与 javdb 落盘 nfo 格式一致）。
+// 供其他驱动（如 emby_wrapper）构建内存 nfo。
 func RenderMediaNFO(m *Media) ([]byte, error) {
-	return mediaToXML(m)
+	return RenderNFO("movie", m)
 }
 
 func buildVirtualFiles(virtualFiles []model.VirtualFile, dir model.Obj) []model.Obj {
