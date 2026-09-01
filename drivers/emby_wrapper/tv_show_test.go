@@ -81,7 +81,7 @@ func TestTVShowSeasonsAndRootEpisodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list root: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"2024年", "2025年", "AAA-S01E01.mkv", "AAA-S01E01.nfo", "tvshow.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"2024年", "2025年", "S01E01.mkv", "S01E01.nfo", "tvshow.nfo"}) {
 		t.Errorf("root listing mismatch, got %v", got)
 	}
 	// 季 2（2024年）：A1 先建 → E01；含 season.nfo
@@ -89,7 +89,7 @@ func TestTVShowSeasonsAndRootEpisodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 2024年: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S02E01.mp4", "A1-S02E01.nfo", "A2-S02E02.mp4", "A2-S02E02.nfo", "season.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E01.mp4", "S02E01.nfo", "S02E02.mp4", "S02E02.nfo", "season.nfo"}) {
 		t.Errorf("season 2 listing mismatch, got %v", got)
 	}
 	// 季 3（2025年）
@@ -97,7 +97,7 @@ func TestTVShowSeasonsAndRootEpisodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 2025年: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"B1-S03E01.mp4", "B1-S03E01.nfo", "season.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S03E01.mp4", "S03E01.nfo", "season.nfo"}) {
 		t.Errorf("season 3 listing mismatch, got %v", got)
 	}
 }
@@ -119,7 +119,7 @@ func TestTVShowNoRootVideos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S01E01.mp4", "A1-S01E01.nfo", "season.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S01E01.mp4", "S01E01.nfo", "season.nfo"}) {
 		t.Errorf("no-root-videos season must start at 1, got %v", got)
 	}
 }
@@ -145,7 +145,7 @@ func TestTVShowNestedFolderInSeason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 专题: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"D-S02E02.mp4", "D-S02E02.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E02.mp4", "S02E02.nfo"}) {
 		t.Errorf("nested folder episodes mismatch, got %v", got)
 	}
 	// 2024年 自身列表：C 在根、专题文件夹原样（无 season.nfo——只有直接子文件夹是季）
@@ -153,7 +153,7 @@ func TestTVShowNestedFolderInSeason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 2024年: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"C-S02E01.mp4", "C-S02E01.nfo", "season.nfo", "专题"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E01.mp4", "S02E01.nfo", "season.nfo", "专题"}) {
 		t.Errorf("season listing with nested dir mismatch, got %v", got)
 	}
 }
@@ -187,7 +187,7 @@ func TestTVShowNFOsContent(t *testing.T) {
 		t.Fatalf("write A1: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true,"tv_show_name":"测试剧","plot":"剧集介绍","actors":"演员A"}`)
-	ep := readNFOLink(t, d, "/Movies/2024年/A1-S02E01.nfo")
+	ep := readNFOLink(t, d, "/Movies/2024年/S02E01.nfo")
 	if !strings.Contains(ep, "<episodedetails>") {
 		t.Errorf("episode nfo must use episodedetails root, got %s", ep)
 	}
@@ -233,7 +233,7 @@ func TestTVShowSkipsNumbered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S02E01.mp4", "A1-S02E01.nfo", "Show.S01E03.mkv", "Show.S01E03.nfo", "season.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E01.mp4", "S02E01.nfo", "Show.S01E03.mkv", "Show.S01E03.nfo", "season.nfo"}) {
 		t.Errorf("numbered file must keep name without consuming index, got %v", got)
 	}
 }
@@ -266,7 +266,7 @@ func TestGetAndLinkSeasonEpisode(t *testing.T) {
 		t.Fatalf("write A1: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
-	if got := readNFOLink(t, d, "/Movies/2024年/A1-S02E01.mp4"); got != "a1" {
+	if got := readNFOLink(t, d, "/Movies/2024年/S02E01.mp4"); got != "a1" {
 		t.Errorf("episode must play real file content, got %q", got)
 	}
 }
@@ -293,7 +293,7 @@ func TestTVShowNestedTVSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 内嵌剧: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"X-S01E01.mp4", "X-S01E01.nfo", "tvshow.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S01E01.mp4", "S01E01.nfo", "tvshow.nfo"}) {
 		t.Errorf("nested tv show must be independent, got %v", got)
 	}
 	// 父剧的季 2：X 不参与编号
@@ -301,7 +301,7 @@ func TestTVShowNestedTVSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 2024年: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S02E01.mp4", "A1-S02E01.nfo", "season.nfo", "内嵌剧"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E01.mp4", "S02E01.nfo", "season.nfo", "内嵌剧"}) {
 		t.Errorf("nested tv must be skipped by parent season, got %v", got)
 	}
 }
@@ -310,13 +310,13 @@ func TestTVShowNestedTVSkipped(t *testing.T) {
 func TestGetVirtualEpisodeNotFound(t *testing.T) {
 	d := setup(t)
 	markTVShow(t, d, `{"tv_show":true}`)
-	if _, err := d.Get(context.Background(), "/Movies/NOPE-S01E01.mp4"); err == nil {
+	if _, err := d.Get(context.Background(), "/Movies/S99E99.mp4"); err == nil {
 		t.Fatal("unmapped virtual episode must not be served")
 	}
 }
 
 // TestGetVirtualEpisodeWrongDirectory：虚拟名必须限定在所属目录内解析——
-// 根目录文件 AAA.mkv 的虚拟名 AAA-S01E01.mkv 在其他季目录下请求必须 404。
+// 根目录文件 AAA.mkv 的虚拟名 S01E01.mkv 在其他季目录下请求必须 404。
 func TestGetVirtualEpisodeWrongDirectory(t *testing.T) {
 	d := setup(t)
 	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
@@ -327,16 +327,16 @@ func TestGetVirtualEpisodeWrongDirectory(t *testing.T) {
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
 	// AAA.mkv 位于剧集根（季 1），其虚拟名在季 2 目录下不可解析
-	if _, err := d.Get(context.Background(), "/Movies/2024年/AAA-S01E01.mkv"); err == nil {
+	if _, err := d.Get(context.Background(), "/Movies/2024年/S01E01.mkv"); err == nil {
 		t.Fatal("virtual episode under the wrong directory must not be served")
 	}
-	if _, err := d.Get(context.Background(), "/Movies/2024年/AAA-S01E01.nfo"); err == nil {
+	if _, err := d.Get(context.Background(), "/Movies/2024年/S01E01.nfo"); err == nil {
 		t.Fatal("virtual episode nfo under the wrong directory must not be served")
 	}
 }
 
 // TestTVShowDuplicateVirtualNameAcrossSeasons：不同季生成相同虚拟名（A1.mp4 →
-// A1-S02E01.mp4 与真实编号文件 A1-S02E01.mp4）时，播放与 nfo 都必须限定在请求目录内。
+// S02E01.mp4 与真实编号文件 S02E01.mp4）时，播放与 nfo 都必须限定在请求目录内。
 func TestTVShowDuplicateVirtualNameAcrossSeasons(t *testing.T) {
 	d := setup(t)
 	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
@@ -348,21 +348,21 @@ func TestTVShowDuplicateVirtualNameAcrossSeasons(t *testing.T) {
 	if err := writeDirOrdered(t, "/Movies/2025年"); err != nil {
 		t.Fatalf("mkdir 2025年: %v", err)
 	}
-	// 真实编号文件保留原名，与季 2 的虚拟名相同
-	if err := writeEpisodeFile(t, "/Movies/2025年/A1-S02E01.mp4", "real"); err != nil {
+	// 真实编号文件保留原名，与季 2 的虚拟名相同（重名跨季冲突）
+	if err := writeEpisodeFile(t, "/Movies/2025年/S02E01.mp4", "real"); err != nil {
 		t.Fatalf("write numbered: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
 	// 季 2 的虚拟剧集播放它自己的文件，而非季 3 的同名真实文件
-	if got := readNFOLink(t, d, "/Movies/2024年/A1-S02E01.mp4"); got != "a1" {
+	if got := readNFOLink(t, d, "/Movies/2024年/S02E01.mp4"); got != "a1" {
 		t.Errorf("season 2 virtual episode must play its own file, got %q", got)
 	}
 	// 季 2 的剧集 nfo 标题来自 A1.mp4，而非季 3 的文件名
-	if got := readNFOLink(t, d, "/Movies/2024年/A1-S02E01.nfo"); !strings.Contains(got, "<![CDATA[A1]]>") {
+	if got := readNFOLink(t, d, "/Movies/2024年/S02E01.nfo"); !strings.Contains(got, "<![CDATA[A1]]>") {
 		t.Errorf("season 2 episode nfo title must come from A1.mp4, got %s", got)
 	}
 	// 季 3 的真实文件直接播放
-	if got := readNFOLink(t, d, "/Movies/2025年/A1-S02E01.mp4"); got != "real" {
+	if got := readNFOLink(t, d, "/Movies/2025年/S02E01.mp4"); got != "real" {
 		t.Errorf("real numbered file must play directly, got %q", got)
 	}
 	// List 路径：withTVShowNFOs 为季 2 列表构建的剧集 nfo 内容，标题必须来自 A1.mp4
@@ -372,13 +372,13 @@ func TestTVShowDuplicateVirtualNameAcrossSeasons(t *testing.T) {
 	}
 	var epNFO model.Obj
 	for _, o := range objs {
-		if o.GetName() == "A1-S02E01.nfo" {
+		if o.GetName() == "S02E01.nfo" {
 			epNFO = o
 			break
 		}
 	}
 	if epNFO == nil {
-		t.Fatal("A1-S02E01.nfo must appear in season 2 listing")
+		t.Fatal("S02E01.nfo must appear in season 2 listing")
 	}
 	link, err := d.Link(context.Background(), epNFO, model.LinkArgs{})
 	if err != nil {
@@ -419,7 +419,7 @@ func TestTVShowSubfoldersDynamicInheritance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 剧1: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S01E01.mp4", "A1-S01E01.nfo", "tvshow.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S01E01.mp4", "S01E01.nfo", "tvshow.nfo"}) {
 		t.Errorf("subfolder must auto-become a tv show, got %v", got)
 	}
 	show := readNFOLink(t, d, "/Movies/演员/剧1/tvshow.nfo")
@@ -445,7 +445,7 @@ func TestTVShowSubfoldersDynamicInheritance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 剧2: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"B1-S01E01.mp4", "B1-S01E01.nfo", "tvshow.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S01E01.mp4", "S01E01.nfo", "tvshow.nfo"}) {
 		t.Errorf("new subfolder must auto-become a show, got %v", got)
 	}
 }
@@ -474,7 +474,7 @@ func TestTVShowSubfoldersExcludedFromSeasons(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list 剧1: %+v", err)
 	}
-	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"A1-S01E01.mp4", "A1-S01E01.nfo", "tvshow.nfo"}) {
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S01E01.mp4", "S01E01.nfo", "tvshow.nfo"}) {
 		t.Errorf("剧1 must be its own show, got %v", got)
 	}
 }

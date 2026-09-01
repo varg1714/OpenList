@@ -23,10 +23,13 @@ func isNumberedEpisode(fileName string) bool {
 	return episodePattern.MatchString(fileName)
 }
 
-// episodeVirtualName 为未编号文件生成虚拟剧集名：原基础名-S{季号}E{集号}+原扩展名。
+// episodeVirtualName 为未编号文件生成虚拟剧集名：S{季号}E{集号}+原扩展名。
+// 不带原文件名前缀：Emby 的 EpisodePathParser 会把 SxxExx 前的任意前缀捕获为
+// seriesname（剧集名），前缀与剧名不符时会导致剧集归属错乱（观察到 xx1-S01E01.mp4
+// 被识别为名为 xx1 的剧）；原文件名经剧集 nfo 的 title 保留（见 buildEpisodeNFO）。
 func episodeVirtualName(fileName string, seasonNo, epNo int) string {
 	ext := stdpath.Ext(fileName)
-	return fmt.Sprintf("%s-S%02dE%02d%s", strings.TrimSuffix(fileName, ext), seasonNo, epNo, ext)
+	return fmt.Sprintf("S%02dE%02d%s", seasonNo, epNo, ext)
 }
 
 // byCreateTimeName 比较两个对象的排序键：创建时间升序（CreateTime 为零时回退

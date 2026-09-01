@@ -38,10 +38,10 @@ func TestEpisodeVirtualName(t *testing.T) {
 		epNo     int
 		want     string
 	}{
-		{"AAA.mkv", 1, 1, "AAA-S01E01.mkv"},
-		{"B.mp4", 2, 5, "B-S02E05.mp4"},
-		{"C", 12, 3, "C-S12E03"},
-		{"D.mkv", 1, 100, "D-S01E100.mkv"},
+		{"AAA.mkv", 1, 1, "S01E01.mkv"},
+		{"B.mp4", 2, 5, "S02E05.mp4"},
+		{"C", 12, 3, "S12E03"},
+		{"D.mkv", 1, 100, "S01E100.mkv"},
 	}
 	for _, c := range cases {
 		if got := episodeVirtualName(c.fileName, c.seasonNo, c.epNo); got != c.want {

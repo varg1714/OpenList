@@ -363,7 +363,7 @@ func (d *EmbyWrapper) MkdirConfig() []driver.Item {
 			Name:    "tv_show",
 			Type:    conf.TypeBool,
 			Default: "false",
-			Help:    "标记该文件夹为电视剧：根目录直接文件为第 1 季，直接子文件夹按创建时间+名称排序分配季号（保留原名并生成 season.nfo 供 Emby 识别）；季内文件按创建时间编号为 原基础名-S{季}E{集}.mp4；生成剧集 nfo（保留演员、无简介）与 tvshow.nfo（剧名/简介）；本地生效不继承",
+			Help:    "标记该文件夹为电视剧：根目录直接文件为第 1 季，直接子文件夹按创建时间+名称排序分配季号（保留原名并生成 season.nfo 供 Emby 识别）；季内文件按创建时间编号为 S{季}E{集}.mp4（纯编号，原文件名经剧集 nfo 的 title 保留）；生成剧集 nfo（保留演员、无简介）与 tvshow.nfo（剧名/简介）；本地生效不继承",
 		},
 		{
 			Name:    "tv_show_name",
