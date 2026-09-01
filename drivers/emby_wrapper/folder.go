@@ -46,3 +46,19 @@ func wrapObj(obj model.Obj, path, actors string, useNameAsActor bool, plot strin
 		AppendFileNameToPlot: appendFileNameToPlot,
 	}}
 }
+
+// virtualEpisode 虚拟剧集对象：GetName 返回虚拟名（如 A-S02E01.mp4），
+// GetPath 返回下游真实路径，Link 无需拦截即可转发真实文件。
+// 不实现 ObjUnwrap：解包会泄露下游真实路径。
+type virtualEpisode struct {
+	model.Obj
+	name string
+	path string
+}
+
+func (v *virtualEpisode) GetName() string { return v.name }
+func (v *virtualEpisode) GetPath() string { return v.path }
+
+func newVirtualEpisode(real model.Obj, name, path string) model.Obj {
+	return &virtualEpisode{Obj: real, name: name, path: path}
+}
