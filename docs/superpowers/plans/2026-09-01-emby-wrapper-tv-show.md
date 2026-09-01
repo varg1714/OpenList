@@ -20,6 +20,16 @@
 9. 剧集命名格式用 `S{NN}E{MM}` 纯编号（Emby 官方文档+解析器确认 `-E01` 不被识别；`anything_s01e02` 是受支持模式）。**2026-09-02 修订**：早期版本为 `原基础名-S{NN}E{MM}`，实测 Emby 的 EpisodePathParser 会把 `SxxExx` 前的任意前缀捕获为 seriesname（剧集名），前缀与剧名不符时剧集归属错乱（`xx1-S01E01.mp4` 被识别为名为 xx1 的剧）；改为纯编号后文件名不含可解析的剧名，归属完全来自文件夹层级，原文件名经剧集 nfo 的 `<title>`（=原文件名去扩展名）保留
 10. **不需要** TV 边界阻断 plot/append 继承（早期设计的遗留需求，方案 B 下 TV 树内任何目录都不再走影片模式 nfo 生成，无泄漏场景）
 
+## 2026-09-02 结构修订总览（季别名映射 + 扁平化）
+
+> 本次修订改变了展示结构，**下方 Task 2-4 的代码块与测试快照为修订前的历史形式**（`AAA-S01E01.mkv` 前缀名、`<seasonname>`、原地展示嵌套文件夹），实现以本总览 + Spec（含修订标注）+ 实际代码为准。
+
+- **季目录虚拟映射**：直接子文件夹按创建时间+名称排序分配季号后，展示层与 Get 路径统一走 `S{季号}` 别名目录（`tvIndex.seasonAlias`），映射回真实季文件夹；**原文件夹名不再展示**。Emby 原生识别 `S{NN}` 目录为季，文件名 `S{NN}E{MM}` 中的季号与目录一致（双保险）
+- **扁平化**：季内文件递归收集（`gatherFiles`），全部条目展示于季别名目录下——视频编号 `S{NN}E{MM}.mp4`（纯编号）、已编号视频与非视频保留原名；**嵌套子文件夹（非 TV）不再展示**，其文件提取进季；嵌套 TV 文件夹原样保留（独立成剧），并支持通过季别名路径导航（`tvContext`/`resolveVirtualPath`/`tvNFOForPath` 的 `rewriteAliasPrefix` 重写为真实季路径后重新解析）
+- **season.nfo**：仅 `<seasonnumber>`（省略 seasonname，见 Spec 7 修订）；真实季目录下同名 season.nfo 优先转发下游
+- **路径解析**：`resolveVirtualPath`（文件条目 → 季别名目录 → 别名前缀重写递归）是 Get 的虚拟→真实唯一映射点；`tvNFOForPath` 处理 tvshow/season/剧集 nfo 并保持真实同名 nfo 优先
+- **确定性**：季视图条目按创建时间+展示名升序排序（`byVirtual` 为 map，遍历无序，需显式排序）；索引构建失败降级为警告+原始列表（不整体失败）
+
 ## Global Constraints
 
 - Go 工具链一律用 `/Library/Go/sdk/go1.25.4/bin/go`

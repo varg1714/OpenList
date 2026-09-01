@@ -240,7 +240,8 @@ func TestTVShowRealSeasonNFOFileWins(t *testing.T) {
 	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
 		t.Fatalf("write A1: %v", err)
 	}
-	if err := writeDownstreamFile(t, "/Movies/S02/season.nfo", "real-content"); err != nil {
+	// 真实季目录下的同名 season.nfo 优先于虚拟生成（别名路径请求应读到真实内容）
+	if err := writeDownstreamFile(t, "/Movies/2024年/season.nfo", "real-content"); err != nil {
 		t.Fatalf("write real season.nfo: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)
@@ -297,6 +298,20 @@ func TestTVShowNestedTVSkipped(t *testing.T) {
 	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E01.mp4", "S02E01.nfo", "season.nfo", "内嵌剧"}) {
 		t.Errorf("nested tv must be skipped by parent season, got %v", got)
 	}
+	// 通过季别名导航进嵌套 TV（Emby 实际扫描路径）：独立成剧，文件可 Get/Link
+	objs, err = d.List(context.Background(), &model.Object{Name: "内嵌剧", Path: "/Movies/S02/内嵌剧", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list nested tv via alias: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S01E01.mp4", "S01E01.nfo", "tvshow.nfo"}) {
+		t.Errorf("nested tv via alias must be independent, got %v", got)
+	}
+	if got := readNFOLink(t, d, "/Movies/S02/内嵌剧/S01E01.mp4"); got != "x" {
+		t.Errorf("nested episode via alias must link real file, got %q", got)
+	}
+	if got := readNFOLink(t, d, "/Movies/S02/内嵌剧/tvshow.nfo"); !strings.Contains(got, "内嵌剧名") {
+		t.Errorf("nested tvshow.nfo via alias must carry show name, got %s", got)
+	}
 }
 
 // TestGetVirtualEpisodeNotFound：无匹配的虚拟剧集路径保持 404。
@@ -342,7 +357,7 @@ func TestTVShowDuplicateVirtualNameAcrossSeasons(t *testing.T) {
 		t.Fatalf("mkdir 2025年: %v", err)
 	}
 	// 真实编号文件保留原名，与季 2 的虚拟名相同（重名跨季冲突）
-	if err := writeEpisodeFile(t, "/Movies/S03/S02E01.mp4", "real"); err != nil {
+	if err := writeEpisodeFile(t, "/Movies/2025年/S02E01.mp4", "real"); err != nil {
 		t.Fatalf("write numbered: %v", err)
 	}
 	markTVShow(t, d, `{"tv_show":true}`)

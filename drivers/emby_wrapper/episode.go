@@ -80,7 +80,11 @@ func (idx *tvIndex) addEpisode(real model.Obj, realPath, virtualDir, virtualName
 	key := strings.ToLower(virtualPath)
 	if existing, ok := idx.byVirtual[key]; ok {
 		if realNamed(existing) {
-			return // 已有真实同名条目占用该虚拟路径：不再覆盖
+			// 已有真实同名条目占用该虚拟路径（扁平化后不同子目录的同名文件碰撞）：
+			// 不覆盖，但记录警告——第二个文件在列表中不可见，Get 返回第一个
+			utils.Log.Warnf("emby wrapper: %s collides with %s at %s, dropped from season view",
+				realPath, existing.path, virtualPath)
+			return
 		}
 		if !realNamed(tvEntry{real: real, name: virtualName}) {
 			return // 两个生成名冲突（理论不可能：季号+集号唯一）
@@ -112,6 +116,20 @@ func (idx *tvIndex) seasonRealOf(aliasOrReal string) (string, bool) {
 	for realDir, alias := range idx.seasonAlias {
 		if utils.PathEqual(alias, aliasOrReal) {
 			return realDir, true
+		}
+	}
+	return "", false
+}
+
+// rewriteAliasPrefix 若 path 以某季别名目录开头（如 /Movies/S02/内嵌剧），
+// 将别名段重写为真实季目录（/Movies/2024年/内嵌剧）。
+// 仅处理严格前缀（path 本身是别名目录的情况由 seasonRealOf 处理）。
+func (idx *tvIndex) rewriteAliasPrefix(path string) (string, bool) {
+	lower := strings.ToLower(path)
+	for realDir, alias := range idx.seasonAlias {
+		prefix := strings.ToLower(alias) + "/"
+		if strings.HasPrefix(lower, prefix) {
+			return stdpath.Join(realDir, path[len(alias)+1:]), true
 		}
 	}
 	return "", false
@@ -188,6 +206,12 @@ func (d *EmbyWrapper) buildTVIndex(ctx context.Context, rootPath string) (*tvInd
 		idx.seasonAlias[dirPath] = alias
 		if err := d.collectSeasonVideos(ctx, idx, remoteStorage, remoteActualPath, dirPath, alias, seasonNo); err != nil {
 			return nil, err
+		}
+	}
+	// 空剧（无任何文件）时以根目录自身时间为兜底，避免 nfo Modified 为零值
+	if idx.last == nil {
+		if obj, err := op.Get(ctx, remoteStorage, stdpath.Join(remoteActualPath, rootPath)); err == nil {
+			idx.last = obj
 		}
 	}
 	return idx, nil
@@ -287,7 +311,11 @@ func (d *EmbyWrapper) tvContext(ctx context.Context, path string) (*tvPathContex
 		pc.isSeason = true
 		return pc, idx, nil
 	}
-	// 其他（季内嵌套真实目录等历史路径）：原样透传
+	// 其他（嵌套真实目录等历史路径）：季别名前缀（如 /Movies/S02/内嵌剧）重写为
+	// 真实季目录后重新解析——嵌套 TV 目录在真实路径上命中自身标记，独立成剧
+	if rewritten, ok := idx.rewriteAliasPrefix(path); ok {
+		return d.tvContext(ctx, rewritten)
+	}
 	pc.realDir, pc.viewDir = path, path
 	return pc, idx, nil
 }
@@ -437,6 +465,15 @@ func (d *EmbyWrapper) emitTVSeasonView(pc *tvPathContext, idx *tvIndex, setting 
 		}
 	}
 	addedNFO := map[string]bool{}
+	// 确定性排序：创建时间升序，同时间按虚拟展示名升序（Spec 2；byVirtual 是 map，遍历无序）
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		at, bt := a.real.CreateTime(), b.real.CreateTime()
+		if !at.Equal(bt) {
+			return at.Before(bt)
+		}
+		return a.name < b.name
+	})
 	for _, e := range entries {
 		key := strings.ToLower(stdpath.Join(pc.viewDir, e.name))
 		if claimed[key] && !realNamed(e) {

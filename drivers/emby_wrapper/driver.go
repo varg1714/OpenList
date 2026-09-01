@@ -87,7 +87,9 @@ func (d *EmbyWrapper) List(ctx context.Context, dir model.Obj, args model.ListAr
 	}
 	pc, idx, err := d.tvContext(ctx, dir.GetPath())
 	if err != nil {
-		return nil, err
+		// 索引构建失败降级（基础代码行为：警告 + 原始列表），不整体失败
+		utils.Log.Warnf("emby wrapper: tv index for %s failed, plain listing: %+v", dir.GetPath(), err)
+		pc, idx = nil, nil
 	}
 	if pc == nil {
 		// 非 TV 树：原流程
@@ -217,6 +219,18 @@ func (d *EmbyWrapper) tvNFOForPath(ctx context.Context, path, parentDir, base, r
 	if err != nil {
 		return nil, false, err
 	}
+	// 季别名前缀（如 /Movies/S02/内嵌剧/tvshow.nfo）：重写为真实路径后重新解析——
+	// 嵌套 TV 目录在真实路径上命中自身标记（独立成剧）
+	if rewritten, ok := idx.rewriteAliasPrefix(parentDir); ok {
+		realRoot, realShow, isTV, err := d.tvShowAncestor(rewritten)
+		if err != nil {
+			return nil, false, err
+		}
+		if !isTV {
+			return nil, false, nil
+		}
+		return d.tvNFOForPath(ctx, stdpath.Join(rewritten, base+".nfo"), rewritten, base, realRoot, realShow)
+	}
 	remoteStorage, remoteActualPath, err := d.remote()
 	if err != nil {
 		return nil, false, err
@@ -259,6 +273,10 @@ func (d *EmbyWrapper) tvNFOForPath(ctx context.Context, path, parentDir, base, r
 	}
 	e, ok := idx.entry(stdpath.Join(parentDir, epName))
 	if !ok {
+		return nil, false, nil
+	}
+	// 仅视频条目生成剧集 nfo（非视频文件请求同名 nfo 交给下游）
+	if _, ok := d.supportSuffix[utils.Ext(e.real.GetName())]; !ok {
 		return nil, false, nil
 	}
 	// 真实同名 nfo 优先：真实目录下存在同名 nfo 时返回其包装对象
@@ -311,6 +329,11 @@ func (d *EmbyWrapper) resolveVirtualPath(ctx context.Context, path string) (mode
 			return nil, false, err
 		}
 		return newVirtualObj(obj, stdpath.Base(path), seasonReal), true, nil
+	}
+	// 季别名前缀下的嵌套路径（如 /Movies/S02/内嵌剧/...）：重写为真实路径后
+	// 重新解析——嵌套 TV 独立成剧，其内部文件/目录走自身索引
+	if rewritten, ok := idx.rewriteAliasPrefix(path); ok {
+		return d.resolveVirtualPath(ctx, rewritten)
 	}
 	return nil, false, nil
 }
