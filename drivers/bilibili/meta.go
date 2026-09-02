@@ -5,11 +5,9 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/go-resty/resty/v2"
 	"golang.org/x/time/rate"
-	// TODO(Task 6): import op and re-enable init() below once
-	// Bilibili implements the full driver.Driver interface (List/Link).
-	// "github.com/OpenListTeam/OpenList/v4/internal/op"
 )
 
 type Addition struct {
@@ -53,10 +51,10 @@ func (d *Bilibili) GetAddition() driver.Additional {
 	return &d.Addition
 }
 
-// TODO(Task 6): enable registration once Bilibili implements driver.Driver.
-//
-// func init() {
-// 	op.RegisterDriver(func() driver.Driver {
-// 		return &Bilibili{}
-// 	})
-// }
+// 注册：List/Get + Link 桩（Task 7 替换）已满足 driver.Driver；
+// Init/Drop 桩见 driver.go（Task 7 替换为真实实现）。
+func init() {
+	op.RegisterDriver(func() driver.Driver {
+		return &Bilibili{}
+	})
+}
