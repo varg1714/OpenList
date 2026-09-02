@@ -92,8 +92,8 @@ func (idx *tvIndex) addEpisode(real model.Obj, realPath, virtualDir, virtualName
 	realEntry := tvEntry{real: real, name: virtualName}
 	switch {
 	case realNamed(existing) && realNamed(realEntry):
-		// 两个真实同名条目：后者映射消解名
-		idx.addDisambiguated(real, realPath, virtualDir, virtualName, existing.path)
+		// 两个真实同名条目：后者映射消解名（正常预期行为，无日志）
+		idx.addDisambiguated(real, realPath, virtualDir, virtualName)
 	case realNamed(existing):
 		// 生成名被真实同名条目占用（真实文件优先，生成条目不展示）
 		utils.Log.Debugf("emby wrapper: generated %s shadowed by real file %s", virtualPath, existing.path)
@@ -108,7 +108,7 @@ func (idx *tvIndex) addEpisode(real model.Obj, realPath, virtualDir, virtualName
 }
 
 // addDisambiguated 为冲突的真实同名条目登记消解名（原名-2.扩展名，仍冲突则继续递增）。
-func (idx *tvIndex) addDisambiguated(real model.Obj, realPath, virtualDir, virtualName, conflictPath string) {
+func (idx *tvIndex) addDisambiguated(real model.Obj, realPath, virtualDir, virtualName string) {
 	base := strings.TrimSuffix(virtualName, stdpath.Ext(virtualName))
 	ext := stdpath.Ext(virtualName)
 	for i := 2; ; i++ {
@@ -117,8 +117,6 @@ func (idx *tvIndex) addDisambiguated(real model.Obj, realPath, virtualDir, virtu
 		if _, dup := idx.byVirtual[strings.ToLower(virtualPath)]; dup {
 			continue
 		}
-		utils.Log.Warnf("emby wrapper: %s collides with %s at %s, mapped to %s",
-			realPath, conflictPath, stdpath.Join(virtualDir, virtualName), candidate)
 		idx.setEntry(real, realPath, virtualPath, candidate)
 		return
 	}
