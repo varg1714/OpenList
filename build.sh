@@ -186,32 +186,50 @@ BuildDockerMultiplatform() {
   docker_lflags="--extldflags '-static -fpic' $ldflags"
   export CGO_ENABLED=1
 
-  OS_ARCHES=(linux-amd64 linux-arm64 linux-386 linux-riscv64 linux-ppc64le linux-loong64) ## Disable linux-s390x builds
-  CGO_ARGS=(x86_64-linux-musl-gcc aarch64-linux-musl-gcc i486-linux-musl-gcc riscv64-linux-musl-gcc powerpc64le-linux-musl-gcc loongarch64-linux-musl-gcc) ## Disable s390x-linux-musl-gcc builds
-  for i in "${!OS_ARCHES[@]}"; do
-    os_arch=${OS_ARCHES[$i]}
-    cgo_cc=${CGO_ARGS[$i]}
-    os=${os_arch%%-*}
-    arch=${os_arch##*-}
-    export GOOS=$os
-    export GOARCH=$arch
-    export CC=${cgo_cc}
-    echo "building for $os_arch"
-    go build -o build/$os/$arch/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
-  done
+  ## Platform list shared with .github/workflows/test_docker.yml and release_docker.yml:
+  ## there RELEASE_PLATFORMS is set to `${{ vars.RELEASE_PLATFORMS || '<default below>' }}`,
+  ## so overriding the repository variable narrows both docker images and binaries.
+  ## linux/s390x is temporarily disabled (no musl compiler available).
+  local default_platforms="linux/amd64,linux/arm64,linux/arm/v7,linux/386,linux/arm/v6,linux/ppc64le,linux/riscv64,linux/loong64"
+  local platforms="$RELEASE_PLATFORMS"
+  if [ -z "$platforms" ]; then
+    platforms="$default_platforms"
+  fi
 
-  DOCKER_ARM_ARCHES=(linux-arm/v6 linux-arm/v7)
-  CGO_ARGS=(armv6-linux-musleabihf-gcc armv7l-linux-musleabihf-gcc)
-  GO_ARM=(6 7)
-  export GOOS=linux
-  export GOARCH=arm
-  for i in "${!DOCKER_ARM_ARCHES[@]}"; do
-    docker_arch=${DOCKER_ARM_ARCHES[$i]}
-    cgo_cc=${CGO_ARGS[$i]}
-    export GOARM=${GO_ARM[$i]}
-    export CC=${cgo_cc}
-    echo "building for $docker_arch"
-    go build -o build/${docker_arch%%-*}/${docker_arch##*-}/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
+  local platform arch goarm cc platform_list
+  IFS=',' read -r -a platform_list <<< "$platforms"
+  for platform in "${platform_list[@]}"; do
+    platform="${platform//[[:space:]]/}"
+    [ -z "$platform" ] && continue
+
+    goarm=""
+    case "$platform" in
+      linux/amd64)   arch="amd64";   cc="x86_64-linux-musl-gcc" ;;
+      linux/arm64)   arch="arm64";   cc="aarch64-linux-musl-gcc" ;;
+      linux/386)     arch="386";     cc="i486-linux-musl-gcc" ;;
+      linux/riscv64) arch="riscv64"; cc="riscv64-linux-musl-gcc" ;;
+      linux/ppc64le) arch="ppc64le"; cc="powerpc64le-linux-musl-gcc" ;;
+      linux/loong64) arch="loong64"; cc="loongarch64-linux-musl-gcc" ;;
+      linux/arm/v6)  arch="arm"; goarm="6"; cc="armv6-linux-musleabihf-gcc" ;;
+      linux/arm/v7)  arch="arm"; goarm="7"; cc="armv7l-linux-musleabihf-gcc" ;;
+      *)
+        echo "ERROR: unsupported platform '$platform' in RELEASE_PLATFORMS." >&2
+        echo "Supported: $default_platforms (s390x temporarily disabled)." >&2
+        echo "Add the platform and its musl compiler to build.sh before enabling it in docker." >&2
+        return 1
+        ;;
+    esac
+
+    export GOOS=linux
+    export GOARCH=$arch
+    export CC=$cc
+    if [ -n "$goarm" ]; then
+      export GOARM=$goarm
+    else
+      unset GOARM
+    fi
+    echo "building for $platform"
+    go build -o "build/$platform/$appName" -ldflags="$docker_lflags" -tags=jsoniter .
   done
 }
 
