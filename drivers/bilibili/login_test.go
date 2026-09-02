@@ -142,3 +142,56 @@ func TestCookiesFromLoginURL(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginByQRCodeSuccessViaSetCookie(t *testing.T) {
+	// poll 成功但回调 URL 无 SESSDATA（2026 实际行为：cookie 经响应头 Set-Cookie 下发）
+	srv := newMockServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/x/passport-login/web/qrcode/generate":
+			jsonResp(w, `{"code":0,"data":{"url":"https://passport.bilibili.com/x/passport-login/web/qrcode/generate?qrcode_key=k1","qrcode_key":"k1"}}`)
+		case "/x/passport-login/web/qrcode/poll":
+			w.Header().Set("Set-Cookie", "SESSDATA=fromheader%2Cvalue; Path=/; Domain=bilibili.com; HttpOnly")
+			w.Header().Add("Set-Cookie", "DedeUserID=42; Path=/; Domain=bilibili.com")
+			w.Header().Add("Set-Cookie", "bili_jct=csrf; Path=/; Domain=bilibili.com")
+			jsonResp(w, `{"code":0,"data":{"code":0,"url":"","refresh_token":"rt","timestamp":1}}`)
+		}
+	}))
+	d := newTestDriver()
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
+	err := d.loginByQRCode(context.Background())
+	if err != nil {
+		t.Fatalf("loginByQRCode: %v", err)
+	}
+	if !strings.Contains(d.Addition.Cookie, "SESSDATA=fromheader%2Cvalue") {
+		t.Fatalf("cookie not filled from Set-Cookie header: %q", d.Addition.Cookie)
+	}
+	if !strings.Contains(d.Addition.Cookie, "DedeUserID=42") || !strings.Contains(d.Addition.Cookie, "bili_jct=csrf") {
+		t.Fatalf("cookie missing fields: %q", d.Addition.Cookie)
+	}
+	if d.qrcodeKey != "" {
+		t.Fatalf("qrcodeKey should be cleared after success")
+	}
+}
+
+func TestLoginByQRCodeSuccessNoSESSDATAError(t *testing.T) {
+	// 成功但两个通道都没有 SESSDATA → 明确报错而非静默保存垃圾 cookie
+	srv := newMockServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/x/passport-login/web/qrcode/generate":
+			jsonResp(w, `{"code":0,"data":{"url":"https://passport.bilibili.com/x/passport-login/web/qrcode/generate?qrcode_key=k1","qrcode_key":"k1"}}`)
+		case "/x/passport-login/web/qrcode/poll":
+			jsonResp(w, `{"code":0,"data":{"code":0,"url":"https://passport.bilibili.com/crossDomain?DedeUserID=42","refresh_token":"rt"}}`)
+		}
+	}))
+	d := newTestDriver()
+	d.Addition.Cookie = "" // newTestDriver 预置了 SESSDATA，本用例需空 cookie
+	d.cookieStr = ""
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
+	err := d.loginByQRCode(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "SESSDATA") {
+		t.Fatalf("err = %v, want SESSDATA-missing error", err)
+	}
+	if d.Addition.Cookie != "" {
+		t.Fatalf("Addition.Cookie should stay empty on failure: %q", d.Addition.Cookie)
+	}
+}

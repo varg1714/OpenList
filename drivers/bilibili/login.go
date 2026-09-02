@@ -83,9 +83,15 @@ func (d *Bilibili) loginByQRCode(ctx context.Context) error {
 		d.qrcodeKey = ""
 		return needVerify("二维码已过期，请再次点击保存以刷新")
 	case 0:
-		cookie := cookiesFromLoginURL(data.URL)
-		if cookie == "" {
-			return fmt.Errorf("扫码成功但回调 URL 未包含 SESSDATA")
+		// cookie 主通道：poll 响应的 Set-Cookie（SESSDATA/bili_jct/DedeUserID 等
+		// 经响应头下发，doGet 的 setCookieFromResp 已合并进 d.cookieStr）
+		cookie := d.cookieStr
+		// 兑底通道：回调 URL query（旧版接口行为，BBDown 同款）
+		if u := cookiesFromLoginURL(data.URL); u != "" {
+			cookie = mergeCookieStrings(cookie, u)
+		}
+		if !strings.Contains(cookie, "SESSDATA=") {
+			return fmt.Errorf("扫码成功但未获取到 SESSDATA（Set-Cookie 与回调 URL 均缺失）")
 		}
 		d.Addition.Cookie = cookie
 		d.cookieStr = cookie // 立即生效
@@ -126,4 +132,13 @@ func cookiesFromLoginURL(loginURL string) string {
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// mergeCookieStrings 合并两个 cookie 串，后者同名覆盖前者（复用 http.go 的解析/拼接）
+func mergeCookieStrings(a, b string) string {
+	m := parseCookies(a)
+	for k, v := range parseCookies(b) {
+		m[k] = v
+	}
+	return joinCookies(m)
 }
