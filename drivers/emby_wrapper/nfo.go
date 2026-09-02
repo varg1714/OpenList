@@ -97,16 +97,16 @@ func buildTVShowNFO(showName, plot string, setting *model.EmbyDirSetting) ([]byt
 	return buildNFOWithRoot("tvshow", showName, plot, setting)
 }
 
-// buildSeasonNFO 构建季 nfo：<season><seasonnumber>N</seasonnumber>[<seasonname>]</season>。
-// Emby 的 SeasonNfoParser 读取 seasonnumber 设置季号、seasonname 设置显示名。
-// 2026-09-02 修订：季目录已虚拟映射为 S{季号}（Emby 原生识别），season.nfo 仅作
-// 双保险；name 为空时省略 seasonname（不再保留原文件夹名）。
+// buildSeasonNFO 构建季 nfo：<season><seasonnumber>N</seasonnumber>[<title>]</season>。
+// Emby 的 SeasonNfoParser 只特判 seasonnumber（IndexNumber），季显示名经
+// BaseNfoParser 的通用 title 字段设置（2026-09-03 实测修正：seasonname 是
+// Jellyfin 10.9+ 才支持的字段，Emby 不识别，改用 title）。
 func buildSeasonNFO(seasonNo int, name string) []byte {
 	var sb strings.Builder
 	sb.WriteString("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n<season>\n")
 	fmt.Fprintf(&sb, "  <seasonnumber>%d</seasonnumber>\n", seasonNo)
 	if name != "" {
-		fmt.Fprintf(&sb, "  <seasonname><![CDATA[%s]]></seasonname>\n", name)
+		fmt.Fprintf(&sb, "  <title><![CDATA[%s]]></title>\n", name)
 	}
 	sb.WriteString("</season>")
 	return []byte(sb.String())

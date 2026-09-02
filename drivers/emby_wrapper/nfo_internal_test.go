@@ -87,7 +87,7 @@ func TestBuildTVShowNFO(t *testing.T) {
 	}
 }
 
-// TestBuildSeasonNFO：季 nfo 根元素 season，含 seasonnumber 与 seasonname。
+// TestBuildSeasonNFO：季 nfo 根元素 season，含 seasonnumber 与 title（Emby 经 BaseNfoParser 的 title 识别季显示名；seasonname 是 Jellyfin 10.9+ 才支持的字段，Emby 不识别）。
 func TestBuildSeasonNFO(t *testing.T) {
 	got := string(buildSeasonNFO(2, "2024年"))
 	if !strings.Contains(got, "<season>") {
@@ -96,7 +96,7 @@ func TestBuildSeasonNFO(t *testing.T) {
 	if !strings.Contains(got, "<seasonnumber>2</seasonnumber>") {
 		t.Errorf("missing seasonnumber 2, got %s", got)
 	}
-	if !strings.Contains(got, "<seasonname><![CDATA[2024年]]></seasonname>") {
-		t.Errorf("missing seasonname, got %s", got)
+	if !strings.Contains(got, "<title><![CDATA[2024年]]></title>") {
+		t.Errorf("missing season title, got %s", got)
 	}
 }

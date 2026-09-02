@@ -149,9 +149,9 @@ func TestTVShowNestedFolderInSeason(t *testing.T) {
 	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{"S02E01.mp4", "S02E01.nfo", "S02E02.mp4", "S02E02.nfo", "season.nfo"}) {
 		t.Errorf("nested files must be flattened into the season, got %v", got)
 	}
-	// 扁平化后 seasonname 仍用季文件夹本身的名字（2024年），而非子文件夹名
-	if got := readNFOLink(t, d, "/Movies/S02/season.nfo"); !strings.Contains(got, "<seasonname><![CDATA[2024年]]></seasonname>") {
-		t.Errorf("seasonname must be the season folder name despite flattening, got %s", got)
+	// 扁平化后季名（title）仍用季文件夹本身的名字（2024年），而非子文件夹名
+	if got := readNFOLink(t, d, "/Movies/S02/season.nfo"); !strings.Contains(got, "<title><![CDATA[2024年]]></title>") {
+		t.Errorf("season title must be the season folder name despite flattening, got %s", got)
 	}
 }
 
@@ -169,8 +169,8 @@ func TestTVShowSeasonNFOContent(t *testing.T) {
 	if !strings.Contains(got, "<seasonnumber>2</seasonnumber>") {
 		t.Errorf("season.nfo must carry assigned season number, got %s", got)
 	}
-	if !strings.Contains(got, "<seasonname><![CDATA[2024年]]></seasonname>") {
-		t.Errorf("season.nfo must carry original folder name, got %s", got)
+	if !strings.Contains(got, "<title><![CDATA[2024年]]></title>") {
+		t.Errorf("season.nfo must carry original folder name as title, got %s", got)
 	}
 }
 

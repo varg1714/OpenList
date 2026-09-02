@@ -15,7 +15,7 @@
 4. **已含 `SxxExx`/`NxNN` 编号的文件跳过**、保持原名（含其同名 nfo 生成），不消耗序号
 5. **剧集 nfo**：每个剧集文件生成虚拟 nfo（`S{NN}E{MM}.nfo`）：根元素 `<episodedetails>`，title=原文件名去扩展名，actors=现有继承解析结果（`resolveSetting`），**plot=影片名称（原文件名去扩展名）**（2026-09-03 应需求写入；不含剧集级简介，简介属于 tvshow.nfo）；`-cd` 多段不合并（一文件一集）
 6. **tvshow.nfo**（剧集根目录）：根元素 `<tvshow>`，title=自定义剧名（空→文件夹名），plot=该目录解析出的 plot（剧集介绍），actors 同
-7. **season.nfo**（每个季，虚拟）：根元素 `<season>`，含 `<seasonnumber>NN</seasonnumber>`（该文件夹分配的季号）+ `<seasonname>季文件夹原名</seasonname>`（如 `2024年`，Emby 季显示名；**2026-09-02 修订：季目录虚拟映射为 `S{NN}` 后曾一度省略 seasonname，2026-09-03 应需求写回原名**——即使季内嵌套子文件夹的文件被扁平化提取，seasonname 仍用季文件夹本身的名字；真实目录下存在同名真实 season.nfo 时优先转发下游）
+7. **season.nfo**（每个季，虚拟）：根元素 `<season>`，含 `<seasonnumber>NN</seasonnumber>`（该文件夹分配的季号）+ `<title>季文件夹原名</title>`（如 `2024年`，Emby 季显示名）。**2026-09-03 实测修正：季显示名字段用 `<title>` 而非 `<seasonname>`**——seasonname 是 Jellyfin 10.9+（2024）才加入 SeasonNfoParser 的字段，Emby 的解析器不识别（其 BaseNfoParser 只处理通用 title → Season.Name）；即使季内嵌套子文件夹的文件被扁平化提取，title 仍用季文件夹本身的名字；真实目录下存在同名真实 season.nfo 时优先转发下游
 8. **不物理改名**：虚拟名只存在于展示层（List/Get 返回的对象名）；`virtualEpisode.GetPath()` 返回真实路径，Link 直接转发真实文件（`op.Link` 前必经 Get，Get 是唯一映射点）；真实同名文件/nfo 优先（同目录存在同名真实文件或 nfo 时跳过虚拟生成）
 9. 剧集命名格式用 `S{NN}E{MM}` 纯编号（Emby 官方文档+解析器确认 `-E01` 不被识别；`anything_s01e02` 是受支持模式）。**2026-09-02 修订**：早期版本为 `原基础名-S{NN}E{MM}`，实测 Emby 的 EpisodePathParser 会把 `SxxExx` 前的任意前缀捕获为 seriesname（剧集名），前缀与剧名不符时剧集归属错乱（`xx1-S01E01.mp4` 被识别为名为 xx1 的剧）；改为纯编号后文件名不含可解析的剧名，归属完全来自文件夹层级，原文件名经剧集 nfo 的 `<title>`（=原文件名去扩展名）保留
 10. **不需要** TV 边界阻断 plot/append 继承（早期设计的遗留需求，方案 B 下 TV 树内任何目录都不再走影片模式 nfo 生成，无泄漏场景）
@@ -26,7 +26,7 @@
 
 - **季目录虚拟映射**：直接子文件夹按创建时间+名称排序分配季号后，展示层与 Get 路径统一走 `S{季号}` 别名目录（`tvIndex.seasonAlias`），映射回真实季文件夹；**原文件夹名不再展示**。Emby 原生识别 `S{NN}` 目录为季，文件名 `S{NN}E{MM}` 中的季号与目录一致（双保险）
 - **扁平化**：季内文件递归收集（`gatherFiles`），全部条目展示于季别名目录下——视频编号 `S{NN}E{MM}.mp4`（纯编号）、已编号视频与非视频保留原名；**嵌套子文件夹（非 TV）不再展示**，其文件提取进季；嵌套 TV 文件夹原样保留（独立成剧），并支持通过季别名路径导航（`tvContext`/`resolveVirtualPath`/`tvNFOForPath` 的 `rewriteAliasPrefix` 重写为真实季路径后重新解析）；**同名真实条目冲突消解**（2026-09-03）：扁平化后不同子目录的同名文件（非视频/已编号视频）不再丢弃，后者映射消解名 `原名-2.扩展名`（仍冲突递增），保证文件可见
-- **season.nfo**：`<seasonnumber>` + `<seasonname>季文件夹原名</seasonname>`（2026-09-03 写回原名，见 Spec 7 修订）；真实季目录下同名 season.nfo 优先转发下游
+- **season.nfo**：`<seasonnumber>` + `<title>季文件夹原名</title>`（Emby 经 BaseNfoParser 识别 title 为季显示名，见 Spec 7 修订）；真实季目录下同名 season.nfo 优先转发下游
 - **路径解析**：`resolveVirtualPath`（文件条目 → 季别名目录 → 别名前缀重写递归）是 Get 的虚拟→真实唯一映射点；`tvNFOForPath` 处理 tvshow/season/剧集 nfo 并保持真实同名 nfo 优先
 - **确定性**：季视图条目按创建时间+展示名升序排序（`byVirtual` 为 map，遍历无序，需显式排序）；索引构建失败降级为警告+原始列表（不整体失败）
 
