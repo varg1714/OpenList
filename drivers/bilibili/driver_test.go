@@ -200,3 +200,25 @@ func TestListUnknownPath(t *testing.T) {
 		t.Fatalf("List err = %v, want ObjectNotFound", err)
 	}
 }
+
+func TestDropKeepsQRCodeState(t *testing.T) {
+	d := newTestDriver()
+	d.qrcodeKey = "k123"
+	d.qrURL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate?qrcode_key=k123"
+	d.mixinKey = "mk"
+	d.mixinKeyDay = "20260903"
+	d.cookieStr = "SESSDATA=x"
+	d.uid = 42
+	d.uname = "u"
+	if err := d.Drop(context.Background()); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+	// qrcode 状态必须跨保存请求存活（UpdateStorage 先 Drop 再 Init，
+	// 清了会导致每次保存重新生成二维码、用户扫的码永远失效）
+	if d.qrcodeKey != "k123" || d.qrURL == "" {
+		t.Fatal("Drop must preserve qrcodeKey/qrURL for the QR login flow")
+	}
+	if d.mixinKey != "" || d.mixinKeyDay != "" || d.cookieStr != "" || d.uid != 0 || d.uname != "" {
+		t.Fatal("Drop must clear runtime state (mixinKey/cookieStr/uid/uname)")
+	}
+}

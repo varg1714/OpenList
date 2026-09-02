@@ -228,8 +228,9 @@ func (d *Bilibili) Init(ctx context.Context) error {
 
 // Drop 清理扫码/签名/登录态，下次 Init 重新建立
 func (d *Bilibili) Drop(ctx context.Context) error {
-	d.qrcodeKey = ""
-	d.qrURL = ""
+	// 注意：不清 qrcodeKey/qrURL —— UpdateStorage（编辑保存）会先 Drop 再 Init，
+	// 扫码状态必须跨保存请求存活（189pc 同款：Drop 保留 qrcodeParam），
+	// 否则每次保存都重新生成二维码，用户扫的码永远失效（死循环）。
 	d.mixinKey = ""
 	d.mixinKeyDay = ""
 	d.cookieStr = ""
