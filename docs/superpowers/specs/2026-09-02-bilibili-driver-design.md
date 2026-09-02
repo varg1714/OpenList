@@ -93,6 +93,21 @@ OpenList 无专用二维码 UI；189pc 先例（drivers/189pc/utils.go `genQRCod
 2. 校验：`GET /x/web-interface/nav`，`code != 0`（-101 未登录）→ 报错提示重新登录；成功则缓存 uid/uname。
 3. `Drop`：清 qrcode_key 与进程内 mixin key 缓存。
 
+### API 鉴权矩阵（2026-09 活跃客户端 + API 文档实测）
+
+| 接口 | wbi 签名 | cookie | 备注 |
+|---|---|---|---|
+| `/x/web-interface/nav` | 否 | 校验用 | wbi_img / mid / uname 来源 |
+| passport qrcode generate/poll | 否 | 否 | 扫码登录 |
+| `/x/relation/followings` | 否 | 是 | 需 Referer |
+| `/x/space/wbi/arc/search` | **是** | 是 | 无签名实测返回 -352 风控 |
+| `/x/v3/fav/folder/created/list-all` | 否 | 是 | BBDown 免签直调 |
+| `/x/v3/fav/resource/list` | 否 | 是 | BBDown 免签直调 |
+| `/x/web-interface/view` | 否 | 是 | BBDown 免签直调（补 cid 用） |
+| `/x/player/wbi/playurl` | **是** | 是 | 播放 |
+
+风控兜底：如真实账号遇到 -352/-412（v_voucher 二次校验），v1.1 按 PiliPlus 请求补 `gaia_voucher`/`dm_img_*` 参数。
+
 ### 虚拟目录与 API 映射（driver.go List）
 
 ```
@@ -107,7 +122,10 @@ OpenList 无专用二维码 UI；189pc 先例（drivers/189pc/utils.go `genQRCod
 
 - **层级识别**：List 收到 `dir` 后按 `dir.GetName()`/路径段分发（jable_tv 模式）：根 → 两个固定文件夹；`我的关注` → followings；`{uname}_{mid}` → 该 UP 投稿（解析 mid）；`我的收藏` → 收藏夹列表；收藏夹名 → 收藏内容。
 - **UP 文件夹命名**：`{uname}_{mid}`（uname 允许重名，mid 保证唯一、可直接解析）；名称做文件名清洗（替换 `/\:*?"<>|` 与控制字符）。解析 mid 时按**最后一个 `_`** 分割（uname 本身可能含 `_`）。
-- **叶子文件**：`model.ObjThumb`，`Name = {清理后的标题}.mp4`，`Modified = pubdate`（时间列/排序依据），`Thumbnail` 填封面 URL（`http://` 归一为 `https://`）；**Obj 内部用私有字段携带 `bvid` + `cid`**（自定义 struct 包装 `model.ObjThumb`，List 时从 vlist/medias 提取 cid，Link 免二次查询）。
+- **叶子文件**：`model.ObjThumb`，`Name = {清理后的标题}.mp4`，`Modified = pubdate`（时间列/排序依据），`Thumbnail` 填封面 URL（`http://` 归一为 `https://`）；自定义 struct 包装 `model.ObjThumb`，私有字段携带 `bvid` 与 `cid`。
+  - 收藏夹来源（fav/resource/list）：`media.id`=bvid、`media.ugc.first_cid`=cid、封面字段 `cover`
+  - UP 投稿来源（space/wbi/arc/search vlist）：**无 cid 字段**（2025-07 API 文档确认，字段为 aid/bvid/title/pic/created/length），只有 bvid → Link 时经 `view` 接口补 cid
+  - 多 P 视频 v1 **不拆 P**：一个视频条目 = 一个文件，播放首 P（v1.1 再支持展开各 P）
 - **分页全量**：followings/arc-search/fav-resource 循环至 `page.count` 尽；每页 150ms 节流。
 - **列表缓存：不设驱动内缓存**。框架层已有目录缓存（`internal/op/fs.go` dirCache）：非 Refresh 的 List 命中缓存直接返回（存储级 `cache_expiration` 配置，默认 30min，用户可调），手动刷新（`Refresh=true`）穿透缓存直达驱动。驱动内再自建一层属冗余（多占内存、多一层一致性维护），故 `Config.NoCache=false` 交给框架缓存即可；目录浏览/播放器 Get 回退的父目录 List 都由框架缓存兜底，翻页成本仅发生在缓存过期或手动刷新时。
 - **上限保护**：`Addition.MaxListItems`（number，默认 `500`，0=不限），作用于上述三个分页循环，防超大 UP（数千投稿）同步翻页拖垮 List。超限时记日志说明截断。
@@ -119,7 +137,7 @@ OpenList 无专用二维码 UI；189pc 先例（drivers/189pc/utils.go `genQRCod
 func (d *Bilibili) Link(ctx, file, args) (*model.Link, error)
 ```
 
-1. 从自定义 Obj 取 `bvid`/`cid`（缺失时回退 `GET /x/web-interface/view?bvid=` 补 cid）
+1. 从自定义 Obj 取 `bvid`/`cid`；UP 投稿来源 cid 缺失（vlist 无 cid）→ 先 `GET /x/web-interface/view?bvid=`（BBDown 实测免 wbi，仅需 cookie）取 `data.cid` 补上
 2. `GET /x/player/wbi/playurl`（wbi 签名），参数：`bvid`、`cid`、`qn=64`、`fnval=1`（**不带 dash 位**，强制 durl）、`fnver=0`、`fourk=0`、`otype=json`
 3. 取 `data.durl[0].url`（flv 情况存在 `durl` 同构返回）：
    - 成功 → `&model.Link{URL: url, Header: {Referer: https://www.bilibili.com/, UA}, Expiration: 110min}`（URL 实际 ~2h 有效，110min 保守缓存；quark_share 的 LinkCacheTime 同思路）
@@ -134,7 +152,7 @@ func (d *Bilibili) Link(ctx, file, args) (*model.Link, error)
 
 ### 明确不做（v1 范围外）
 
-- 关注动态 feed 流（用户已砍）、番剧/电影/直播、充电/课程、上传、4K/杜比（dash）、收藏夹增删改、稍后再看
+- 关注动态 feed 流（用户已砍）、番剧/电影/直播、充电/课程、上传、4K/杜比（dash）、收藏夹增删改、稍后再看、多 P 视频拆 P 浏览（v1 仅首 P，v1.1）
 - 不做多实例共享扫码态：qrcode_key 存进程内，重启后重新生成（cookie 已持久化则无需再扫）
 
 ## 测试
