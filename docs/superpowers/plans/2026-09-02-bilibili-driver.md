@@ -452,7 +452,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/OpenListTeam/OpenList/v4/internal/utils" // 仅用于日志；若报 unused 可改用 utils.Log 包路径（见下）
 	"github.com/go-resty/resty/v2"
 	"golang.org/x/time/rate"
 )
