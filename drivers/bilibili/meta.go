@@ -21,6 +21,10 @@ var config = driver.Config{
 	LocalSort:   false, // driver returns pubdate-desc order; keep as-is
 	NoUpload:    true,
 	DefaultRoot: "/",
+	// durl 播放地址有 Referer 防盗链（需 Referer: bilibili.com + 浏览器 UA），
+	// 浏览器直连会被 CDN 403；强制代理让 openlist 服务器带 Header 转发
+	// （quark_open/weiyun/proton_drive 等同款）。代价：下载也走服务器中转。
+	OnlyProxy: true,
 }
 
 type Bilibili struct {
