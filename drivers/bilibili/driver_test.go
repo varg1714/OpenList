@@ -21,9 +21,9 @@ func listDriver(t *testing.T, handler http.HandlerFunc) *Bilibili {
 	return d
 }
 
-func dirObj(t *testing.T, path string) model.Obj {
+func dirObj(t *testing.T, path, id string) model.Obj {
 	t.Helper()
-	return &model.Object{Name: pathName(path), Path: path, IsFolder: true}
+	return &model.Object{ID: id, Name: pathName(path), Path: path, IsFolder: true}
 }
 
 func pathName(p string) string {
@@ -38,7 +38,7 @@ func TestListRoot(t *testing.T) {
 	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("root list must not call api")
 	})
-	objs, err := d.List(context.Background(), dirObj(t, "/"), model.ListArgs{})
+	objs, err := d.List(context.Background(), dirObj(t, "/", ""), model.ListArgs{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestListFollowings(t *testing.T) {
 		}
 		w.Write([]byte(`{"code":0,"data":{"list":[{"mid":42,"uname":"测试UP"},{"mid":7,"uname":"带_下划线"}],"total":2}}`))
 	})
-	objs, err := d.List(context.Background(), dirObj(t, "/我的关注"), model.ListArgs{})
+	objs, err := d.List(context.Background(), dirObj(t, "/我的关注", dirFollowID), model.ListArgs{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -62,11 +62,39 @@ func TestListFollowings(t *testing.T) {
 		t.Fatalf("objs = %d", len(objs))
 	}
 	f0 := objs[0]
-	if !f0.IsDir() || f0.GetName() != "测试UP_42" {
+	if !f0.IsDir() || f0.GetName() != "测试UP" {
 		t.Fatalf("folder0 = %q dir=%v", f0.GetName(), f0.IsDir())
 	}
-	if objs[1].GetName() != "带_下划线_7" {
-		t.Fatalf("folder1 = %q", objs[1].GetName())
+	if f0.GetID() != "up_42" {
+		t.Fatalf("folder0 id = %q, want up_42 (invisible, used for dispatch)", f0.GetID())
+	}
+	if objs[1].GetName() != "带_下划线" || objs[1].GetID() != "up_7" {
+		t.Fatalf("folder1 = %q id=%q", objs[1].GetName(), objs[1].GetID())
+	}
+}
+
+func TestListFollowingsDupNames(t *testing.T) {
+	// 同名 UP：全部追加 _mid 消歧（不依赖顺序）；唯一名保持干净
+	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"code":0,"data":{"list":[
+			{"mid":1,"uname":"同名UP"},{"mid":2,"uname":"同名UP"},{"mid":3,"uname":"唯一UP"}],"total":3}}`))
+	})
+	objs, err := d.List(context.Background(), dirObj(t, "/我的关注", dirFollowID), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(objs) != 3 {
+		t.Fatalf("objs = %d", len(objs))
+	}
+	want := map[string]string{"同名UP_1": "up_1", "同名UP_2": "up_2", "唯一UP": "up_3"}
+	got := map[string]string{}
+	for _, o := range objs {
+		got[o.GetName()] = o.GetID()
+	}
+	for name, id := range want {
+		if got[name] != id {
+			t.Fatalf("objs = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -81,7 +109,7 @@ func TestListUpperVideos(t *testing.T) {
 		t.Fatalf("unexpected path %s", r.URL.Path)
 	})
 	d.mixinKey = "ea1db124af3c7062474693fa704f4ff8" // arc/search 走 wbi 签名，注入避免 nav 前置请求
-	objs, err := d.List(context.Background(), dirObj(t, "/我的关注/测试UP_42"), model.ListArgs{})
+	objs, err := d.List(context.Background(), dirObj(t, "/我的关注/测试UP", upFolderPrefix+"42"), model.ListArgs{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -92,8 +120,8 @@ func TestListUpperVideos(t *testing.T) {
 	if !ok {
 		t.Fatalf("obj type = %T, want *videoObj", objs[0])
 	}
-	if vo.GetName() != "最新视频.mp4" || vo.bvid != "BV1a" || vo.cid != 0 {
-		t.Fatalf("video = %q bvid=%s cid=%d", vo.GetName(), vo.bvid, vo.cid)
+	if vo.GetName() != "最新视频.mp4" || vo.bvid != "BV1a" || vo.cid != 0 || vo.GetID() != "BV1a" {
+		t.Fatalf("video = %q bvid=%s cid=%d id=%s", vo.GetName(), vo.bvid, vo.cid, vo.GetID())
 	}
 	if vo.Thumbnail.Thumbnail != "https://i0.hdslb.com/p.jpg" {
 		t.Fatalf("thumb = %q", vo.Thumbnail.Thumbnail)
@@ -107,11 +135,25 @@ func TestListFavFolders(t *testing.T) {
 	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"code":0,"data":{"list":[{"id":999,"title":"我的收藏夹"}]}}`))
 	})
-	objs, err := d.List(context.Background(), dirObj(t, "/我的收藏"), model.ListArgs{})
+	objs, err := d.List(context.Background(), dirObj(t, "/我的收藏", dirFavID), model.ListArgs{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(objs) != 1 || objs[0].GetName() != "我的收藏夹_999" {
+	if len(objs) != 1 || objs[0].GetName() != "我的收藏夹" || objs[0].GetID() != "fav_999" {
+		t.Fatalf("objs = %+v", objs)
+	}
+}
+
+func TestListFavFoldersDupNames(t *testing.T) {
+	// 同名收藏夹：全部追加 _id 消歧
+	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"code":0,"data":{"list":[{"id":1,"title":"追番"},{"id":2,"title":"追番"}]}}`))
+	})
+	objs, err := d.List(context.Background(), dirObj(t, "/我的收藏", dirFavID), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(objs) != 2 || objs[0].GetName() != "追番_1" || objs[1].GetName() != "追番_2" {
 		t.Fatalf("objs = %+v", objs)
 	}
 }
@@ -121,7 +163,7 @@ func TestListFavVideos(t *testing.T) {
 		w.Write([]byte(`{"code":0,"data":{"info":{"media_count":1},"medias":[
 			{"bvid":"BV1b","title":"收藏的教程","cover":"http://i0.hdslb.com/c.jpg","fav_time":1700000200,"ugc":{"first_cid":555}}]}}`))
 	})
-	objs, err := d.List(context.Background(), dirObj(t, "/我的收藏/我的收藏夹_999"), model.ListArgs{})
+	objs, err := d.List(context.Background(), dirObj(t, "/我的收藏/我的收藏夹", favFolderPrefix+"999"), model.ListArgs{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -131,6 +173,32 @@ func TestListFavVideos(t *testing.T) {
 	}
 	if vo.cid != 555 || vo.bvid != "BV1b" {
 		t.Fatalf("video bvid=%s cid=%d", vo.bvid, vo.cid)
+	}
+}
+
+func TestListVideosDupTitles(t *testing.T) {
+	// 同 UP 下重复标题：追加 bvid 消歧
+	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"code":0,"data":{"list":{"vlist":[
+			{"bvid":"BV1a","title":"第1集","created":1700000100},
+			{"bvid":"BV1b","title":"第1集","created":1700000101},
+			{"bvid":"BV1c","title":"第2集","created":1700000102}
+		]},"page":{"count":3}}}`))
+	})
+	d.mixinKey = "ea1db124af3c7062474693fa704f4ff8"
+	objs, err := d.List(context.Background(), dirObj(t, "/我的关注/某UP", upFolderPrefix+"42"), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(objs) != 3 {
+		t.Fatalf("objs = %d", len(objs))
+	}
+	names := []string{objs[0].GetName(), objs[1].GetName(), objs[2].GetName()}
+	want := []string{"第1集_BV1a.mp4", "第1集_BV1b.mp4", "第2集.mp4"}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("names = %v, want %v", names, want)
+		}
 	}
 }
 
@@ -152,25 +220,11 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
-func TestSplitFolderName(t *testing.T) {
-	display, id, ok := splitFolderName("测试UP_42")
-	if !ok || display != "测试UP" || id != 42 {
-		t.Fatalf("split = %q %d %v", display, id, ok)
-	}
-	display, id, ok = splitFolderName("带_下划线_7")
-	if !ok || display != "带_下划线" || id != 7 {
-		t.Fatalf("split underscore = %q %d %v", display, id, ok)
-	}
-	if _, _, ok := splitFolderName("没有数字"); ok {
-		t.Fatal("should not parse without trailing id")
-	}
-}
-
 func TestGetShallowPaths(t *testing.T) {
 	d := newTestDriver()
 	obj, err := d.Get(context.Background(), "/我的关注")
-	if err != nil || !obj.IsDir() {
-		t.Fatalf("Get /我的关注 = %v %v", obj, err)
+	if err != nil || !obj.IsDir() || obj.GetID() != dirFollowID {
+		t.Fatalf("Get /我的关注 = %v %v (id=%q)", obj, err, obj.GetID())
 	}
 	if _, err := d.Get(context.Background(), "/我的关注/某某_1/BV1xx.mp4"); !errs.IsNotSupportError(err) {
 		t.Fatalf("deep Get err = %v, want NotSupport", err)
@@ -184,8 +238,8 @@ func TestGetRootAndShallowDirs(t *testing.T) {
 		t.Fatalf("Get / = %v %v", obj, err)
 	}
 	obj, err = d.Get(context.Background(), "/我的收藏")
-	if err != nil || !obj.IsDir() || obj.GetName() != "我的收藏" {
-		t.Fatalf("Get /我的收藏 = %v %v", obj, err)
+	if err != nil || !obj.IsDir() || obj.GetName() != "我的收藏" || obj.GetID() != dirFavID {
+		t.Fatalf("Get /我的收藏 = %v %v (id=%q)", obj, err, obj.GetID())
 	}
 	if _, err := d.Get(context.Background(), "/我的收藏/不存在_1/x.mp4"); !errs.IsNotSupportError(err) {
 		t.Fatalf("deep Get err = %v, want NotSupport", err)
@@ -196,7 +250,7 @@ func TestListUnknownPath(t *testing.T) {
 	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("unknown list path must not call api")
 	})
-	if _, err := d.List(context.Background(), dirObj(t, "/无关目录"), model.ListArgs{}); !errs.IsObjectNotFound(err) {
+	if _, err := d.List(context.Background(), dirObj(t, "/无关目录", ""), model.ListArgs{}); !errs.IsObjectNotFound(err) {
 		t.Fatalf("List err = %v, want ObjectNotFound", err)
 	}
 }

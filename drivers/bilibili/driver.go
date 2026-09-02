@@ -13,9 +13,13 @@ import (
 )
 
 const (
-	dirFollow = "我的关注"
-	dirFav    = "我的收藏"
-	rootName  = "root"
+	dirFollow       = "我的关注"
+	dirFav          = "我的收藏"
+	rootName        = "root"
+	dirFollowID     = "followings" // 顶层目录 obj.ID（用户不可见，用于 List 分发）
+	dirFavID        = "favs"
+	upFolderPrefix  = "up_"  // UP 目录 obj.ID 前缀：up_{mid}
+	favFolderPrefix = "fav_" // 收藏夹目录 obj.ID 前缀：fav_{media_id}
 )
 
 // videoObj 视频文件对象；私有字段供 Link 使用
@@ -43,27 +47,26 @@ func sanitizeName(s string, maxLen int) string {
 	return s
 }
 
-// splitFolderName 解析 "{名字}_{id}" 目录名（按最后一个 _ 且其后全数字）
-func splitFolderName(name string) (string, int64, bool) {
-	idx := -1
-	for i := len(name) - 1; i >= 0; i-- {
-		if name[i] == '_' {
-			idx = i
-			break
+// disambiguate 返回最终显示名：出现频率 >1 的名字追加 _suffix 消歧。
+// 全部重名项都追加（而非只加后续者），名字不依赖列表顺序、稳定可预测。
+func disambiguate(displays, suffixes []string) []string {
+	freq := make(map[string]int, len(displays))
+	for _, d := range displays {
+		freq[d]++
+	}
+	names := make([]string, len(displays))
+	for i, d := range displays {
+		names[i] = d
+		if freq[d] > 1 {
+			names[i] = d + "_" + suffixes[i]
 		}
 	}
-	if idx <= 0 || idx == len(name)-1 {
-		return "", 0, false
-	}
-	id, err := strconv.ParseInt(name[idx+1:], 10, 64)
-	if err != nil {
-		return "", 0, false
-	}
-	return name[:idx], id, true
+	return names
 }
 
-func folderObj(parent model.Obj, name string) model.Obj {
+func folderObj(parent model.Obj, name, id string) model.Obj {
 	return &model.Object{
+		ID:       id,
 		Name:     name,
 		Path:     filepath.Join(parent.GetPath(), name),
 		IsFolder: true,
@@ -71,9 +74,10 @@ func folderObj(parent model.Obj, name string) model.Obj {
 	}
 }
 
-func newVideoObj(parent model.Obj, v VideoItem) *videoObj {
+func newVideoObj(parent model.Obj, v VideoItem, display string) *videoObj {
 	vo := &videoObj{bvid: v.Bvid, cid: v.Cid}
-	vo.Name = sanitizeName(v.Title, 150) + ".mp4"
+	vo.ID = v.Bvid
+	vo.Name = display + ".mp4"
 	vo.Path = filepath.Join(parent.GetPath(), vo.Name)
 	vo.Modified = time.Unix(v.Pubdate, 0)
 	if v.Pic != "" {
@@ -82,33 +86,44 @@ func newVideoObj(parent model.Obj, v VideoItem) *videoObj {
 	return vo
 }
 
-// List 按目录路径分发（LocalSort=false，返回顺序即展示顺序）
+// List 按目录对象 ID 分发（LocalSort=false，返回顺序即展示顺序）。
+// 目录 ID 由本驱动构造时写入 obj.ID（用户不可见）；显示名保持干净，
+// 仅重名项追加 _id 后缀消歧。
 func (d *Bilibili) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	p := dir.GetPath()
-	switch {
-	case p == "" || p == "/": // 根：RootPath 未填时 Path 可能为空串
+	if p == "" || p == "/" { // 根：RootPath 未填时 Path 可能为空串
 		return []model.Obj{
-			folderObj(dir, dirFollow),
-			folderObj(dir, dirFav),
+			folderObj(dir, dirFollow, dirFollowID),
+			folderObj(dir, dirFav, dirFavID),
 		}, nil
-	case p == "/"+dirFollow:
+	}
+	switch dir.GetID() {
+	case dirFollowID:
 		return d.listFollowings(ctx, dir)
-	case strings.HasPrefix(p, "/"+dirFollow+"/"):
-		_, mid, ok := splitFolderName(filepath.Base(p))
-		if !ok {
-			return nil, errs.ObjectNotFound
-		}
-		return d.listUpVideos(ctx, dir, mid)
-	case p == "/"+dirFav:
+	case dirFavID:
 		return d.listFavFolders(ctx, dir)
-	case strings.HasPrefix(p, "/"+dirFav+"/"):
-		_, mediaID, ok := splitFolderName(filepath.Base(p))
-		if !ok {
-			return nil, errs.ObjectNotFound
+	default:
+		if mid, ok := parsePrefixedID(dir.GetID(), upFolderPrefix); ok {
+			return d.listUpVideos(ctx, dir, mid)
 		}
-		return d.listFavVideos(ctx, dir, mediaID)
+		if mediaID, ok := parsePrefixedID(dir.GetID(), favFolderPrefix); ok {
+			return d.listFavVideos(ctx, dir, mediaID)
+		}
 	}
 	return nil, errs.ObjectNotFound
+}
+
+// parsePrefixedID 解析 "{prefix}{数字}" 形式的目录 ID
+func parsePrefixedID(id, prefix string) (int64, bool) {
+	rest, ok := strings.CutPrefix(id, prefix)
+	if !ok || rest == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func (d *Bilibili) listFollowings(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
@@ -116,9 +131,16 @@ func (d *Bilibili) listFollowings(ctx context.Context, dir model.Obj) ([]model.O
 	if err != nil {
 		return nil, err
 	}
+	displays := make([]string, len(items))
+	suffixes := make([]string, len(items))
+	for i, f := range items {
+		displays[i] = sanitizeName(f.Uname, 80)
+		suffixes[i] = strconv.FormatInt(f.Mid, 10)
+	}
+	names := disambiguate(displays, suffixes)
 	objs := make([]model.Obj, 0, len(items))
-	for _, f := range items {
-		objs = append(objs, folderObj(dir, sanitizeName(f.Uname, 80)+"_"+strconv.FormatInt(f.Mid, 10)))
+	for i, f := range items {
+		objs = append(objs, folderObj(dir, names[i], upFolderPrefix+strconv.FormatInt(f.Mid, 10)))
 	}
 	return objs, nil
 }
@@ -128,9 +150,16 @@ func (d *Bilibili) listUpVideos(ctx context.Context, dir model.Obj, mid int64) (
 	if err != nil {
 		return nil, err
 	}
+	displays := make([]string, len(items))
+	suffixes := make([]string, len(items))
+	for i, v := range items {
+		displays[i] = sanitizeName(v.Title, 150)
+		suffixes[i] = v.Bvid
+	}
+	names := disambiguate(displays, suffixes)
 	objs := make([]model.Obj, 0, len(items))
 	for i := range items {
-		objs = append(objs, newVideoObj(dir, items[i]))
+		objs = append(objs, newVideoObj(dir, items[i], names[i]))
 	}
 	return objs, nil
 }
@@ -140,9 +169,16 @@ func (d *Bilibili) listFavFolders(ctx context.Context, dir model.Obj) ([]model.O
 	if err != nil {
 		return nil, err
 	}
+	displays := make([]string, len(items))
+	suffixes := make([]string, len(items))
+	for i, f := range items {
+		displays[i] = sanitizeName(f.Title, 80)
+		suffixes[i] = strconv.FormatInt(f.ID, 10)
+	}
+	names := disambiguate(displays, suffixes)
 	objs := make([]model.Obj, 0, len(items))
-	for _, f := range items {
-		objs = append(objs, folderObj(dir, sanitizeName(f.Title, 80)+"_"+strconv.FormatInt(f.ID, 10)))
+	for i, f := range items {
+		objs = append(objs, folderObj(dir, names[i], favFolderPrefix+strconv.FormatInt(f.ID, 10)))
 	}
 	return objs, nil
 }
@@ -152,9 +188,16 @@ func (d *Bilibili) listFavVideos(ctx context.Context, dir model.Obj, mediaID int
 	if err != nil {
 		return nil, err
 	}
+	displays := make([]string, len(items))
+	suffixes := make([]string, len(items))
+	for i, v := range items {
+		displays[i] = sanitizeName(v.Title, 150)
+		suffixes[i] = v.Bvid
+	}
+	names := disambiguate(displays, suffixes)
 	objs := make([]model.Obj, 0, len(items))
 	for i := range items {
-		objs = append(objs, newVideoObj(dir, items[i]))
+		objs = append(objs, newVideoObj(dir, items[i], names[i]))
 	}
 	return objs, nil
 }
@@ -165,9 +208,9 @@ func (d *Bilibili) Get(ctx context.Context, path string) (model.Obj, error) {
 	case "/":
 		return &model.Object{Name: rootName, Path: "/", IsFolder: true}, nil
 	case "/" + dirFollow:
-		return &model.Object{Name: dirFollow, Path: "/" + dirFollow, IsFolder: true}, nil
+		return &model.Object{ID: dirFollowID, Name: dirFollow, Path: "/" + dirFollow, IsFolder: true}, nil
 	case "/" + dirFav:
-		return &model.Object{Name: dirFav, Path: "/" + dirFav, IsFolder: true}, nil
+		return &model.Object{ID: dirFavID, Name: dirFav, Path: "/" + dirFav, IsFolder: true}, nil
 	}
 	return nil, errs.NotSupport
 }
