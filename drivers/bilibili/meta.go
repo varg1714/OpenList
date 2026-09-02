@@ -40,6 +40,9 @@ type Bilibili struct {
 
 	uid   int64  // nav 登录态缓存（navInfo 写入）
 	uname string // nav 登录态缓存（navInfo 写入）
+
+	qrcodeKey string // 扫码登录 key（loginByQRCode 写入，过期/成功后清除）
+	qrURL     string // 扫码登录二维码内容 URL（loginByQRCode 写入）
 }
 
 func (d *Bilibili) Config() driver.Config {

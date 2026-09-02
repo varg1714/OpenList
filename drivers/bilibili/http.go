@@ -100,8 +100,10 @@ func (d *Bilibili) fetchMixinKey(ctx context.Context) (string, error) {
 	}
 	imgKey := strings.TrimSuffix(path.Base(data.WbiImg.ImgURL), path.Ext(data.WbiImg.ImgURL))
 	subKey := strings.TrimSuffix(path.Base(data.WbiImg.SubURL), path.Ext(data.WbiImg.SubURL))
-	if imgKey == "" || subKey == "" {
-		return "", errors.New("wbi_img keys empty from nav")
+	// path.Base("") 返回 "."，空 wbi_img 会漏过 == "" 检查并在 getMixinKey 中
+	// 越界 panic（table 索引 46 越出 2 字符串）；key 恒为 32 位 hex，长度即哨兵。
+	if len(imgKey) < 32 || len(subKey) < 32 {
+		return "", errors.New("wbi_img keys malformed from nav")
 	}
 	d.mixinKey = getMixinKey(imgKey + subKey)
 	d.mixinKeyDay = today

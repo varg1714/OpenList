@@ -76,6 +76,19 @@ func TestDoGetCodeZeroReturnsData(t *testing.T) {
 	}
 }
 
+func TestFetchMixinKeyMalformedWbiImgErrors(t *testing.T) {
+	// 空 wbi_img：path.Base("") 返回 "."，历史上会漏过 == "" 守卫并在
+	// getMixinKey("..") 越界 panic——现在应返回错误而非 panic。
+	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"code":0,"data":{"wbi_img":{}}}`))
+	})
+	d := newTestDriver()
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
+	if _, err := d.fetchMixinKey(context.Background()); err == nil {
+		t.Fatal("fetchMixinKey: want error for malformed wbi_img")
+	}
+}
+
 func TestDoGetNonZeroCode(t *testing.T) {
 	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"code":-101,"message":"账号未登录"}`))
