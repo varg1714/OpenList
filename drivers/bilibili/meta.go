@@ -1,8 +1,12 @@
 package bilibili
 
 import (
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/go-resty/resty/v2"
+	"golang.org/x/time/rate"
 	// TODO(Task 6): import op and re-enable init() below once
 	// Bilibili implements the full driver.Driver interface (List/Link).
 	// "github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -24,6 +28,15 @@ var config = driver.Config{
 type Bilibili struct {
 	model.Storage
 	Addition
+
+	// http client 层（Task 3+）：resty 复用池 + 全局限流 + 手动 cookie 串
+	client    *resty.Client
+	limiter   *rate.Limiter
+	pageDelay time.Duration // 分页间延迟（翻页过快会被风控）
+
+	cookieStr   string // 手动维护的 cookie 串（种子来自 Addition.Cookie，随 Set-Cookie 合并）
+	mixinKey    string // wbi 签名 key（按日缓存）
+	mixinKeyDay string // mixinKey 的抓取日期 YYYYMMDD
 }
 
 func (d *Bilibili) Config() driver.Config {
