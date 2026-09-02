@@ -75,22 +75,58 @@ type tvIndex struct {
 // addEpisode 登记一条文件条目。virtualDir 为展示目录（剧集根或季别名路径）；
 // virtualName 为展示文件名（生成的 S{NN}E{MM} 或保持的原名）。
 // 虚拟路径冲突时真实同名条目优先（真实文件优先语义），已存在的真实同名条目不被覆盖。
+// addEpisode 登记一条文件条目。命名决策（已编号过滤/编号/原名）由收集阶段完成；
+// 此处统一处理虚拟路径冲突：
+//   - 真实同名条目优先于生成名条目（真实文件占用虚拟路径）
+//   - 两个真实同名条目（扁平化后不同子目录的同名文件）：后者映射消解名
+//     （原名-2.扩展名，仍冲突则递增），保证文件可见、不丢弃
+//   - 两个生成名冲突：理论不可能（季号+集号唯一），记警告
 func (idx *tvIndex) addEpisode(real model.Obj, realPath, virtualDir, virtualName string) {
 	virtualPath := stdpath.Join(virtualDir, virtualName)
 	key := strings.ToLower(virtualPath)
-	if existing, ok := idx.byVirtual[key]; ok {
-		if realNamed(existing) {
-			// 已有真实同名条目占用该虚拟路径（扁平化后不同子目录的同名文件碰撞）：
-			// 不覆盖，但记录警告——第二个文件在列表中不可见，Get 返回第一个
-			utils.Log.Warnf("emby wrapper: %s collides with %s at %s, dropped from season view",
-				realPath, existing.path, virtualPath)
-			return
-		}
-		if !realNamed(tvEntry{real: real, name: virtualName}) {
-			return // 两个生成名冲突（理论不可能：季号+集号唯一）
-		}
+	existing, ok := idx.byVirtual[key]
+	if !ok {
+		idx.setEntry(real, realPath, virtualPath, virtualName)
+		return
 	}
-	idx.byVirtual[key] = tvEntry{real: real, name: virtualName, path: realPath}
+	realEntry := tvEntry{real: real, name: virtualName}
+	switch {
+	case realNamed(existing) && realNamed(realEntry):
+		// 两个真实同名条目：后者映射消解名
+		idx.addDisambiguated(real, realPath, virtualDir, virtualName, existing.path)
+	case realNamed(existing):
+		// 生成名被真实同名条目占用（真实文件优先，生成条目不展示）
+		utils.Log.Debugf("emby wrapper: generated %s shadowed by real file %s", virtualPath, existing.path)
+	case realNamed(realEntry):
+		// 真实名覆盖生成名条目（真实文件优先）
+		utils.Log.Debugf("emby wrapper: real file %s takes over %s from generated %s", realPath, virtualPath, existing.path)
+		idx.setEntry(real, realPath, virtualPath, virtualName)
+	default:
+		// 两个生成名冲突（理论不可能：季号+集号唯一）
+		utils.Log.Warnf("emby wrapper: generated name collision at %s (%s vs %s)", virtualPath, realPath, existing.path)
+	}
+}
+
+// addDisambiguated 为冲突的真实同名条目登记消解名（原名-2.扩展名，仍冲突则继续递增）。
+func (idx *tvIndex) addDisambiguated(real model.Obj, realPath, virtualDir, virtualName, conflictPath string) {
+	base := strings.TrimSuffix(virtualName, stdpath.Ext(virtualName))
+	ext := stdpath.Ext(virtualName)
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
+		virtualPath := stdpath.Join(virtualDir, candidate)
+		if _, dup := idx.byVirtual[strings.ToLower(virtualPath)]; dup {
+			continue
+		}
+		utils.Log.Warnf("emby wrapper: %s collides with %s at %s, mapped to %s",
+			realPath, conflictPath, stdpath.Join(virtualDir, virtualName), candidate)
+		idx.setEntry(real, realPath, virtualPath, candidate)
+		return
+	}
+}
+
+// setEntry 登记条目（byVirtual/nfoBases/byReal/last）。
+func (idx *tvIndex) setEntry(real model.Obj, realPath, virtualPath, virtualName string) {
+	idx.byVirtual[strings.ToLower(virtualPath)] = tvEntry{real: real, name: virtualName, path: realPath}
 	idx.nfoBases[strings.ToLower(strings.TrimSuffix(virtualPath, stdpath.Ext(virtualName)))] = virtualName
 	idx.byReal[realPath] = virtualName
 	idx.last = real
@@ -505,6 +541,10 @@ func (d *EmbyWrapper) emitTVSeasonView(pc *tvPathContext, idx *tvIndex, setting 
 				},
 				content: content,
 			})
+			continue
+		}
+		// 生成名条目（虚拟剧集名或冲突消解名）：仅视频生成剧集 nfo，非视频跳过
+		if _, ok := d.supportSuffix[utils.Ext(e.name)]; !ok {
 			continue
 		}
 		nfoName := strings.TrimSuffix(e.name, stdpath.Ext(e.name)) + ".nfo"

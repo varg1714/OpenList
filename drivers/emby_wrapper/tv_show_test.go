@@ -321,6 +321,58 @@ func TestTVShowNestedTVSkipped(t *testing.T) {
 	}
 }
 
+// TestTVShowDuplicateRealNamesInSeason：扁平化后不同嵌套子目录的同名文件
+// （非视频、已编号视频）不丢弃，后者映射消解名（原名-2.扩展名）保持可见。
+func TestTVShowDuplicateRealNamesInSeason(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeDirOrdered(t, "/Movies/2024年/正片"); err != nil {
+		t.Fatalf("mkdir 正片: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/正片/Show.S01E03.mkv", "ep-a"); err != nil {
+		t.Fatalf("write ep-a: %v", err)
+	}
+	if err := writeDownstreamFile(t, "/Movies/2024年/正片/poster.jpg", "poster-a"); err != nil {
+		t.Fatalf("write poster-a: %v", err)
+	}
+	if err := writeDirOrdered(t, "/Movies/2024年/花絮"); err != nil {
+		t.Fatalf("mkdir 花絮: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/花絮/Show.S01E03.mkv", "ep-b"); err != nil {
+		t.Fatalf("write ep-b: %v", err)
+	}
+	if err := writeDownstreamFile(t, "/Movies/2024年/花絮/poster.jpg", "poster-b"); err != nil {
+		t.Fatalf("write poster-b: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	objs, err := d.List(context.Background(), &model.Object{Name: "S02", Path: "/Movies/S02", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list S02: %+v", err)
+	}
+	if got := sortedNames(objs); !reflect.DeepEqual(got, []string{
+		"Show.S01E03-2.mkv", "Show.S01E03-2.nfo", "Show.S01E03.mkv", "Show.S01E03.nfo",
+		"poster-2.jpg", "poster.jpg", "season.nfo",
+	}) {
+		t.Errorf("duplicate real names must be disambiguated, not dropped, got %v", got)
+	}
+	// 消解名可 Get/Link：映射到后创建的文件
+	if got := readNFOLink(t, d, "/Movies/S02/Show.S01E03-2.mkv"); got != "ep-b" {
+		t.Errorf("disambiguated episode must link its own file, got %q", got)
+	}
+	if got := readNFOLink(t, d, "/Movies/S02/poster-2.jpg"); got != "poster-b" {
+		t.Errorf("disambiguated non-video must link its own file, got %q", got)
+	}
+	// 首个（先创建）保持原名
+	if got := readNFOLink(t, d, "/Movies/S02/Show.S01E03.mkv"); got != "ep-a" {
+		t.Errorf("first episode must keep original name, got %q", got)
+	}
+	if got := readNFOLink(t, d, "/Movies/S02/poster.jpg"); got != "poster-a" {
+		t.Errorf("first non-video must keep original name, got %q", got)
+	}
+}
+
 // TestGetVirtualEpisodeNotFound：无匹配的虚拟剧集路径保持 404。
 func TestGetVirtualEpisodeNotFound(t *testing.T) {
 	d := setup(t)
