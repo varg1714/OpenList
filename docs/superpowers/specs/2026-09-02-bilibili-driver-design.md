@@ -36,7 +36,6 @@ drivers/bilibili/
 ├── login.go     # 扫码登录流程（generate/poll + HTML 二维码）
 ├── util.go      # resty client、cookie 管理、wbi 签名、限流
 ├── api.go       # 各 API 调用与响应结构（followings/arc-search/fav/playurl）
-├── cache.go     # 列表 TTL 缓存（复用 Xhofe/go-cache）
 └── *_test.go    # 单测
 ```
 
@@ -79,7 +78,7 @@ var config = driver.Config{
 1. `GET /x/web-interface/nav` → `data.wbi_img.img_url/sub_url` 文件名（去扩展名）拼接
 2. 64 位打乱表取前 32 位 → **mixin key**
 3. 签名：params 注入 `wts`（秒）→ key 升序 → `url.QueryEscape` 后过滤 `!'()*` → 拼 mixin key → MD5 → `w_rid`
-4. mixin key 进程内**按日缓存**（`Xhofe/go-cache`，TTL 24h，首次通过 nav 获取）
+4. mixin key 进程内**按日缓存**（普通变量 + 时间戳，过期即重新通过 nav 获取）
 
 ### 扫码登录（login.go，189pc 交互模式）
 
@@ -92,7 +91,7 @@ OpenList 无专用二维码 UI；189pc 先例（drivers/189pc/utils.go `genQRCod
      - `0` 成功 → 回调 URL query 中提取 `SESSDATA`、`DedeUserID`、`bili_jct` 等 → 组 cookie 串回填 `Addition.Cookie` → `op.MustSaveDriverStorage` → 继续初始化
      - `86038` 过期 → 清 qrcode_key → 返回 HTML 错误提示"二维码已过期，请再次保存刷新"
 2. 校验：`GET /x/web-interface/nav`，`code != 0`（-101 未登录）→ 报错提示重新登录；成功则缓存 uid/uname。
-3. `Drop`：清缓存与 qrcode_key。
+3. `Drop`：清 qrcode_key 与进程内 mixin key 缓存。
 
 ### 虚拟目录与 API 映射（driver.go List）
 
@@ -110,12 +109,7 @@ OpenList 无专用二维码 UI；189pc 先例（drivers/189pc/utils.go `genQRCod
 - **UP 文件夹命名**：`{uname}_{mid}`（uname 允许重名，mid 保证唯一、可直接解析）；名称做文件名清洗（替换 `/\:*?"<>|` 与控制字符）。解析 mid 时按**最后一个 `_`** 分割（uname 本身可能含 `_`）。
 - **叶子文件**：`model.ObjThumb`，`Name = {清理后的标题}.mp4`，`Modified = pubdate`（时间列/排序依据），`Thumbnail` 填封面 URL（`http://` 归一为 `https://`）；**Obj 内部用私有字段携带 `bvid` + `cid`**（自定义 struct 包装 `model.ObjThumb`，List 时从 vlist/medias 提取 cid，Link 免二次查询）。
 - **分页全量**：followings/arc-search/fav-resource 循环至 `page.count` 尽；每页 150ms 节流。
-- **列表缓存**（cache.go，`Xhofe/go-cache` MemCache，quark_share 同款）：
-  - 关注列表 key=uid，TTL 30min
-  - UP 投稿 key=mid，TTL 15min
-  - 收藏夹内容 key=media_id，TTL 15min
-  - 收藏夹列表 key=uid，TTL 30min
-  - 手动刷新（ListArgs.Refresh）时强制回源
+- **列表缓存：不设驱动内缓存**。框架层已有目录缓存（`internal/op/fs.go` dirCache）：非 Refresh 的 List 命中缓存直接返回（存储级 `cache_expiration` 配置，默认 30min，用户可调），手动刷新（`Refresh=true`）穿透缓存直达驱动。驱动内再自建一层属冗余（多占内存、多一层一致性维护），故 `Config.NoCache=false` 交给框架缓存即可；目录浏览/播放器 Get 回退的父目录 List 都由框架缓存兜底，翻页成本仅发生在缓存过期或手动刷新时。
 - **上限保护**：`Addition.MaxListItems`（number，默认 `500`，0=不限），作用于上述三个分页循环，防超大 UP（数千投稿）同步翻页拖垮 List。超限时记日志说明截断。
 - **根目录**：`/` 直接返回两个静态文件夹 obj，不发 API。
 
