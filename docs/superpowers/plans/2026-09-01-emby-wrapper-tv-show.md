@@ -29,6 +29,7 @@
 - **season.nfo**：`<seasonnumber>` + `<title>季文件夹原名</title>`（Emby 经 BaseNfoParser 识别 title 为季显示名，见 Spec 7 修订）；真实季目录下同名 season.nfo 优先转发下游
 - **路径解析**：`resolveVirtualPath`（文件条目 → 季别名目录 → 别名前缀重写递归）是 Get 的虚拟→真实唯一映射点；`tvNFOForPath` 处理 tvshow/season/剧集 nfo 并保持真实同名 nfo 优先
 - **确定性**：季视图条目按创建时间+展示名升序排序（`byVirtual` 为 map，遍历无序，需显式排序）；索引构建失败降级为警告+原始列表（不整体失败）
+- **剧集封面（2026-09-03）**：上游对象带 thumb（网盘预览图 URL，`model.GetThumb`）时，为虚拟剧集附加 `{剧集名}-thumb.jpg` 占位对象（Emby episode 图片命名规则 `{name}-thumb.ext`）；内容在 **Link 时惰性下载并按 URL 键控内存缓存**（方案 B，256MB 上限整体清空）；同名真实文件优先；包装对象（wrappedObj/virtualObj/embyFolder）不透传 Unwrap（防泄露下游路径），改为包装时提取 thumb 存入并实现 `model.Thumb`；strm 落盘需 DownloadFileTypes 含 jpg
 
 ## Global Constraints
 

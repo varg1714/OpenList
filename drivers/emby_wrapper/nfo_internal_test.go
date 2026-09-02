@@ -9,10 +9,10 @@ import (
 
 func TestPlotFileNameStripsOnlyExtension(t *testing.T) {
 	cases := map[string]string{
-		"AAA.mkv":              "AAA",
-		"BBB.cd1.mkv":          "BBB.cd1",
-		"CCC.CD2.mp4":          "CCC.CD2",
-		"noext":                "noext",
+		"AAA.mkv":                 "AAA",
+		"BBB.cd1.mkv":             "BBB.cd1",
+		"CCC.CD2.mp4":             "CCC.CD2",
+		"noext":                   "noext",
 		"Example Movie Title.mp4": "Example Movie Title",
 	}
 	for in, want := range cases {

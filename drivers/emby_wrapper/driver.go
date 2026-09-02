@@ -5,6 +5,7 @@ import (
 	"context"
 	stdpath "path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -20,6 +21,10 @@ type EmbyWrapper struct {
 	model.Storage
 	Addition
 	supportSuffix map[string]struct{}
+	// thumb 缓存（方案 B：Link 时惰性下载，按 URL 键控）
+	thumbMu    sync.Mutex
+	thumbCache map[string][]byte
+	thumbBytes int64
 }
 
 func (d *EmbyWrapper) Config() driver.Config {
@@ -52,6 +57,9 @@ func (d *EmbyWrapper) Init(ctx context.Context) error {
 			d.supportSuffix[ext] = struct{}{}
 		}
 	}
+	d.thumbMu = sync.Mutex{}
+	d.thumbCache = map[string][]byte{}
+	d.thumbBytes = 0
 	return nil
 }
 
@@ -318,6 +326,18 @@ func (d *EmbyWrapper) resolveVirtualPath(ctx context.Context, path string) (mode
 	if e, ok := idx.entry(path); ok {
 		return newVirtualObj(e.real, e.name, e.path), true, nil
 	}
+	// 虚拟封面图 {剧集名}-thumb.jpg：经 nfoBases 反查条目（含季别名段，天然按目录限定）
+	if strings.HasSuffix(strings.ToLower(path), "-thumb.jpg") {
+		base := stdpath.Base(path)
+		epBase := strings.TrimSuffix(base, "-thumb.jpg")
+		if epName, ok := idx.nfoBases[strings.ToLower(stdpath.Join(parentDir, epBase))]; ok {
+			if e, ok := idx.entry(stdpath.Join(parentDir, epName)); ok {
+				if thumbURL, tok := thumbOfEntry(e); tok {
+					return newVirtualThumb(path, thumbURL, e.real.ModTime()), true, nil
+				}
+			}
+		}
+	}
 	// 季别名目录
 	if seasonReal, ok := idx.seasonRealOf(path); ok {
 		remoteStorage, remoteActualPath, err := d.remote()
@@ -357,6 +377,17 @@ func (d *EmbyWrapper) Link(ctx context.Context, file model.Obj, args model.LinkA
 		return &model.Link{
 			RangeReader:   stream.GetRangeReaderFromMFile(int64(len(nfo.content)), bytes.NewReader(nfo.content)),
 			ContentLength: int64(len(nfo.content)),
+		}, nil
+	}
+	if th, ok := file.(*virtualThumb); ok {
+		content, err := d.thumbContent(th.thumbURL)
+		if err != nil {
+			utils.Log.Warnf("emby wrapper: fetch thumb for %s: %+v", th.GetPath(), err)
+			return nil, err
+		}
+		return &model.Link{
+			RangeReader:   stream.GetRangeReaderFromMFile(int64(len(content)), bytes.NewReader(content)),
+			ContentLength: int64(len(content)),
 		}, nil
 	}
 	remoteStorage, remoteActualPath, err := d.remote()

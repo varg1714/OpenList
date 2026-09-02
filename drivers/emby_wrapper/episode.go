@@ -425,6 +425,13 @@ func (d *EmbyWrapper) emitTVRootView(pc *tvPathContext, idx *tvIndex, setting *m
 			continue
 		}
 		out = append(out, newVirtualObj(o, epName, o.GetPath()))
+		// 剧集封面：上游对象带 thumb 时附加 {虚拟名}-thumb.jpg 占位（内容 Link 时下载）
+		if thumbURL, ok := model.GetThumb(o); ok && thumbURL != "" {
+			thumbName := thumbNameOf(epName)
+			if !realFiles[strings.ToLower(thumbName)] {
+				out = append(out, newVirtualThumb(stdpath.Join(pc.viewDir, thumbName), thumbURL, o.ModTime()))
+			}
+		}
 		nfoName := strings.TrimSuffix(epName, stdpath.Ext(epName)) + ".nfo"
 		if realNFO[strings.ToLower(nfoName)] || addedNFO[nfoName] {
 			continue
@@ -514,6 +521,16 @@ func (d *EmbyWrapper) emitTVSeasonView(pc *tvPathContext, idx *tvIndex, setting 
 			continue // 生成的虚拟名被真实同名条目占用：真实条目展示
 		}
 		out = append(out, newVirtualObj(e.real, e.name, e.path))
+		// 剧集封面：仅视频条目，上游对象带 thumb 时附加 {虚拟名}-thumb.jpg 占位
+		// （同名真实文件已作为条目展示，idx.entry 命中则跳过，真实优先）
+		if _, isVideo := d.supportSuffix[utils.Ext(e.name)]; isVideo {
+			if thumbURL, ok := thumbOfEntry(e); ok {
+				thumbName := thumbNameOf(e.name)
+				if _, taken := idx.entry(stdpath.Join(pc.viewDir, thumbName)); !taken {
+					out = append(out, newVirtualThumb(stdpath.Join(pc.viewDir, thumbName), thumbURL, e.real.ModTime()))
+				}
+			}
+		}
 		// 保持原名的条目：已编号视频保留同名剧集 nfo（title=原名）；非视频无 nfo
 		if realNamed(e) {
 			if _, ok := d.supportSuffix[utils.Ext(e.name)]; !ok {
