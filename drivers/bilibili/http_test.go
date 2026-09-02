@@ -35,6 +35,18 @@ func newTestDriver() *Bilibili {
 	return d
 }
 
+// mockRoundTrip 把任意请求（含硬编码的 apiBase/passportBase URL）转发到 srv：
+// httptest server 的 client transport 是标准 transport，会 dial req.URL.Host，
+// 所以必须先改写 scheme+host
+func mockRoundTrip(srv *httptest.Server) roundTripFunc {
+	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		req2 := req.Clone(req.Context())
+		req2.URL.Scheme = "http"
+		req2.URL.Host = strings.TrimPrefix(srv.URL, "http://")
+		return srv.Client().Transport.RoundTrip(req2)
+	})
+}
+
 func TestDoGetCodeZeroReturnsData(t *testing.T) {
 	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Set-Cookie", "buvid3=xyz; path=/")

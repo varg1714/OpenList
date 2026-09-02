@@ -37,6 +37,9 @@ type Bilibili struct {
 	cookieStr   string // 手动维护的 cookie 串（种子来自 Addition.Cookie，随 Set-Cookie 合并）
 	mixinKey    string // wbi 签名 key（按日缓存）
 	mixinKeyDay string // mixinKey 的抓取日期 YYYYMMDD
+
+	uid   int64  // nav 登录态缓存（navInfo 写入）
+	uname string // nav 登录态缓存（navInfo 写入）
 }
 
 func (d *Bilibili) Config() driver.Config {
