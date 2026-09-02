@@ -102,7 +102,8 @@ func (d *Bilibili) loginByQRCode(ctx context.Context) error {
 	}
 }
 
-// cookiesFromLoginURL 从扫码成功回调 URL 提取核心 cookie（SESSDATA/DedeUserID/bili_jct）
+// cookiesFromLoginURL 从扫码成功回调 URL 提取核心 cookie（SESSDATA/DedeUserID/bili_jct）；
+// SESSDATA 缺失视为无效回调返回空串（调用方据此报错提示未登录）
 func cookiesFromLoginURL(loginURL string) string {
 	u, err := url.Parse(loginURL)
 	if err != nil {
@@ -114,6 +115,9 @@ func cookiesFromLoginURL(loginURL string) string {
 		{"DedeUserID", q.Get("DedeUserID")},
 		{"DedeUserID__ckMd5", q.Get("DedeUserID__ckMd5")},
 		{"bili_jct", q.Get("bili_jct")},
+	}
+	if pairs[0].v == "" {
+		return ""
 	}
 	parts := make([]string, 0, len(pairs))
 	for _, p := range pairs {

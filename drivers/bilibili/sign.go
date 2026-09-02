@@ -60,23 +60,3 @@ func encWbi(params map[string]string, mixinKey string) map[string]string {
 	out["w_rid"] = hex.EncodeToString(sum[:])
 	return out
 }
-
-// wbiQuery 返回签名后可拼入 URL 的完整 query 串（已排序）
-func wbiQuery(params map[string]string, mixinKey string) string {
-	signed := encWbi(params, mixinKey)
-	keys := make([]string, 0, len(signed))
-	for k := range signed {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var sb strings.Builder
-	for i, k := range keys {
-		if i > 0 {
-			sb.WriteByte('&')
-		}
-		sb.WriteString(wbiEscape(k))
-		sb.WriteByte('=')
-		sb.WriteString(wbiEscape(signed[k]))
-	}
-	return sb.String()
-}

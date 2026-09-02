@@ -133,22 +133,6 @@ func (d *Bilibili) doGet(ctx context.Context, url string, params map[string]stri
 	return d.decodeResp(resp)
 }
 
-// doPostForm POST form 请求（扫码登录用，无需签名）
-func (d *Bilibili) doPostForm(ctx context.Context, url string, form map[string]string) (json.RawMessage, error) {
-	if err := d.limiter.Wait(ctx); err != nil {
-		return nil, err
-	}
-	req := d.client.R().SetContext(ctx).
-		SetHeader("Cookie", d.cookieStr).
-		SetFormData(form)
-	resp, err := req.Post(url)
-	if err != nil {
-		return nil, err
-	}
-	d.setCookieFromResp(resp)
-	return d.decodeResp(resp)
-}
-
 func (d *Bilibili) decodeResp(resp *resty.Response) (json.RawMessage, error) {
 	var br biliResp
 	if err := json.Unmarshal(resp.Body(), &br); err != nil {

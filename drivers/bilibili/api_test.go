@@ -79,6 +79,9 @@ func TestUpVideosSignedAndParsed(t *testing.T) {
 	if len(items) != 1 || items[0].Bvid != "BV1xx" || items[0].Cid != 0 {
 		t.Fatalf("upVideos = %+v", items)
 	}
+	if items[0].Pubdate != 1700000000 {
+		t.Fatalf("pubdate = %d, want 1700000000 (vlist created)", items[0].Pubdate)
+	}
 }
 
 func TestFavVideosFirstCid(t *testing.T) {
@@ -96,6 +99,12 @@ func TestFavVideosFirstCid(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Bvid != "BV1yy" || items[0].Cid != 888 {
 		t.Fatalf("favVideos = %+v", items)
+	}
+	if items[0].Pubdate != 1700000001 {
+		t.Fatalf("pubdate = %d, want 1700000001 (fav_time)", items[0].Pubdate)
+	}
+	if items[0].Pic != "http://i0.hdslb.com/2.jpg" {
+		t.Fatalf("pic = %q, want http://i0.hdslb.com/2.jpg (cover)", items[0].Pic)
 	}
 }
 

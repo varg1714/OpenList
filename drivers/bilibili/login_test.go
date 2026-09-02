@@ -108,3 +108,37 @@ func TestQRLoginStateDistinct(t *testing.T) {
 		t.Fatalf("err = %v, want confirm hint for 86090", err)
 	}
 }
+
+func TestCookiesFromLoginURL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "full core cookies keep order",
+			in:   "https://passport.bilibili.com/login?SESSDATA=abc&DedeUserID=42&DedeUserID__ckMd5=md5&bili_jct=csrf&other=ignored",
+			want: "SESSDATA=abc; DedeUserID=42; DedeUserID__ckMd5=md5; bili_jct=csrf",
+		},
+		{
+			name: "missing ckMd5 dropped",
+			in:   "https://passport.bilibili.com/login?SESSDATA=abc&DedeUserID=42",
+			want: "SESSDATA=abc; DedeUserID=42",
+		},
+		{
+			name: "no SESSDATA yields empty",
+			in:   "https://passport.bilibili.com/login?bili_jct=csrf",
+			want: "",
+		},
+		{
+			name: "unparseable URL yields empty",
+			in:   "https://passport.bilibili.com/login?%zz",
+			want: "",
+		},
+	}
+	for _, c := range cases {
+		if got := cookiesFromLoginURL(c.in); got != c.want {
+			t.Errorf("%s: cookiesFromLoginURL(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}

@@ -42,11 +42,3 @@ func TestEncWbiFiltersSpecialChars(t *testing.T) {
 	}
 	_ = params // 只要不 panic、w_rid 非空即可；过滤字符不进入签名串
 }
-
-func TestWbiQuerySorted(t *testing.T) {
-	q := wbiQuery(map[string]string{"b": "2", "a": "1"}, "key")
-	// 必须以 a=1 开头（排序），且包含 b=2
-	if len(q) < 7 || q[:4] != "a=1&" {
-		t.Fatalf("wbiQuery not sorted: %q", q)
-	}
-}

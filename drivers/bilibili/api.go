@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
 // ---- 类型 ----
@@ -118,6 +120,7 @@ func (d *Bilibili) navInfo(ctx context.Context) (int64, string, error) {
 func collectPages[T any](d *Bilibili, ctx context.Context, pageSize int,
 	fetch func(pn int) ([]T, int, error), out *[]T) error {
 	maxItems := d.MaxListItems
+	capped := maxItems != 0 // 0 = 不限（MaxInt 哨兵），不属截断
 	if maxItems == 0 {
 		maxItems = int(^uint(0) >> 1) // 不限
 	}
@@ -130,6 +133,9 @@ func collectPages[T any](d *Bilibili, ctx context.Context, pageSize int,
 		for _, it := range items {
 			*out = append(*out, it)
 			if len(*out) >= maxItems {
+				if capped {
+					utils.Log.Warnf("bilibili: list truncated at %d items (MaxListItems=%d)", len(*out), d.MaxListItems)
+				}
 				return nil
 			}
 		}

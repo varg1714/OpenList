@@ -5,13 +5,12 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/go-resty/resty/v2"
 )
-
-const rootObjPath = "/" // List 的 dir 由框架传入
 
 func listDriver(t *testing.T, handler http.HandlerFunc) *Bilibili {
 	t.Helper()
@@ -99,6 +98,9 @@ func TestListUpperVideos(t *testing.T) {
 	if vo.Thumbnail.Thumbnail != "https://i0.hdslb.com/p.jpg" {
 		t.Fatalf("thumb = %q", vo.Thumbnail.Thumbnail)
 	}
+	if !vo.ModTime().Equal(time.Unix(1700000100, 0)) {
+		t.Fatalf("modtime = %s, want 1700000100 (vlist created)", vo.ModTime())
+	}
 }
 
 func TestListFavFolders(t *testing.T) {
@@ -172,5 +174,29 @@ func TestGetShallowPaths(t *testing.T) {
 	}
 	if _, err := d.Get(context.Background(), "/我的关注/某某_1/BV1xx.mp4"); !errs.IsNotSupportError(err) {
 		t.Fatalf("deep Get err = %v, want NotSupport", err)
+	}
+}
+
+func TestGetRootAndShallowDirs(t *testing.T) {
+	d := newTestDriver()
+	obj, err := d.Get(context.Background(), "/")
+	if err != nil || !obj.IsDir() || obj.GetName() != "root" {
+		t.Fatalf("Get / = %v %v", obj, err)
+	}
+	obj, err = d.Get(context.Background(), "/我的收藏")
+	if err != nil || !obj.IsDir() || obj.GetName() != "我的收藏" {
+		t.Fatalf("Get /我的收藏 = %v %v", obj, err)
+	}
+	if _, err := d.Get(context.Background(), "/我的收藏/不存在_1/x.mp4"); !errs.IsNotSupportError(err) {
+		t.Fatalf("deep Get err = %v, want NotSupport", err)
+	}
+}
+
+func TestListUnknownPath(t *testing.T) {
+	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("unknown list path must not call api")
+	})
+	if _, err := d.List(context.Background(), dirObj(t, "/无关目录"), model.ListArgs{}); !errs.IsObjectNotFound(err) {
+		t.Fatalf("List err = %v, want ObjectNotFound", err)
 	}
 }

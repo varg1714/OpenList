@@ -67,9 +67,8 @@ var config = driver.Config{
 - `resty.New()`，统一 header：浏览器 UA（Chrome 系）、`Referer: https://www.bilibili.com/`。
 - **cookie 双通道**：
   - `Addition.Cookie` 为持久化种子（SESSDATA / DedeUserID / bili_jct 等核心 cookie，扫码成功后回填并 `op.MustSaveDriverStorage`）；
-  - resty **cookie jar**（`SetCookieJar`）自动吸收每次响应的 `Set-Cookie`（buvid3 / b_nut / b_lsid 等风控临时 cookie，进程内续期）；
-  - 请求前将 `Addition.Cookie` 解析播种进 jar（`jar.SetCookies`），重启后由种子重建。
-- **风控节流**：进程级 `limiter`（`golang.org/x/time/rate`，5r/s 兜底）+ 列表翻页循环内 150ms 间隔。
+  - 请求头携带**手动维护的全量 cookie 串**（`d.cookieStr`），每次响应的 `Set-Cookie` 按 cookie 名覆盖合并回该串；重启后由 `Addition.Cookie` 种子重建。
+- **风控节流**：驱动实例级 `limiter`（`golang.org/x/time/rate`，5r/s 兜底）+ 列表翻页循环内 150ms 间隔。
 
 ### wbi 签名（util.go）
 
@@ -85,7 +84,7 @@ var config = driver.Config{
 OpenList 无专用二维码 UI；189pc 先例（drivers/189pc/utils.go `genQRCode`）：驱动返回的**错误信息为内嵌 base64 二维码的 HTML**，前端保存失败时直接渲染该 HTML → 用户手机扫码 → **再次点击保存**触发下一次 Init 轮询。Bilibili 驱动沿用：
 
 1. `Init` 且 `Cookie` 为空 → 进扫码流程：
-   - 无进程内 qrcode_key：`POST passport.bilibili.com/x/passport-login/web/qrcode/generate` → 拿 `url`（二维码内容）+ `qrcode_key`，暂存进程内；
+   - 无进程内 qrcode_key：`GET passport.bilibili.com/x/passport-login/web/qrcode/generate` → 拿 `url`（二维码内容）+ `qrcode_key`，暂存进程内；
    - `GET x/passport-login/web/qrcode/poll?qrcode_key=` 轮询：
      - `86101` 未扫 / `86090` 已扫待确认 → go-qrcode 生成 PNG → base64 → 返回 HTML 错误（提示语区分两种状态）
      - `0` 成功 → 回调 URL query 中提取 `SESSDATA`、`DedeUserID`、`bili_jct` 等 → 组 cookie 串回填 `Addition.Cookie` → `op.MustSaveDriverStorage` → 继续初始化
@@ -147,7 +146,7 @@ func (d *Bilibili) Link(ctx, file, args) (*model.Link, error)
 ### 错误处理
 
 - API 响应统一 `{code, message}`：`code!=0` → 包装 `message` 返回；`-101`（未登录）提示重新保存触发扫码。
-- List 内单 UP 投稿失败不拖垮整目录：记录日志并跳过该页（保序）。
+- 每 UP 目录是独立 List 调用，单目录失败不影响其他目录；页内失败则整个目录请求报错（collectPages 错误即中止，比静默部分列表更安全）。
 - 关注/收藏夹目录为空 → 返回空列表（不报错）。
 
 ### 明确不做（v1 范围外）

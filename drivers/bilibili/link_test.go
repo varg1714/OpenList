@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/go-resty/resty/v2"
 )
@@ -73,8 +74,8 @@ func TestLinkFetchesCidViaView(t *testing.T) {
 func TestLinkWrongType(t *testing.T) {
 	d := newTestDriver()
 	_, err := d.Link(context.Background(), &model.Object{Name: "x"}, model.LinkArgs{})
-	if err == nil {
-		t.Fatal("want error for non-videoObj")
+	if !errs.IsNotSupportError(err) {
+		t.Fatalf("err = %v, want NotSupport", err)
 	}
 }
 
@@ -89,5 +90,7 @@ func TestLinkDurlEmptyError(t *testing.T) {
 	file.cid = 1
 	if _, err := d.Link(context.Background(), file, model.LinkArgs{}); err == nil {
 		t.Fatal("want error when durl empty")
+	} else if !strings.Contains(err.Error(), "durl") {
+		t.Fatalf("err = %v, want message mentioning durl", err)
 	}
 }
