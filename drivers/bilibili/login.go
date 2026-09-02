@@ -8,8 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	// TODO(Task 7): 恢复 op 导入与 MustSaveDriverStorage 调用（见 case 0）
-	// "github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
@@ -93,11 +92,8 @@ func (d *Bilibili) loginByQRCode(ctx context.Context) error {
 		d.qrcodeKey = ""
 		d.qrURL = ""
 		if d.GetStorage().ID != 0 {
-			// TODO(Task 7): *Bilibili 尚不实现 driver.Driver（List/Get/Init/Drop
-			// 在 Task 6/7 补齐），op.MustSaveDriverStorage(d) 无法编译（接口断言
-			// 在调用点静态检查）。Task 7 恢复为：
-			//     op.MustSaveDriverStorage(d)
-			// 测试 driver（ID==0）不触发；真实存储 ID != 0 时持久化新 cookie。
+			// 真实存储（ID != 0）持久化新 cookie；测试 driver（ID==0）不触发
+			op.MustSaveDriverStorage(d)
 		}
 		return nil
 	default:

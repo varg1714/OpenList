@@ -51,8 +51,7 @@ func (d *Bilibili) GetAddition() driver.Additional {
 	return &d.Addition
 }
 
-// 注册：List/Get + Link 桩（Task 7 替换）已满足 driver.Driver；
-// Init/Drop 桩见 driver.go（Task 7 替换为真实实现）。
+// 注册：完整 driver.Driver（List/Get/Link + Init/Drop 生命周期）
 func init() {
 	op.RegisterDriver(func() driver.Driver {
 		return &Bilibili{}

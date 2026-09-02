@@ -2,6 +2,7 @@ package bilibili
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -171,16 +172,68 @@ func (d *Bilibili) Get(ctx context.Context, path string) (model.Obj, error) {
 	return nil, errs.NotSupport
 }
 
-// Link 占位，Task 7 实现
+// durl URL 约 2h 有效，保守缓存 110min
+const durlExpiration = 110 * time.Minute
+
+// Link 生成 durl 直链（方案 C）：仅支持本驱动产出的 videoObj；
+// cid 未知（up 空间视频）时先经 view 接口补，再取 playurl durl 首个直链。
 func (d *Bilibili) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	return nil, errs.NotSupport
+	vo, ok := file.(*videoObj)
+	if !ok {
+		return nil, errs.NotSupport
+	}
+	cid := vo.cid
+	if cid == 0 {
+		var err error
+		cid, err = d.videoCid(ctx, vo.bvid)
+		if err != nil {
+			return nil, err
+		}
+	}
+	u, size, err := d.playURLDurl(ctx, vo.bvid, cid)
+	if err != nil {
+		return nil, err
+	}
+	exp := durlExpiration
+	return &model.Link{
+		URL:           u,
+		ContentLength: size,
+		Expiration:    &exp,
+		Header: http.Header{
+			"Referer":    {"https://www.bilibili.com/"},
+			"User-Agent": {browserUA},
+		},
+	}, nil
 }
 
-// Init/Drop 占位，Task 7 实现真实逻辑（initClient/扫码/navInfo 校验；清理登录态）
+// Init 初始化 HTTP 客户端并校验登录态；无 cookie 时走扫码流程
+// （未扫/待确认/过期返回携带二维码 HTML 的错误，前端渲染即出码）。
 func (d *Bilibili) Init(ctx context.Context) error {
+	d.initClient()
+	if d.cookieStr == "" {
+		d.cookieStr = d.Addition.Cookie
+	}
+	// 无 cookie → 扫码流程（未扫/待确认/过期会返回 HTML 错误）
+	if d.cookieStr == "" {
+		if err := d.loginByQRCode(ctx); err != nil {
+			return err
+		}
+	}
+	// 校验登录态并缓存 uid/uname
+	if _, _, err := d.navInfo(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
+// Drop 清理扫码/签名/登录态，下次 Init 重新建立
 func (d *Bilibili) Drop(ctx context.Context) error {
+	d.qrcodeKey = ""
+	d.qrURL = ""
+	d.mixinKey = ""
+	d.mixinKeyDay = ""
+	d.cookieStr = ""
+	d.uid = 0
+	d.uname = ""
 	return nil
 }
