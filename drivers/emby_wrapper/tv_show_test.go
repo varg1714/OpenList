@@ -174,7 +174,7 @@ func TestTVShowSeasonNFOContent(t *testing.T) {
 	}
 }
 
-// TestTVShowNFOsContent：剧集 nfo（episodedetails、title=原名、actors、无 plot）与 tvshow.nfo（剧名+简介）。
+// TestTVShowNFOsContent：剧集 nfo（episodedetails、title=原名、actors、plot=影片名）与 tvshow.nfo（剧名+简介）。
 func TestTVShowNFOsContent(t *testing.T) {
 	d := setup(t)
 	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
@@ -190,6 +190,9 @@ func TestTVShowNFOsContent(t *testing.T) {
 	}
 	if !strings.Contains(ep, "<![CDATA[A1]]>") {
 		t.Errorf("episode nfo title must be original base name, got %s", ep)
+	}
+	if !strings.Contains(ep, "<plot><![CDATA[A1]]></plot>") {
+		t.Errorf("episode nfo plot must carry movie name, got %s", ep)
 	}
 	if !strings.Contains(ep, "<name>演员A</name>") {
 		t.Errorf("episode nfo must keep actors, got %s", ep)

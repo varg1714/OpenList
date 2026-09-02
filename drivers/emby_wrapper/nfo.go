@@ -86,9 +86,10 @@ func buildNFOContent(title, fileName string, setting *model.EmbyDirSetting) ([]b
 	return buildNFOWithRoot("movie", nfoTitle, plot, setting)
 }
 
-// buildEpisodeNFO 构建剧集 nfo：title（原文件名去扩展名）+ actor，无 plot（plot 属于剧集级 tvshow.nfo）。
+// buildEpisodeNFO 构建剧集 nfo：title（原文件名去扩展名）+ plot（影片名称，
+// 2026-09-03 应需求与 title 同值写入简介）+ actor；不含剧集级简介（属于 tvshow.nfo）。
 func buildEpisodeNFO(title string, setting *model.EmbyDirSetting) ([]byte, error) {
-	return buildNFOWithRoot("episodedetails", title, "", setting)
+	return buildNFOWithRoot("episodedetails", title, title, setting)
 }
 
 // buildTVShowNFO 构建剧集级 nfo：title（自定义剧名）+ plot（剧集介绍）+ actor。
