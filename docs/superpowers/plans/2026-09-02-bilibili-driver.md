@@ -626,6 +626,7 @@ git commit -m "feat(bilibili): http client with cookie merge, rate limit, wbi si
 
 **Files:**
 - Create: `drivers/bilibili/api.go`
+- Modify: `drivers/bilibili/http_test.go`（在 helper 区追加 `mockRoundTrip`——Task 3 的测试直接内联转发，但 apiBase 硬编码 URL 会泄漏到真实网络；httptest client transport 不重写 host，必须手动改 scheme+host。本任务起所有测试 helper 统一用它）
 - Test: `drivers/bilibili/api_test.go`
 
 **Interfaces:**
@@ -642,6 +643,26 @@ git commit -m "feat(bilibili): http client with cookie merge, rate limit, wbi si
   - `func (d *Bilibili) videoCid(ctx, bvid string) (int64, error)` —— view 接口补 cid
   - `func (d *Bilibili) playURLDurl(ctx, bvid string, cid int64) (url string, size int64, err error)` —— player/wbi/playurl（wbi），取 `data.durl[0]`
   - 包级泛型函数 `func collectPages[T any](d *Bilibili, ctx context.Context, pageSize int, fetch func(pn int) ([]T, int, error), out *[]T) error` —— 分页聚合（pageDelay 间隔与 MaxListItems 截断集中在这里）。注意：**Go 方法不能声明类型参数，必须是包级函数**
+
+- [ ] **Step 0: 先往 `drivers/bilibili/http_test.go` 的 helper 区追加 `mockRoundTrip`**
+
+（原因见 Files 段：httptest client transport 不重写 host，硬编码 apiBase/passportBase 的请求会泄漏到真实网络。Task 4 起所有测试统一用此 helper 转发。）
+
+```go
+// mockRoundTrip 把任意请求（含硬编码的 apiBase/passportBase URL）转发到 srv：
+// httptest server 的 client transport 是标准 transport，会 dial req.URL.Host，
+// 所以必须先改写 scheme+host
+func mockRoundTrip(srv *httptest.Server) roundTripFunc {
+	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		req2 := req.Clone(req.Context())
+		req2.URL.Scheme = "http"
+		req2.URL.Host = strings.TrimPrefix(srv.URL, "http://")
+		return srv.Client().Transport.RoundTrip(req2)
+	})
+}
+```
+
+> 此函数需要 `net/http/httptest` 与 `strings` import——http_test.go 均已具备。
 
 - [ ] **Step 1: 写失败测试 `api_test.go`**
 
@@ -664,9 +685,7 @@ func apiDriver(t *testing.T, handler http.HandlerFunc) *Bilibili {
 	t.Helper()
 	d := newTestDriver()
 	srv := newMockServer(t, handler)
-	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return srv.Client().Transport.RoundTrip(req)
-	}))
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
 	return d
 }
 
@@ -1157,9 +1176,7 @@ func TestLoginByQRCodeGenerateThenPollPending(t *testing.T) {
 		}
 	}))
 	d := newTestDriver()
-	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return srv.Client().Transport.RoundTrip(req)
-	}))
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
 	err := d.loginByQRCode(context.Background())
 	if err == nil {
 		t.Fatal("want HTML error when not scanned")
@@ -1182,9 +1199,7 @@ func TestLoginByQRCodeSuccessFillsCookie(t *testing.T) {
 		}
 	}))
 	d := newTestDriver()
-	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return srv.Client().Transport.RoundTrip(req)
-	}))
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
 	err := d.loginByQRCode(context.Background())
 	if err != nil {
 		t.Fatalf("loginByQRCode: %v", err)
@@ -1207,9 +1222,7 @@ func TestLoginByQRCodeExpired(t *testing.T) {
 		}
 	}))
 	d := newTestDriver()
-	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return srv.Client().Transport.RoundTrip(req)
-	}))
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
 	err := d.loginByQRCode(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "过期") {
 		t.Fatalf("err = %v, want expired hint", err)
@@ -1230,9 +1243,7 @@ func TestQRLoginStateDistinct(t *testing.T) {
 		}
 	}))
 	d := newTestDriver()
-	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return srv.Client().Transport.RoundTrip(req)
-	}))
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
 	err := d.loginByQRCode(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "确认") {
 		t.Fatalf("err = %v, want confirm hint for 86090", err)
@@ -1446,9 +1457,7 @@ func listDriver(t *testing.T, handler http.HandlerFunc) *Bilibili {
 	d := newTestDriver()
 	d.uid = 12345
 	srv := newMockServer(t, handler)
-	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return srv.Client().Transport.RoundTrip(req)
-	}))
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
 	return d
 }
 
@@ -1862,9 +1871,7 @@ func playDriver(t *testing.T, handler http.HandlerFunc) *Bilibili {
 	t.Helper()
 	d := newTestDriver()
 	srv := newMockServer(t, handler)
-	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return srv.Client().Transport.RoundTrip(req)
-	}))
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
 	return d
 }
 
