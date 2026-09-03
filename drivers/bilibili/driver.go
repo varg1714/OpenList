@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
 const (
@@ -97,20 +99,31 @@ func (d *Bilibili) List(ctx context.Context, dir model.Obj, args model.ListArgs)
 			folderObj(dir, dirFav, dirFavID),
 		}, nil
 	}
-	switch dir.GetID() {
-	case dirFollowID:
-		return d.listFollowings(ctx, dir)
-	case dirFavID:
-		return d.listFavFolders(ctx, dir)
-	default:
-		if _, ok := parsePrefixedID(dir.GetID(), upFolderPrefix); ok {
-			return d.listUpVideos(ctx, dir)
-		}
-		if _, ok := parsePrefixedID(dir.GetID(), favFolderPrefix); ok {
-			return d.listFavVideos(ctx, dir)
-		}
+	key := dir.GetID()
+	if key == "" {
+		return nil, errs.ObjectNotFound // 旧缓存 obj 无 ID：刷新（dirCache 穿透）后重建
 	}
-	return nil, errs.ObjectNotFound
+	// 同目录并发（dirCache 穿透 + 外部定时任务撞车）只放行一次拉取，其余共享结果
+	v, err, _ := d.sf.Do(key, func() (interface{}, error) {
+		switch key {
+		case dirFollowID:
+			return d.listFollowings(ctx, dir)
+		case dirFavID:
+			return d.listFavFolders(ctx, dir)
+		default:
+			if _, ok := parsePrefixedID(key, upFolderPrefix); ok {
+				return d.listUpVideos(ctx, dir)
+			}
+			if _, ok := parsePrefixedID(key, favFolderPrefix); ok {
+				return d.listFavVideos(ctx, dir)
+			}
+		}
+		return nil, errs.ObjectNotFound
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]model.Obj), nil
 }
 
 // parsePrefixedID 解析 "{prefix}{数字}" 形式的目录 ID
@@ -282,6 +295,10 @@ func (d *Bilibili) Init(ctx context.Context) error {
 	// 校验登录态并缓存 uid/uname
 	if _, _, err := d.navInfo(ctx); err != nil {
 		return err
+	}
+	// 换账号：清掉非当前 uid 的旧快照（防旧账号数据混入增量基线）
+	if err := db.DeleteVirtualDirSnapshotsNotOwner(d.ID, d.snapshotOwner()); err != nil {
+		utils.Log.Warnf("bilibili: cleanup foreign snapshots: %v", err)
 	}
 	return nil
 }
