@@ -269,25 +269,30 @@ func TestListWithSnapshotVersionMismatchRebuilds(t *testing.T) {
 }
 
 func TestListWithSnapshotDupInPageDoesNotStopEarly(t *testing.T) {
-	// 页内重复条目（同一页两次出现新 bvid）不得误触"接上"停止；
-	// fresh 去重后只保留一条
+	// 回归钉死：页内重复条目不得误触"接上"停止。
+	// 场景：seed {5,4,3,2,1}；API 页1 {7,7}（重复新 7，无旧条目）、页2 {6}、页3 {5}（旧）。
+	// 旧实现把页内重复计入"已见旧条目" → 页1 即停 → 漏 6（merged 6 条）；新实现 7 条。
 	d := newSnapDriver()
 	seed := &model.VirtualDirSnapshot{StorageID: d.ID, DirKey: "up_10", Owner: "12345",
-		Data: `{"v":1,"items":[{"ID":3,"Name":"c"},{"ID":2,"Name":"b"},{"ID":1,"Name":"a"}]}`}
+		Data: `{"v":1,"items":[{"ID":5,"Name":"e"},{"ID":4,"Name":"d"},{"ID":3,"Name":"c"},{"ID":2,"Name":"b"},{"ID":1,"Name":"a"}]}`}
 	if err := dbUpsertSnap(seed); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// 第 1 页 {4,4,3}：4 重复出现 + 3 为旧条目 → 应停且 merged 含唯一一条 4
-	fetch := pagesFrom([]intItem{{4, "d"}, {4, "d"}, {3, "c"}})
+	fetch := pagesFrom(
+		[]intItem{{7, "g"}, {7, "g"}}, // 重复新条目，无旧条目 → 不得停
+		[]intItem{{6, "f"}},           // 继续翻页发现更多新条目
+		[]intItem{{5, "e"}},           // 遇旧条目 → 停
+	)
 	objs, err := listWithSnapshot(d, context.Background(), nil, "up_10", fetch, intKeyOf, intBuild)
 	if err != nil {
 		t.Fatalf("listWithSnapshot: %v", err)
 	}
-	if len(objs) != 4 {
-		t.Fatalf("objs = %d, want 4 ({4} + {3,2,1})", len(objs))
+	if len(objs) != 7 {
+		t.Fatalf("objs = %d, want 7 ({7,6} new + {5,4,3,2,1} old), item 6 must not be lost", len(objs))
 	}
-	names := []string{objs[0].GetName(), objs[1].GetName(), objs[2].GetName(), objs[3].GetName()}
-	want := []string{"d", "c", "b", "a"}
+	names := []string{objs[0].GetName(), objs[1].GetName(), objs[2].GetName(), objs[3].GetName(),
+		objs[4].GetName(), objs[5].GetName(), objs[6].GetName()}
+	want := []string{"g", "f", "e", "d", "c", "b", "a"}
 	for i := range want {
 		if names[i] != want[i] {
 			t.Fatalf("names = %v, want %v", names, want)
