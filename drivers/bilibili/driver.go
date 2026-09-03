@@ -143,7 +143,7 @@ func parsePrefixedID(id, prefix string) (int64, bool) {
 // 快照 DirKey = 目录 obj.ID；keyOf = 条目稳定 ID；build = 展示层重建（下同）
 
 func (d *Bilibili) listFollowings(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
-	return listWithSnapshot(d, ctx, dir, dir.GetID(),
+	return listWithSnapshot(d, ctx, dir, dir.GetPath(),
 		fetchFollowingsPage(d, ctx),
 		func(f FollowItem) string { return strconv.FormatInt(f.Mid, 10) },
 		buildFollowings)
@@ -169,7 +169,7 @@ func (d *Bilibili) listUpVideos(ctx context.Context, dir model.Obj) ([]model.Obj
 	if !ok {
 		return nil, errs.ObjectNotFound
 	}
-	return listWithSnapshot(d, ctx, dir, dir.GetID(),
+	return listWithSnapshot(d, ctx, dir, dir.GetPath(),
 		fetchUpVideosPage(d, ctx, mid),
 		func(v VideoItem) string { return v.Bvid },
 		buildUpVideos)
@@ -191,7 +191,7 @@ func buildUpVideos(dir model.Obj, items []VideoItem) ([]model.Obj, error) {
 }
 
 func (d *Bilibili) listFavFolders(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
-	return listWithSnapshot(d, ctx, dir, dir.GetID(),
+	return listWithSnapshot(d, ctx, dir, dir.GetPath(),
 		fetchFavFoldersOnce(d, ctx),
 		func(f FavFolder) string { return strconv.FormatInt(f.ID, 10) },
 		buildFavFolders)
@@ -217,7 +217,7 @@ func (d *Bilibili) listFavVideos(ctx context.Context, dir model.Obj) ([]model.Ob
 	if !ok {
 		return nil, errs.ObjectNotFound
 	}
-	return listWithSnapshot(d, ctx, dir, dir.GetID(),
+	return listWithSnapshot(d, ctx, dir, dir.GetPath(),
 		fetchFavVideosPage(d, ctx, mediaID),
 		func(v VideoItem) string { return v.Bvid },
 		buildFavVideos)
@@ -238,7 +238,11 @@ func buildFavVideos(dir model.Obj, items []VideoItem) ([]model.Obj, error) {
 	return objs, nil
 }
 
-// Get 浅路径直接构造；深路径 NotSupport 让框架回退父目录 List
+// Get 浅路径直接构造；深路径纯查库定位（快照 key = 展示路径，见 listXxx）。
+// 命中返回 obj（带内部 ID，后续 List 分发/Link 照常）；miss → ObjectNotFound。
+// 设计决策（用户 A）：Get 永不触发网络/List——快照 = 上次完整拉取结果，
+// List 的增量只加新条目不会补旧名字，Get 找不到则 List 也找不到；
+// 数据同步只由 List（浏览 / 外部定时任务 refresh）负责。
 func (d *Bilibili) Get(ctx context.Context, path string) (model.Obj, error) {
 	switch path {
 	case "/":
@@ -248,7 +252,187 @@ func (d *Bilibili) Get(ctx context.Context, path string) (model.Obj, error) {
 	case "/" + dirFav:
 		return &model.Object{ID: dirFavID, Name: dirFav, Path: "/" + dirFav, IsFolder: true}, nil
 	}
-	return nil, errs.NotSupport
+	// 深路径：/我的关注/{UP}[/{视频}] 或 /我的收藏/{收藏夹}[/{视频}]
+	segs := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segs) < 2 || len(segs) > 3 || (segs[0] != dirFollow && segs[0] != dirFav) {
+		return nil, errs.ObjectNotFound // 结构固定 3 层以内，顶层只能是关注/收藏
+	}
+	parent, err := d.Get(ctx, "/"+segs[0])
+	if err != nil {
+		return nil, err
+	}
+	if segs[0] == dirFollow {
+		return d.getFollowPath(ctx, parent, segs[1:])
+	}
+	return d.getFavPath(ctx, parent, segs[1:])
+}
+
+// getFollowPath 在关注子树内定位：{UP名}（2 段）或 {UP名}/{视频名}（3 段）
+func (d *Bilibili) getFollowPath(ctx context.Context, parent model.Obj, segs []string) (model.Obj, error) {
+	items, ok, err := loadSnapshot[FollowItem](d, parent.GetPath())
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errs.ObjectNotFound // 未同步：由 List（浏览/定时任务）负责
+	}
+	upName := segs[0]
+	mid := matchUname(items.Items, upName)
+	if mid == 0 {
+		// 消歧名 "名_{mid}"：解出 id 并校验前缀（防伪造段误命中）
+		if prefix, id, ok := splitFolderName(upName); ok && hasFollowByID(items.Items, id, prefix) {
+			mid = id
+		}
+	}
+	if mid == 0 {
+		return nil, errs.ObjectNotFound
+	}
+	upDir := folderObj(parent, upName, upFolderPrefix+strconv.FormatInt(mid, 10))
+	if len(segs) == 1 { // segs 已去掉顶层：仅 UP 目录段
+		return upDir, nil
+	}
+	// 视频层：读该 UP 投稿快照按文件名匹配
+	vitems, ok, err := loadSnapshot[VideoItem](d, upDir.GetPath())
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errs.ObjectNotFound
+	}
+	item := matchVideoItem(vitems.Items, segs[1])
+	if item == nil {
+		return nil, errs.ObjectNotFound
+	}
+	return newVideoObj(upDir, *item, strings.TrimSuffix(segs[1], ".mp4")), nil
+}
+
+// getFavPath 在收藏子树内定位：{收藏夹名}（2 段）或 {收藏夹名}/{视频名}（3 段）
+func (d *Bilibili) getFavPath(ctx context.Context, parent model.Obj, segs []string) (model.Obj, error) {
+	items, ok, err := loadSnapshot[FavFolder](d, parent.GetPath())
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errs.ObjectNotFound
+	}
+	favName := segs[0]
+	mediaID := matchFavTitle(items.Items, favName)
+	if mediaID == 0 {
+		if prefix, id, ok := splitFolderName(favName); ok && hasFavByID(items.Items, id, prefix) {
+			mediaID = id
+		}
+	}
+	if mediaID == 0 {
+		return nil, errs.ObjectNotFound
+	}
+	favDir := folderObj(parent, favName, favFolderPrefix+strconv.FormatInt(mediaID, 10))
+	if len(segs) == 1 { // segs 已去掉顶层：仅收藏夹目录段
+		return favDir, nil
+	}
+	vitems, ok, err := loadSnapshot[VideoItem](d, favDir.GetPath())
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errs.ObjectNotFound
+	}
+	item := matchVideoItem(vitems.Items, segs[1])
+	if item == nil {
+		return nil, errs.ObjectNotFound
+	}
+	return newVideoObj(favDir, *item, strings.TrimSuffix(segs[1], ".mp4")), nil
+}
+
+// splitFolderName 解析 "{名字}_{id}" 段名（按最后一个 _ 且其后全数字），
+// 返回 (前缀, id, true)；无后缀返回 (_, 0, false)
+func splitFolderName(name string) (string, int64, bool) {
+	idx := strings.LastIndex(name, "_")
+	if idx <= 0 || idx == len(name)-1 {
+		return "", 0, false
+	}
+	id, err := strconv.ParseInt(name[idx+1:], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return name[:idx], id, true
+}
+
+// hasFollowByID 校验快照中存在 mid 且其展示名前缀匹配（消歧后缀段防伪造）
+func hasFollowByID(items []FollowItem, mid int64, prefix string) bool {
+	for _, f := range items {
+		if f.Mid == mid && sanitizeName(f.Uname, 80) == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFavByID 校验快照中存在 media id 且其展示名前缀匹配
+func hasFavByID(items []FavFolder, id int64, prefix string) bool {
+	for _, f := range items {
+		if f.ID == id && sanitizeName(f.Title, 80) == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// matchUname 按展示名（sanitize 后）找 UP。重名时 List 必给消歧后缀，
+// 故无后缀段仅在显示名唯一时合法；多个匹配 = 重名未消歧（快照旧/伪路径）→ miss
+func matchUname(items []FollowItem, display string) int64 {
+	matched := int64(0)
+	for _, f := range items {
+		if sanitizeName(f.Uname, 80) == display {
+			if matched != 0 {
+				return 0 // 重名
+			}
+			matched = f.Mid
+		}
+	}
+	return matched
+}
+
+// matchFavTitle 按展示名（sanitize 后）找收藏夹；重名（List 会给消歧后缀）时 miss
+func matchFavTitle(items []FavFolder, display string) int64 {
+	matched := int64(0)
+	for _, f := range items {
+		if sanitizeName(f.Title, 80) == display {
+			if matched != 0 {
+				return 0 // 重名
+			}
+			matched = f.ID
+		}
+	}
+	return matched
+}
+
+// matchVideoItem 按文件名段匹配视频：优先解析尾部 _{bvid}（重名消歧后缀）；
+// 无后缀按 sanitize 标题匹配（截断规则与 List 一致）
+func matchVideoItem(items []VideoItem, fileName string) *VideoItem {
+	base := strings.TrimSuffix(fileName, ".mp4")
+	if idx := strings.LastIndex(base, "_"); idx > 0 && strings.HasPrefix(base[idx+1:], "BV") {
+		bvid := base[idx+1:]
+		for i := range items {
+			if items[i].Bvid == bvid {
+				return &items[i]
+			}
+		}
+		return nil
+	}
+	// 干净标题段：仅当该标题在列表中唯一（重名标题 List 必带 bvid 后缀）
+	matched := -1
+	for i := range items {
+		if sanitizeName(items[i].Title, 150) == base {
+			if matched >= 0 {
+				return nil // 重名
+			}
+			matched = i
+		}
+	}
+	if matched >= 0 {
+		return &items[matched]
+	}
+	return nil
 }
 
 // durl URL 约 2h 有效，保守缓存 110min

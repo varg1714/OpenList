@@ -83,7 +83,7 @@ func TestListUpVideosIncrementalGrows(t *testing.T) {
 		t.Fatalf("second objs = %+v, want 3 with 新1 first", objs)
 	}
 	// 快照已持久化新增
-	snap, err := db.GetVirtualDirSnapshot(d.ID, dir.GetID())
+	snap, err := db.GetVirtualDirSnapshot(d.ID, dir.GetPath())
 	if err != nil || snap == nil {
 		t.Fatalf("snap: %+v %v", snap, err)
 	}

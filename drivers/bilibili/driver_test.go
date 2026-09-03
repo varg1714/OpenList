@@ -231,8 +231,9 @@ func TestGetShallowPaths(t *testing.T) {
 	if err != nil || !obj.IsDir() || obj.GetID() != dirFollowID {
 		t.Fatalf("Get /我的关注 = %v %v (id=%q)", obj, err, obj.GetID())
 	}
-	if _, err := d.Get(context.Background(), "/我的关注/某某_1/BV1xx.mp4"); !errs.IsNotSupportError(err) {
-		t.Fatalf("deep Get err = %v, want NotSupport", err)
+	// 深路径纯查库：无快照 → ObjectNotFound（决策 A：Get 不触发 List/网络）
+	if _, err := d.Get(context.Background(), "/我的关注/某某_1/BV1xx.mp4"); !errs.IsObjectNotFound(err) {
+		t.Fatalf("deep Get err = %v, want ObjectNotFound", err)
 	}
 }
 
@@ -246,8 +247,8 @@ func TestGetRootAndShallowDirs(t *testing.T) {
 	if err != nil || !obj.IsDir() || obj.GetName() != "我的收藏" || obj.GetID() != dirFavID {
 		t.Fatalf("Get /我的收藏 = %v %v (id=%q)", obj, err, obj.GetID())
 	}
-	if _, err := d.Get(context.Background(), "/我的收藏/不存在_1/x.mp4"); !errs.IsNotSupportError(err) {
-		t.Fatalf("deep Get err = %v, want NotSupport", err)
+	if _, err := d.Get(context.Background(), "/我的收藏/不存在_1/x.mp4"); !errs.IsObjectNotFound(err) {
+		t.Fatalf("deep Get err = %v, want ObjectNotFound", err)
 	}
 }
 
