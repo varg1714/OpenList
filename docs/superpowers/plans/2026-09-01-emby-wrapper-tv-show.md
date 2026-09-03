@@ -28,7 +28,7 @@
 - **扁平化**：季内文件递归收集（`gatherFiles`），全部条目展示于季别名目录下——视频编号 `S{NN}E{MM}.mp4`（纯编号）、已编号视频与非视频保留原名；**嵌套子文件夹（非 TV）不再展示**，其文件提取进季；嵌套 TV 文件夹原样保留（独立成剧），并支持通过季别名路径导航（`tvContext`/`resolveVirtualPath`/`tvNFOForPath` 的 `rewriteAliasPrefix` 重写为真实季路径后重新解析）；**同名真实条目冲突消解**（2026-09-03）：扁平化后不同子目录的同名文件（非视频/已编号视频）不再丢弃，后者映射消解名 `原名-2.扩展名`（仍冲突递增），保证文件可见
 - **season.nfo**：`<seasonnumber>` + `<title>季文件夹原名</title>`（Emby 经 BaseNfoParser 识别 title 为季显示名，见 Spec 7 修订）；真实季目录下同名 season.nfo 优先转发下游
 - **路径解析**：`resolveVirtualPath`（文件条目 → 季别名目录 → 别名前缀重写递归）是 Get 的虚拟→真实唯一映射点；`tvNFOForPath` 处理 tvshow/season/剧集 nfo 并保持真实同名 nfo 优先
-- **确定性**：季视图条目按创建时间+展示名升序排序（`byVirtual` 为 map，遍历无序，需显式排序）；索引构建失败降级为警告+原始列表（不整体失败）
+- **确定性**：季视图条目按创建时间+展示名升序排序（`byVirtual` 为 map，遍历无序，需显式排序）；**索引构建失败（remote 上游 List 报错）：TV 树内返回错误不降级**（2026-09-03 修正——降级为原始列表会让上层/strm 看到 2024年 等未映射真实名并按错误结构更新落盘）
 - **剧集封面（2026-09-03）**：上游对象带 thumb（网盘预览图 URL，`model.GetThumb`）时，为虚拟剧集附加 `{剧集名}-thumb.jpg` 占位对象（Emby episode 图片命名规则 `{name}-thumb.ext`）；内容在 **Link 时惰性下载并按 URL 键控内存缓存**（方案 B，256MB 上限整体清空）；同名真实文件优先；包装对象（wrappedObj/virtualObj/embyFolder）不透传 Unwrap（防泄露下游路径），改为包装时提取 thumb 存入并实现 `model.Thumb`；strm 落盘需 DownloadFileTypes 含 jpg
 
 ## Global Constraints

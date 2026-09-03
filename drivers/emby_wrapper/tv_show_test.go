@@ -373,6 +373,36 @@ func TestTVShowDuplicateRealNamesInSeason(t *testing.T) {
 	}
 }
 
+// TestTVShowListIndexFailureNoPlainFallback：TV 树内索引构建失败（如 remote 上游
+// 某目录 List 报错）时 List 返回错误，绝不降级为未映射的原始列表（否则上层/strm
+// 会看到 2024年 等真实名并按错误结构更新落盘）。
+func TestTVShowListIndexFailureNoPlainFallback(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := writeDirOrdered(t, "/Movies/2024年/专题"); err != nil {
+		t.Fatalf("mkdir 专题: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/专题/D.mp4", "d"); err != nil {
+		t.Fatalf("write D: %v", err)
+	}
+	locked := filepath.Join(localRoot, "Movies", "2024年", "专题")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	markTVShow(t, d, `{"tv_show":true}`)
+	// 索引遍历 专题 时 List 失败 → tvContext 报错；TV 树内必须返回错误而非降级原始列表
+	if _, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true}); err == nil {
+		t.Error("tv tree list must fail when index build fails (no plain fallback)")
+	}
+	_ = os.Chmod(locked, 0o755)
+}
+
 // TestGetVirtualEpisodeNotFound：无匹配的虚拟剧集路径保持 404。
 func TestGetVirtualEpisodeNotFound(t *testing.T) {
 	d := setup(t)

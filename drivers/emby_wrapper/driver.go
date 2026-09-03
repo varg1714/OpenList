@@ -95,7 +95,12 @@ func (d *EmbyWrapper) List(ctx context.Context, dir model.Obj, args model.ListAr
 	}
 	pc, idx, err := d.tvContext(ctx, dir.GetPath())
 	if err != nil {
-		// 索引构建失败降级（基础代码行为：警告 + 原始列表），不整体失败
+		// TV 树内（祖先设置命中）索引构建失败：返回错误，不降级为原始列表——
+		// 未映射的真实名/结构会误导上层（strm 会按错误结构更新/删除落盘文件）
+		if _, _, ok, aerr := d.tvShowAncestor(dir.GetPath()); ok || aerr != nil {
+			return nil, err
+		}
+		// 非 TV 树：降级为普通列表（原行为）
 		utils.Log.Warnf("emby wrapper: tv index for %s failed, plain listing: %+v", dir.GetPath(), err)
 		pc, idx = nil, nil
 	}
