@@ -10,22 +10,24 @@ import (
 
 // ---- 类型 ----
 
+// 快照条目类型：json tag 即持久化字段名（快照 Data 的稳定 schema——字段名改动会
+// 静默零值旧数据，只许增不许改；格式迁移靠 snapshotEnvelope.V）
 type FollowItem struct {
-	Mid   int64
-	Uname string
+	Mid   int64  `json:"mid"`
+	Uname string `json:"uname"`
 }
 
 type VideoItem struct {
-	Bvid    string
-	Title   string
-	Pic     string // http:// 开头，展示时前端可访问；驱动统一转 https 见 driver.go
-	Pubdate int64
-	Cid     int64 // 0 = 需调 videoCid 补
+	Bvid    string `json:"bvid"`
+	Title   string `json:"title"`
+	Pic     string `json:"pic"` // http:// 开头，展示时前端可访问；驱动统一转 https 见 driver.go
+	Pubdate int64  `json:"pubdate"`
+	Cid     int64  `json:"cid"` // 0 = 需调 videoCid 补
 }
 
 type FavFolder struct {
-	ID    int64
-	Title string
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
 }
 
 // ---- 内部响应结构（与真实接口字段一致） ----

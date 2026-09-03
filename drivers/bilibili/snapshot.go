@@ -37,6 +37,10 @@ func loadSnapshot[T any](d *Bilibili, dirKey string) (*snapshotEnvelope[T], bool
 		// 数据损坏：按无快照处理（下次全量重建覆盖）
 		return nil, false, nil
 	}
+	if env.V != 1 {
+		// 未知格式版本：按无快照处理（下次全量重建覆盖）——V 是唯一迁移钩子
+		return nil, false, nil
+	}
 	return &env, true, nil
 }
 
@@ -59,12 +63,15 @@ func saveSnapshot[T any](d *Bilibili, dirKey string, env *snapshotEnvelope[T]) e
 // listWithSnapshot 目录列表统一门面：读快照 → 翻页增量 → 原子落库 → build 展示。
 //
 // 语义（spec 2026-09-03）：
-//   - 无快照 = 首次：known 为空集，翻到空页或达 total 即全量；成功即落库（空目录也落）
-//   - 有快照 = 增量：从第 1 页起，页内出现任一已知条目即停（顺序假设：新条目连续在头部，
-//     接上页之后必然全已知）；全未知页继续翻——新内容只可能在头部；
+//   - 无快照 = 首次：翻到空页或达 total 即全量；成功即落库（空目录也落）
+//   - 有快照 = 增量：从第 1 页起逐条扫描，遇第一个快照旧条目即停（顺序假设：新条目连续
+//     在头部，接上点之后必然全已知）；全未知页继续翻——新内容只可能在头部；
 //     新增条目插到旧数据头部（保持 API 新→旧顺序）
 //   - 任意页失败（重试耗尽）：有快照 → 返回旧快照数据且不写库；无快照 → 返回错误。
 //     绝不返回部分分页结果（原子性，用户 Z 决策）
+//
+// 去重与接上判定分离：oldKnown（快照旧条目，只读）判定"接上"，seen（本次拉取已见）
+// 防页内/跨页重复——页内重复条目不会误触接上停止
 //
 // 包级泛型函数（Go 方法不允许类型参数），fetchWithRetry 页级退避在 api.go。
 func listWithSnapshot[T any](d *Bilibili, ctx context.Context, dir model.Obj, dirKey string,
@@ -76,10 +83,11 @@ func listWithSnapshot[T any](d *Bilibili, ctx context.Context, dir model.Obj, di
 		return nil, fmt.Errorf("load snapshot %s: %w", dirKey, err)
 	}
 
-	known := make(map[string]bool)
+	oldKnown := make(map[string]bool) // 快照旧条目：只用于"接上"判定（只读）
+	seen := make(map[string]bool)     // 本次拉取已见过的条目：防页内/跨页重复
 	if hasSnap {
 		for _, it := range env.Items {
-			known[keyOf(it)] = true
+			oldKnown[keyOf(it)] = true
 		}
 	}
 
@@ -103,9 +111,14 @@ func listWithSnapshot[T any](d *Bilibili, ctx context.Context, dir model.Obj, di
 			break // API 拉完
 		}
 		var fresh []T
+		hitOld := false
 		for _, it := range items {
-			if !known[keyOf(it)] {
-				known[keyOf(it)] = true
+			if hasSnap && oldKnown[keyOf(it)] {
+				hitOld = true
+				break // 遇第一个旧条目即接上：其后（本页剩余与后续页）皆为旧（顺序假设）
+			}
+			if !seen[keyOf(it)] {
+				seen[keyOf(it)] = true
 				fresh = append(fresh, it)
 			}
 		}
@@ -118,10 +131,8 @@ func listWithSnapshot[T any](d *Bilibili, ctx context.Context, dir model.Obj, di
 			if len(fresh) > 0 {
 				newHead = append(newHead, fresh...)
 			}
-			if len(fresh) < len(items) {
-				// 页内出现已知条目 = 已接上（顺序假设：新条目连续在头部，
-				// 接上页之后必然全已知）；全未知页则继续翻
-				break
+			if hitOld {
+				break // 已接上
 			}
 		}
 	}

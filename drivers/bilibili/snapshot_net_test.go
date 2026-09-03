@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -93,6 +94,8 @@ func TestListUpVideosIncrementalGrows(t *testing.T) {
 
 // TestListUpVideosFailKeepsSnapshot：目录已有快照后 API 失败 → List 返回旧快照数据（不报错）
 func TestListUpVideosFailKeepsSnapshot(t *testing.T) {
+	defer func(old []time.Duration) { pageRetryBackoff = old }(pageRetryBackoff)
+	pageRetryBackoff = []time.Duration{0, 0}
 	var calls int64
 	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/x/space/wbi/arc/search" {

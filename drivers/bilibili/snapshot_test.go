@@ -245,3 +245,65 @@ func TestListWithSnapshotCorruptDataRebuilds(t *testing.T) {
 		t.Fatalf("snapshot must be rebuilt: %+v %v", snap, err)
 	}
 }
+
+func TestListWithSnapshotVersionMismatchRebuilds(t *testing.T) {
+	// 快照格式版本非 1 → 按无快照全量重建（V 是迁移钩子）
+	d := newSnapDriver()
+	old := &model.VirtualDirSnapshot{StorageID: d.ID, DirKey: "up_9", Owner: "12345",
+		Data: `{"v":2,"items":[{"ID":99,"Name":"future-schema"}]}`}
+	if err := dbUpsertSnap(old); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	fetch := pagesFrom([]intItem{{1, "a"}})
+	objs, err := listWithSnapshot(d, context.Background(), nil, "up_9", fetch, intKeyOf, intBuild)
+	if err != nil {
+		t.Fatalf("listWithSnapshot: %v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != "a" {
+		t.Fatalf("objs = %+v, want rebuilt [a]", objs)
+	}
+	snap, err := dbGetSnap(d, "up_9")
+	if err != nil || snap == nil || snap.Data == old.Data {
+		t.Fatalf("snapshot must be rebuilt with v1: %+v %v", snap, err)
+	}
+}
+
+func TestListWithSnapshotDupInPageDoesNotStopEarly(t *testing.T) {
+	// 页内重复条目（同一页两次出现新 bvid）不得误触"接上"停止；
+	// fresh 去重后只保留一条
+	d := newSnapDriver()
+	seed := &model.VirtualDirSnapshot{StorageID: d.ID, DirKey: "up_10", Owner: "12345",
+		Data: `{"v":1,"items":[{"ID":3,"Name":"c"},{"ID":2,"Name":"b"},{"ID":1,"Name":"a"}]}`}
+	if err := dbUpsertSnap(seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// 第 1 页 {4,4,3}：4 重复出现 + 3 为旧条目 → 应停且 merged 含唯一一条 4
+	fetch := pagesFrom([]intItem{{4, "d"}, {4, "d"}, {3, "c"}})
+	objs, err := listWithSnapshot(d, context.Background(), nil, "up_10", fetch, intKeyOf, intBuild)
+	if err != nil {
+		t.Fatalf("listWithSnapshot: %v", err)
+	}
+	if len(objs) != 4 {
+		t.Fatalf("objs = %d, want 4 ({4} + {3,2,1})", len(objs))
+	}
+	names := []string{objs[0].GetName(), objs[1].GetName(), objs[2].GetName(), objs[3].GetName()}
+	want := []string{"d", "c", "b", "a"}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("names = %v, want %v", names, want)
+		}
+	}
+}
+
+func TestListWithSnapshotFirstFullDedup(t *testing.T) {
+	// 首拉页内重复：merged 去重（{1,1,2} → {1,2}）
+	d := newSnapDriver()
+	fetch := pagesFrom([]intItem{{1, "a"}, {1, "a"}, {2, "b"}})
+	objs, err := listWithSnapshot(d, context.Background(), nil, "up_11", fetch, intKeyOf, intBuild)
+	if err != nil {
+		t.Fatalf("listWithSnapshot: %v", err)
+	}
+	if len(objs) != 2 {
+		t.Fatalf("objs = %d, want 2 (dedup)", len(objs))
+	}
+}

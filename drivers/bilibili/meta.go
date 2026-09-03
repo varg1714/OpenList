@@ -13,8 +13,7 @@ type Addition struct {
 	Cookie string `json:"cookie" type:"text" help:"auto-filled after QR code login; or paste browser cookie manually (must contain SESSDATA)"`
 	// LimitRate: 全局限速（115 同款模式）；≤0 回落到默认 2（老存储无此字段，
 	// 不能退化为不限流——bilibili 对高频连续请求会风控/返验证页）
-	LimitRate    float64 `json:"limit_rate" type:"float" default:"2" help:"limit all api request rate (requests/s); 0 = default (2); lower if risk-control (-412/verify page) kicks in"`
-	MaxListItems int     `json:"max_list_items" type:"number" default:"0" help:"max items per paged list (followings/videos/fav), 0 = unlimited"`
+	LimitRate float64 `json:"limit_rate" type:"float" default:"2" help:"limit all api request rate (requests/s); 0 = default (2); lower if risk-control (-412/verify page) kicks in"`
 	driver.RootPath
 }
 

@@ -165,7 +165,10 @@ func buildFollowings(dir model.Obj, items []FollowItem) ([]model.Obj, error) {
 }
 
 func (d *Bilibili) listUpVideos(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
-	mid, _ := parsePrefixedID(dir.GetID(), upFolderPrefix)
+	mid, ok := parsePrefixedID(dir.GetID(), upFolderPrefix)
+	if !ok {
+		return nil, errs.ObjectNotFound
+	}
 	return listWithSnapshot(d, ctx, dir, dir.GetID(),
 		fetchUpVideosPage(d, ctx, mid),
 		func(v VideoItem) string { return v.Bvid },
@@ -210,7 +213,10 @@ func buildFavFolders(dir model.Obj, items []FavFolder) ([]model.Obj, error) {
 }
 
 func (d *Bilibili) listFavVideos(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
-	mediaID, _ := parsePrefixedID(dir.GetID(), favFolderPrefix)
+	mediaID, ok := parsePrefixedID(dir.GetID(), favFolderPrefix)
+	if !ok {
+		return nil, errs.ObjectNotFound
+	}
 	return listWithSnapshot(d, ctx, dir, dir.GetID(),
 		fetchFavVideosPage(d, ctx, mediaID),
 		func(v VideoItem) string { return v.Bvid },
