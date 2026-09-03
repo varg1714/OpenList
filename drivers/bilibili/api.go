@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
 // ---- 类型 ----
@@ -136,7 +138,12 @@ func fetchWithRetry[T any](d *Bilibili, ctx context.Context,
 			return items, total, nil
 		}
 		lastErr = err
+		if attempt == 0 {
+			// 首次失败即提示（含退避重试计划），err 文本自带 URL/code/HTML 前缀
+			utils.Log.Warnf("bilibili: page %d fetch failed (retrying %d more): %v", pn, len(pageRetryBackoff)-attempt, err)
+		}
 	}
+	utils.Log.Errorf("bilibili: page %d fetch failed after %d retries: %v", pn, len(pageRetryBackoff), lastErr)
 	return nil, 0, lastErr
 }
 
