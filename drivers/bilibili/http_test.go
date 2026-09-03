@@ -235,3 +235,70 @@ func TestInitClientLimiterFromAddition(t *testing.T) {
 		t.Fatalf("default limiter rate = %v, want 2", got)
 	}
 }
+
+func TestDoGet412RefreshesMixinKey(t *testing.T) {
+	// wbi key 被 bilibili 轮换后签名请求返回 412：应丢弃日缓存 → 重取 nav → 重签重发一次
+	var arcHits, navHits int
+	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/x/web-interface/nav":
+			navHits++
+			w.Write([]byte(`{"code":0,"data":{"wbi_img":{
+				"img_url":"https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
+				"sub_url":"https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"}}}`))
+		default:
+			arcHits++
+			if arcHits == 1 {
+				w.WriteHeader(http.StatusPreconditionFailed) // 旧 key → 412
+				return
+			}
+			w.Write([]byte(`{"code":0,"data":{}}`))
+		}
+	})
+	d := newTestDriver()
+	d.mixinKey = "stale_key_stale_key_stale_key_123" // 预置过期 key（测试 seam）
+	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		// nav 走包级 apiBase 真实主机，重写 host 到 mock
+		if req.URL.Host != srv.Listener.Addr().String() {
+			u := *req.URL
+			u.Scheme = "http"
+			u.Host = srv.Listener.Addr().String()
+			req.URL = &u
+		}
+		return srv.Client().Transport.RoundTrip(req)
+	}))
+	if _, err := d.doGet(context.Background(), srv.URL+"/x/space/wbi/arc/search",
+		map[string]string{"mid": "16022714"}, true); err != nil {
+		t.Fatalf("doGet: %v", err)
+	}
+	if arcHits != 2 {
+		t.Fatalf("arc hits = %d, want 2 (412 then retry)", arcHits)
+	}
+	if navHits != 1 {
+		t.Fatalf("nav hits = %d, want 1 (key refetch after 412)", navHits)
+	}
+	if d.mixinKey != "ea1db124af3c7062474693fa704f4ff8" {
+		t.Fatalf("mixinKey not refreshed: %q", d.mixinKey)
+	}
+}
+
+func TestDoGet412PersistentErrors(t *testing.T) {
+	// 重签重试后仍 412 → 报错（不再无限重试）
+	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/x/web-interface/nav":
+			w.Write([]byte(`{"code":0,"data":{"wbi_img":{
+				"img_url":"https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
+				"sub_url":"https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"}}}`))
+		default:
+			w.WriteHeader(http.StatusPreconditionFailed)
+		}
+	})
+	d := newTestDriver()
+	d.client = resty.New().SetTransport(mockRoundTrip(srv))
+	_, err := d.doGet(context.Background(), srv.URL+"/x/space/wbi/arc/search",
+		map[string]string{"mid": "1"}, true)
+	if err == nil || !strings.Contains(err.Error(), "412") {
+		t.Fatalf("err = %v, want persistent 412 error", err)
+	}
+}

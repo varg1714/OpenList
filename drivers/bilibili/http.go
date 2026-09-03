@@ -124,13 +124,17 @@ func (d *Bilibili) fetchMixinKey(ctx context.Context) (string, error) {
 	return d.mixinKey, nil
 }
 
-// doGet GET 请求；signed=true 时追加 wbi 签名
+// doGet GET 请求；signed=true 时追加 wbi 签名。
+// wbi 的 img_key/sub_key 会被 bilibili 不定期轮换（数小时~数天），过期后签名
+// 请求返回 HTTP 412——此时丢弃日缓存、重取 nav key 重签重试一次；仍 412 才报错
+// （BBDown/PiliPlus 同款处理）。注意限流器等待发生在重试外层，重发不额外计速。
 func (d *Bilibili) doGet(ctx context.Context, url string, params map[string]string, signed bool) (json.RawMessage, error) {
 	if d.limiter != nil {
 		if err := d.limiter.Wait(ctx); err != nil {
 			return nil, err
 		}
 	}
+	orig := params // encWbi 为纯函数不改入参，重签时用原参数
 	if signed {
 		key, err := d.fetchMixinKey(ctx)
 		if err != nil {
@@ -138,15 +142,33 @@ func (d *Bilibili) doGet(ctx context.Context, url string, params map[string]stri
 		}
 		params = encWbi(params, key)
 	}
-	req := d.client.R().SetContext(ctx).
-		SetHeader("Cookie", d.cookieStr).
-		SetQueryParams(params)
-	resp, err := req.Get(url)
+	resp, err := d.get(ctx, url, params)
 	if err != nil {
 		return nil, err
 	}
+	// 412 且为签名请求：key 可能已被轮换 → 重取重签重试一次
+	if signed && resp.StatusCode() == http.StatusPreconditionFailed {
+		d.mixinKey = ""
+		d.mixinKeyDay = ""
+		key, err := d.fetchMixinKey(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("fetch wbi key after 412: %w", err)
+		}
+		resp, err = d.get(ctx, url, encWbi(orig, key))
+		if err != nil {
+			return nil, err
+		}
+	}
 	d.setCookieFromResp(resp)
 	return d.decodeResp(resp)
+}
+
+// get 发送 GET 并返回原始响应（不解析 body）
+func (d *Bilibili) get(ctx context.Context, url string, params map[string]string) (*resty.Response, error) {
+	req := d.client.R().SetContext(ctx).
+		SetHeader("Cookie", d.cookieStr).
+		SetQueryParams(params)
+	return req.Get(url)
 }
 
 func (d *Bilibili) decodeResp(resp *resty.Response) (json.RawMessage, error) {
