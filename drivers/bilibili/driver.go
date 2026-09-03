@@ -88,7 +88,7 @@ func newVideoObj(parent model.Obj, v VideoItem, display string) *videoObj {
 
 // List 按目录对象 ID 分发（LocalSort=false，返回顺序即展示顺序）。
 // 目录 ID 由本驱动构造时写入 obj.ID（用户不可见）；显示名保持干净，
-// 仅重名项追加 _id 后缀消歧。
+// 仅重名项追加 _id 后缀消歧。ID 为空（旧缓存 obj）→ 刷新重建前不可用。
 func (d *Bilibili) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	p := dir.GetPath()
 	if p == "" || p == "/" { // 根：RootPath 未填时 Path 可能为空串
@@ -103,11 +103,11 @@ func (d *Bilibili) List(ctx context.Context, dir model.Obj, args model.ListArgs)
 	case dirFavID:
 		return d.listFavFolders(ctx, dir)
 	default:
-		if mid, ok := parsePrefixedID(dir.GetID(), upFolderPrefix); ok {
-			return d.listUpVideos(ctx, dir, mid)
+		if _, ok := parsePrefixedID(dir.GetID(), upFolderPrefix); ok {
+			return d.listUpVideos(ctx, dir)
 		}
-		if mediaID, ok := parsePrefixedID(dir.GetID(), favFolderPrefix); ok {
-			return d.listFavVideos(ctx, dir, mediaID)
+		if _, ok := parsePrefixedID(dir.GetID(), favFolderPrefix); ok {
+			return d.listFavVideos(ctx, dir)
 		}
 	}
 	return nil, errs.ObjectNotFound
@@ -126,11 +126,17 @@ func parsePrefixedID(id, prefix string) (int64, bool) {
 	return n, true
 }
 
+// ---- 快照门面接线：List 数据经 listWithSnapshot（snapshot.go）——
+// 快照 DirKey = 目录 obj.ID；keyOf = 条目稳定 ID；build = 展示层重建（下同）
+
 func (d *Bilibili) listFollowings(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
-	items, err := d.followings(ctx)
-	if err != nil {
-		return nil, err
-	}
+	return listWithSnapshot(d, ctx, dir, dir.GetID(),
+		fetchFollowingsPage(d, ctx),
+		func(f FollowItem) string { return strconv.FormatInt(f.Mid, 10) },
+		buildFollowings)
+}
+
+func buildFollowings(dir model.Obj, items []FollowItem) ([]model.Obj, error) {
 	displays := make([]string, len(items))
 	suffixes := make([]string, len(items))
 	for i, f := range items {
@@ -145,11 +151,15 @@ func (d *Bilibili) listFollowings(ctx context.Context, dir model.Obj) ([]model.O
 	return objs, nil
 }
 
-func (d *Bilibili) listUpVideos(ctx context.Context, dir model.Obj, mid int64) ([]model.Obj, error) {
-	items, err := d.upVideos(ctx, mid)
-	if err != nil {
-		return nil, err
-	}
+func (d *Bilibili) listUpVideos(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
+	mid, _ := parsePrefixedID(dir.GetID(), upFolderPrefix)
+	return listWithSnapshot(d, ctx, dir, dir.GetID(),
+		fetchUpVideosPage(d, ctx, mid),
+		func(v VideoItem) string { return v.Bvid },
+		buildUpVideos)
+}
+
+func buildUpVideos(dir model.Obj, items []VideoItem) ([]model.Obj, error) {
 	displays := make([]string, len(items))
 	suffixes := make([]string, len(items))
 	for i, v := range items {
@@ -165,10 +175,13 @@ func (d *Bilibili) listUpVideos(ctx context.Context, dir model.Obj, mid int64) (
 }
 
 func (d *Bilibili) listFavFolders(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
-	items, err := d.favFolders(ctx)
-	if err != nil {
-		return nil, err
-	}
+	return listWithSnapshot(d, ctx, dir, dir.GetID(),
+		fetchFavFoldersOnce(d, ctx),
+		func(f FavFolder) string { return strconv.FormatInt(f.ID, 10) },
+		buildFavFolders)
+}
+
+func buildFavFolders(dir model.Obj, items []FavFolder) ([]model.Obj, error) {
 	displays := make([]string, len(items))
 	suffixes := make([]string, len(items))
 	for i, f := range items {
@@ -183,11 +196,15 @@ func (d *Bilibili) listFavFolders(ctx context.Context, dir model.Obj) ([]model.O
 	return objs, nil
 }
 
-func (d *Bilibili) listFavVideos(ctx context.Context, dir model.Obj, mediaID int64) ([]model.Obj, error) {
-	items, err := d.favVideos(ctx, mediaID)
-	if err != nil {
-		return nil, err
-	}
+func (d *Bilibili) listFavVideos(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
+	mediaID, _ := parsePrefixedID(dir.GetID(), favFolderPrefix)
+	return listWithSnapshot(d, ctx, dir, dir.GetID(),
+		fetchFavVideosPage(d, ctx, mediaID),
+		func(v VideoItem) string { return v.Bvid },
+		buildFavVideos)
+}
+
+func buildFavVideos(dir model.Obj, items []VideoItem) ([]model.Obj, error) {
 	displays := make([]string, len(items))
 	suffixes := make([]string, len(items))
 	for i, v := range items {

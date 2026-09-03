@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,9 +13,13 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+// listDriver：每用例唯一 StorageID——快照按 storage_id 隔离，防测试间串扰
+var testListStorageSeq uint64
+
 func listDriver(t *testing.T, handler http.HandlerFunc) *Bilibili {
 	t.Helper()
 	d := newTestDriver()
+	d.ID = uint(atomic.AddUint64(&testListStorageSeq, 1) + 5000)
 	d.uid = 12345
 	srv := newMockServer(t, handler)
 	d.client = resty.New().SetTransport(mockRoundTrip(srv))

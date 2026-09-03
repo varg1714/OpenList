@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
 // ---- 类型 ----
@@ -119,46 +117,6 @@ func (d *Bilibili) navInfo(ctx context.Context) (int64, string, error) {
 // 包级变量便于测试覆盖为 0 延迟。
 var pageRetryBackoff = []time.Duration{time.Second, 2 * time.Second}
 
-// collectPages 通用分页聚合：fetch 返回一页 items 与 total；受 MaxListItems 约束。
-// 页失败先按 pageRetryBackoff 退避重试；重试耗尽后：
-//   - 首页即失败（无任何收集）→ 返回错误，调用方明确失败
-//   - 已有部分收集 → 保留部分结果 + Warn（emby/浏览场景"部分可见"好于"全不可见"，
-//     目录缓存过期后自然重试补全）
-//
-// 包级函数（Go 方法不允许类型参数）
-func collectPages[T any](d *Bilibili, ctx context.Context, pageSize int,
-	fetch func(pn int) ([]T, int, error), out *[]T) error {
-	maxItems := d.MaxListItems
-	capped := maxItems != 0 // 0 = 不限（MaxInt 哨兵），不属截断
-	if maxItems == 0 {
-		maxItems = int(^uint(0) >> 1) // 不限
-	}
-	pn := 1
-	for {
-		items, total, err := fetchWithRetry(d, ctx, fetch, pn)
-		if err != nil {
-			if len(*out) == 0 {
-				return err
-			}
-			utils.Log.Warnf("bilibili: partial list (%d items collected) at pn=%d: %v", len(*out), pn, err)
-			return nil
-		}
-		for _, it := range items {
-			*out = append(*out, it)
-			if len(*out) >= maxItems {
-				if capped {
-					utils.Log.Warnf("bilibili: list truncated at %d items (MaxListItems=%d)", len(*out), d.MaxListItems)
-				}
-				return nil
-			}
-		}
-		if len(*out) >= total || len(items) == 0 {
-			return nil
-		}
-		pn++
-	}
-}
-
 // fetchWithRetry 单页拉取，失败按 pageRetryBackoff 退避重试
 func fetchWithRetry[T any](d *Bilibili, ctx context.Context,
 	fetch func(pn int) ([]T, int, error), pn int) ([]T, int, error) {
@@ -180,9 +138,10 @@ func fetchWithRetry[T any](d *Bilibili, ctx context.Context,
 	return nil, 0, lastErr
 }
 
-func (d *Bilibili) followings(ctx context.Context) ([]FollowItem, error) {
-	out := make([]FollowItem, 0, 64)
-	err := collectPages(d, ctx, 50, func(pn int) ([]FollowItem, int, error) {
+// fetchFollowingsPage 关注列表页拉取器工厂（新关注在前，spec 顺序验证点）。
+// 列表数据经 snapshot 门面（snapshot.go）聚合/增量，此处只负责单页拉取解析。
+func fetchFollowingsPage(d *Bilibili, ctx context.Context) func(pn int) ([]FollowItem, int, error) {
+	return func(pn int) ([]FollowItem, int, error) {
 		raw, err := d.doGet(ctx, apiBase+"/x/relation/followings", map[string]string{
 			"vmid": strconv.FormatInt(d.uid, 10), "pn": strconv.Itoa(pn), "ps": "50",
 			"order": "desc", "order_type": "",
@@ -199,13 +158,12 @@ func (d *Bilibili) followings(ctx context.Context) ([]FollowItem, error) {
 			items = append(items, FollowItem{Mid: f.Mid, Uname: f.Uname})
 		}
 		return items, page.Total, nil
-	}, &out)
-	return out, err
+	}
 }
 
-func (d *Bilibili) upVideos(ctx context.Context, mid int64) ([]VideoItem, error) {
-	out := make([]VideoItem, 0, 64)
-	err := collectPages(d, ctx, 50, func(pn int) ([]VideoItem, int, error) {
+// fetchUpVideosPage UP 投稿页拉取器工厂（arc/search，wbi 签名，按 pubdate 倒序）
+func fetchUpVideosPage(d *Bilibili, ctx context.Context, mid int64) func(pn int) ([]VideoItem, int, error) {
+	return func(pn int) ([]VideoItem, int, error) {
 		raw, err := d.doGet(ctx, apiBase+"/x/space/wbi/arc/search", map[string]string{
 			"mid": strconv.FormatInt(mid, 10), "pn": strconv.Itoa(pn), "ps": "50",
 			"order": "pubdate", "tid": "0",
@@ -222,31 +180,36 @@ func (d *Bilibili) upVideos(ctx context.Context, mid int64) ([]VideoItem, error)
 			items = append(items, VideoItem{Bvid: v.Bvid, Title: v.Title, Pic: v.Pic, Pubdate: v.Created})
 		}
 		return items, page.Page.Count, nil
-	}, &out)
-	return out, err
+	}
 }
 
-func (d *Bilibili) favFolders(ctx context.Context) ([]FavFolder, error) {
-	raw, err := d.doGet(ctx, apiBase+"/x/v3/fav/folder/created/list-all", map[string]string{
-		"up_mid": strconv.FormatInt(d.uid, 10),
-	}, false)
-	if err != nil {
-		return nil, err
+// fetchFavFoldersOnce 收藏夹列表（list-all 单请求接口；pn≥2 给空页令门面停止）
+func fetchFavFoldersOnce(d *Bilibili, ctx context.Context) func(pn int) ([]FavFolder, int, error) {
+	return func(pn int) ([]FavFolder, int, error) {
+		if pn > 1 {
+			return nil, 0, nil
+		}
+		raw, err := d.doGet(ctx, apiBase+"/x/v3/fav/folder/created/list-all", map[string]string{
+			"up_mid": strconv.FormatInt(d.uid, 10),
+		}, false)
+		if err != nil {
+			return nil, 0, err
+		}
+		var resp favFolderResp
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, 0, err
+		}
+		out := make([]FavFolder, 0, len(resp.List))
+		for _, f := range resp.List {
+			out = append(out, FavFolder{ID: f.ID, Title: f.Title})
+		}
+		return out, len(out), nil
 	}
-	var resp favFolderResp
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, err
-	}
-	out := make([]FavFolder, 0, len(resp.List))
-	for _, f := range resp.List {
-		out = append(out, FavFolder{ID: f.ID, Title: f.Title})
-	}
-	return out, nil
 }
 
-func (d *Bilibili) favVideos(ctx context.Context, mediaID int64) ([]VideoItem, error) {
-	out := make([]VideoItem, 0, 64)
-	err := collectPages(d, ctx, 20, func(pn int) ([]VideoItem, int, error) {
+// fetchFavVideosPage 收藏夹视频页拉取器工厂（按收藏时间 mtime 倒序）
+func fetchFavVideosPage(d *Bilibili, ctx context.Context, mediaID int64) func(pn int) ([]VideoItem, int, error) {
+	return func(pn int) ([]VideoItem, int, error) {
 		raw, err := d.doGet(ctx, apiBase+"/x/v3/fav/resource/list", map[string]string{
 			"media_id": strconv.FormatInt(mediaID, 10), "pn": strconv.Itoa(pn), "ps": "20",
 			"order": "mtime", "type": "2", "tid": "0", "platform": "web",
@@ -263,8 +226,7 @@ func (d *Bilibili) favVideos(ctx context.Context, mediaID int64) ([]VideoItem, e
 			items = append(items, VideoItem{Bvid: m.Bvid, Title: m.Title, Pic: m.Cover, Pubdate: m.FavTime, Cid: m.Ugc.FirstCid})
 		}
 		return items, page.Info.MediaCount, nil
-	}, &out)
-	return out, err
+	}
 }
 
 func (d *Bilibili) videoCid(ctx context.Context, bvid string) (int64, error) {

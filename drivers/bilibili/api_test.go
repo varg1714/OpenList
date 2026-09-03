@@ -39,25 +39,25 @@ func TestNavInfo(t *testing.T) {
 }
 
 func TestFollowingsPagination(t *testing.T) {
-	// 2 页 × 每页 2 条 = 4 人
-	page1 := `{"code":0,"data":{"list":[{"mid":1,"uname":"A"},{"mid":2,"uname":"B"}],"total":4}}`
-	page2 := `{"code":0,"data":{"list":[{"mid":3,"uname":"C"},{"mid":4,"uname":"D"}],"total":4}}`
+	// 单页解析 + pn 透传 + total 透传（聚合语义由 snapshot 门面覆盖）
 	d := apiDriver(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/x/relation/followings" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		if r.URL.Query().Get("pn") == "1" {
-			jsonResp(w, page1)
+			jsonResp(w, `{"code":0,"data":{"list":[{"mid":1,"uname":"A"},{"mid":2,"uname":"B"}],"total":4}}`)
 		} else {
-			jsonResp(w, page2)
+			jsonResp(w, `{"code":0,"data":{"list":[{"mid":3,"uname":"C"}],"total":4}}`)
 		}
 	})
-	items, err := d.followings(context.Background())
-	if err != nil {
-		t.Fatalf("followings: %v", err)
+	fetch := fetchFollowingsPage(d, context.Background())
+	items, total, err := fetch(1)
+	if err != nil || total != 4 || len(items) != 2 || items[0].Uname != "A" {
+		t.Fatalf("page1 = %+v total=%d err=%v", items, total, err)
 	}
-	if len(items) != 4 || items[0].Uname != "A" || items[3].Mid != 4 {
-		t.Fatalf("followings = %+v", items)
+	items, _, err = fetch(2)
+	if err != nil || len(items) != 1 || items[0].Mid != 3 {
+		t.Fatalf("page2 = %+v err=%v", items, err)
 	}
 }
 
@@ -71,15 +71,16 @@ func TestUpVideosSignedAndParsed(t *testing.T) {
 		]},"page":{"count":1}}}`)
 	})
 	d.mixinKey = "ea1db124af3c7062474693fa704f4ff8" // 注入，避免走 nav
-	items, err := d.upVideos(context.Background(), 2)
+	fetch := fetchUpVideosPage(d, context.Background(), 2)
+	items, _, err := fetch(1)
 	if err != nil {
-		t.Fatalf("upVideos: %v", err)
+		t.Fatalf("fetchUpVideosPage: %v", err)
 	}
 	if !strings.Contains(query, "w_rid=") {
 		t.Fatalf("arc/search not signed: %q", query)
 	}
 	if len(items) != 1 || items[0].Bvid != "BV1xx" || items[0].Cid != 0 {
-		t.Fatalf("upVideos = %+v", items)
+		t.Fatalf("items = %+v", items)
 	}
 	if items[0].Pubdate != 1700000000 {
 		t.Fatalf("pubdate = %d, want 1700000000 (vlist created)", items[0].Pubdate)
@@ -95,12 +96,13 @@ func TestFavVideosFirstCid(t *testing.T) {
 			{"id":100,"bvid":"BV1yy","title":"收藏视频","cover":"http://i0.hdslb.com/2.jpg",
 			 "fav_time":1700000001,"ugc":{"first_cid":888}}]}}`)
 	})
-	items, err := d.favVideos(context.Background(), 777)
+	fetch := fetchFavVideosPage(d, context.Background(), 777)
+	items, _, err := fetch(1)
 	if err != nil {
-		t.Fatalf("favVideos: %v", err)
+		t.Fatalf("fetchFavVideosPage: %v", err)
 	}
 	if len(items) != 1 || items[0].Bvid != "BV1yy" || items[0].Cid != 888 {
-		t.Fatalf("favVideos = %+v", items)
+		t.Fatalf("items = %+v", items)
 	}
 	if items[0].Pubdate != 1700000001 {
 		t.Fatalf("pubdate = %d, want 1700000001 (fav_time)", items[0].Pubdate)
@@ -148,77 +150,36 @@ func TestPlayURLDurlEmpty(t *testing.T) {
 	}
 }
 
-func TestCollectPagesMaxLimit(t *testing.T) {
-	d := newTestDriver()
-	d.Addition.MaxListItems = 3
-	var got []int
-	err := collectPages(d, context.Background(), 50, func(pn int) ([]int, int, error) {
-		start := (pn - 1) * 2
-		return []int{start + 1, start + 2}, 100, nil
-	}, &got)
-	if err != nil {
-		t.Fatalf("collectPages: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("got %d items, want 3 (MaxListItems cut)", len(got))
-	}
-}
-
-func TestCollectPagesRetryThenSucceed(t *testing.T) {
+func TestFetchWithRetryBackoffThenSucceed(t *testing.T) {
 	// 页失败 → 按退避重试 → 成功
 	defer func(old []time.Duration) { pageRetryBackoff = old }(pageRetryBackoff)
 	pageRetryBackoff = []time.Duration{0, 0}
 	d := newTestDriver()
-	var calls int
-	var got []int
-	err := collectPages(d, context.Background(), 50, func(pn int) ([]int, int, error) {
+	calls := 0
+	items, _, err := fetchWithRetry(d, context.Background(), func(pn int) ([]int, int, error) {
 		calls++
-		if calls == 1 {
-			return nil, 0, errors.New("risk-control html")
+		if calls < 3 {
+			return nil, 0, errors.New("boom")
 		}
 		return []int{1, 2}, 2, nil
-	}, &got)
+	}, 1)
 	if err != nil {
-		t.Fatalf("collectPages: %v", err)
+		t.Fatalf("fetchWithRetry: %v", err)
 	}
-	if calls != 2 || len(got) != 2 {
-		t.Fatalf("calls = %d, got = %d items, want 2 calls / 2 items", calls, len(got))
+	if calls != 3 || len(items) != 2 {
+		t.Fatalf("calls = %d, items = %d, want 3 / 2", calls, len(items))
 	}
 }
 
-func TestCollectPagesPartialOnPersistentError(t *testing.T) {
-	// 首页成功、后续页重试耗尽 → 保留部分结果返回 nil（部分可见 > 全不可见）
+func TestFetchWithRetryExhausted(t *testing.T) {
+	// 重试耗尽 → 返回最后错误（strict：不再 partial 返回）
 	defer func(old []time.Duration) { pageRetryBackoff = old }(pageRetryBackoff)
 	pageRetryBackoff = []time.Duration{0, 0}
 	d := newTestDriver()
-	var got []int
-	err := collectPages(d, context.Background(), 50, func(pn int) ([]int, int, error) {
-		if pn == 1 {
-			return []int{1, 2}, 100, nil
-		}
-		return nil, 0, errors.New("risk-control html")
-	}, &got)
-	if err != nil {
-		t.Fatalf("collectPages: want nil err (partial result), got %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d items, want 2 (partial page 1)", len(got))
-	}
-}
-
-func TestCollectPagesFirstPageError(t *testing.T) {
-	// 首页即失败（重试耗尽，无任何收集）→ 返回错误，调用方明确失败
-	defer func(old []time.Duration) { pageRetryBackoff = old }(pageRetryBackoff)
-	pageRetryBackoff = []time.Duration{0, 0}
-	d := newTestDriver()
-	var got []int
-	err := collectPages(d, context.Background(), 50, func(pn int) ([]int, int, error) {
-		return nil, 0, errors.New("boom")
-	}, &got)
+	_, _, err := fetchWithRetry(d, context.Background(), func(pn int) ([]int, int, error) {
+		return nil, 0, errors.New("always fails")
+	}, 1)
 	if err == nil {
-		t.Fatal("want error when first page fails")
-	}
-	if len(got) != 0 {
-		t.Fatalf("got %d items, want 0", len(got))
+		t.Fatal("want error after retries exhausted")
 	}
 }
