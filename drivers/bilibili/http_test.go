@@ -31,7 +31,6 @@ func newTestDriver() *Bilibili {
 	d.Addition.Cookie = "SESSDATA=abc;DedeUserID=1"
 	d.cookieStr = d.Addition.Cookie
 	d.limiter = rate.NewLimiter(rate.Inf, 0) // 测试不限速
-	d.pageDelay = 0
 	return d
 }
 
@@ -157,5 +156,82 @@ func TestDoGetSignedFetchesMixinKeyFromNav(t *testing.T) {
 	}
 	if d.mixinKey != "ea1db124af3c7062474693fa704f4ff8" {
 		t.Fatalf("mixinKey = %q", d.mixinKey)
+	}
+}
+
+func TestDoGetHTMLRiskControlError(t *testing.T) {
+	// bilibili 风控/验证页返回 HTML（真实事故：arc/search pn=2 返回 <html>）：
+	// 必须报清晰错误（含状态码与响应前缀），而非含糊的 "bad json"
+	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html><body>访问过于频繁，请稍后重试</body></html>"))
+	})
+	d := newTestDriver()
+	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return srv.Client().Transport.RoundTrip(req)
+	}))
+	_, err := d.doGet(context.Background(), srv.URL+"/x/space/wbi/arc/search", nil, false)
+	if err == nil {
+		t.Fatal("want error for HTML response")
+	}
+	for _, want := range []string{"HTML", "risk-control", "<html>"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+func TestDoGetNon200Status(t *testing.T) {
+	// 412 = bilibili 风控状态码；必须带状态码报错
+	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+		w.Write([]byte("rate limited"))
+	})
+	d := newTestDriver()
+	d.client = resty.New().SetTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return srv.Client().Transport.RoundTrip(req)
+	}))
+	_, err := d.doGet(context.Background(), srv.URL+"/x", nil, false)
+	if err == nil || !strings.Contains(err.Error(), "412") {
+		t.Fatalf("err = %v, want 412 status hint", err)
+	}
+}
+
+func TestEffectiveRateFallback(t *testing.T) {
+	cases := []struct {
+		set  float64
+		want float64
+	}{
+		{0, defaultRateLimit},  // 老存储未设置 → 回落默认
+		{-1, defaultRateLimit}, // 非法负值 → 回落默认
+		{2.5, 2.5},             // 显式配置生效
+	}
+	for _, c := range cases {
+		d := newTestDriver()
+		d.Addition.LimitRate = c.set
+		if got := d.effectiveRate(); got != c.want {
+			t.Errorf("effectiveRate(%v) = %v, want %v", c.set, got, c.want)
+		}
+	}
+}
+
+func TestInitClientLimiterFromAddition(t *testing.T) {
+	// 限流器按 Addition.LimitRate 创建，burst=1（严格均匀间隔）
+	d := newTestDriver()
+	d.Addition.LimitRate = 1.5
+	d.initClient()
+	if d.client == nil {
+		t.Fatal("initClient must create client")
+	}
+	if got := d.limiter.Limit(); got != 1.5 {
+		t.Fatalf("limiter rate = %v, want 1.5", got)
+	}
+	if got := d.limiter.Burst(); got != 1 {
+		t.Fatalf("limiter burst = %d, want 1 (uniform spacing)", got)
+	}
+	// 未设置（老存储）→ 回落默认 2
+	d2 := newTestDriver()
+	d2.initClient()
+	if got := d2.limiter.Limit(); got != 2 {
+		t.Fatalf("default limiter rate = %v, want 2", got)
 	}
 }

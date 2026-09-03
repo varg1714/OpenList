@@ -2,9 +2,11 @@ package bilibili
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -159,5 +161,64 @@ func TestCollectPagesMaxLimit(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Fatalf("got %d items, want 3 (MaxListItems cut)", len(got))
+	}
+}
+
+func TestCollectPagesRetryThenSucceed(t *testing.T) {
+	// 页失败 → 按退避重试 → 成功
+	defer func(old []time.Duration) { pageRetryBackoff = old }(pageRetryBackoff)
+	pageRetryBackoff = []time.Duration{0, 0}
+	d := newTestDriver()
+	var calls int
+	var got []int
+	err := collectPages(d, context.Background(), 50, func(pn int) ([]int, int, error) {
+		calls++
+		if calls == 1 {
+			return nil, 0, errors.New("risk-control html")
+		}
+		return []int{1, 2}, 2, nil
+	}, &got)
+	if err != nil {
+		t.Fatalf("collectPages: %v", err)
+	}
+	if calls != 2 || len(got) != 2 {
+		t.Fatalf("calls = %d, got = %d items, want 2 calls / 2 items", calls, len(got))
+	}
+}
+
+func TestCollectPagesPartialOnPersistentError(t *testing.T) {
+	// 首页成功、后续页重试耗尽 → 保留部分结果返回 nil（部分可见 > 全不可见）
+	defer func(old []time.Duration) { pageRetryBackoff = old }(pageRetryBackoff)
+	pageRetryBackoff = []time.Duration{0, 0}
+	d := newTestDriver()
+	var got []int
+	err := collectPages(d, context.Background(), 50, func(pn int) ([]int, int, error) {
+		if pn == 1 {
+			return []int{1, 2}, 100, nil
+		}
+		return nil, 0, errors.New("risk-control html")
+	}, &got)
+	if err != nil {
+		t.Fatalf("collectPages: want nil err (partial result), got %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d items, want 2 (partial page 1)", len(got))
+	}
+}
+
+func TestCollectPagesFirstPageError(t *testing.T) {
+	// 首页即失败（重试耗尽，无任何收集）→ 返回错误，调用方明确失败
+	defer func(old []time.Duration) { pageRetryBackoff = old }(pageRetryBackoff)
+	pageRetryBackoff = []time.Duration{0, 0}
+	d := newTestDriver()
+	var got []int
+	err := collectPages(d, context.Background(), 50, func(pn int) ([]int, int, error) {
+		return nil, 0, errors.New("boom")
+	}, &got)
+	if err == nil {
+		t.Fatal("want error when first page fails")
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %d items, want 0", len(got))
 	}
 }

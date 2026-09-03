@@ -1,10 +1,12 @@
 package bilibili
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"path"
 	"strings"
 	"time"
@@ -17,6 +19,9 @@ const (
 	apiBase      = "https://api.bilibili.com"
 	passportBase = "https://passport.bilibili.com"
 	browserUA    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+	// defaultRateLimit: Addition.LimitRate ≤0（老存储未设置）时回落的安全默认值
+	defaultRateLimit = 2
 )
 
 // biliResp 是所有 bilibili API 的统一包裹结构
@@ -24,6 +29,15 @@ type biliResp struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data"`
+}
+
+// effectiveRate Addition.LimitRate ≤0 时回落默认值（0 无法表达"不限流"：
+// 老存储没有 limit_rate 字段会得到 0，而 bilibili 必须限流防风控）
+func (d *Bilibili) effectiveRate() float64 {
+	if d.LimitRate > 0 {
+		return d.LimitRate
+	}
+	return defaultRateLimit
 }
 
 // initClient 幂等初始化 HTTP 客户端与限流器
@@ -34,8 +48,8 @@ func (d *Bilibili) initClient() {
 	d.client = resty.New().
 		SetHeader("User-Agent", browserUA).
 		SetHeader("Referer", "https://www.bilibili.com/")
-	d.limiter = rate.NewLimiter(5, 5) // 5 r/s 兜底
-	d.pageDelay = 150 * time.Millisecond
+	// burst 1：请求严格均匀间隔（115 同款），翻页节奏不会被风控误判为突发
+	d.limiter = rate.NewLimiter(rate.Limit(d.effectiveRate()), 1)
 	if d.cookieStr == "" {
 		d.cookieStr = d.Addition.Cookie
 	}
@@ -112,8 +126,10 @@ func (d *Bilibili) fetchMixinKey(ctx context.Context) (string, error) {
 
 // doGet GET 请求；signed=true 时追加 wbi 签名
 func (d *Bilibili) doGet(ctx context.Context, url string, params map[string]string, signed bool) (json.RawMessage, error) {
-	if err := d.limiter.Wait(ctx); err != nil {
-		return nil, err
+	if d.limiter != nil {
+		if err := d.limiter.Wait(ctx); err != nil {
+			return nil, err
+		}
 	}
 	if signed {
 		key, err := d.fetchMixinKey(ctx)
@@ -134,8 +150,20 @@ func (d *Bilibili) doGet(ctx context.Context, url string, params map[string]stri
 }
 
 func (d *Bilibili) decodeResp(resp *resty.Response) (json.RawMessage, error) {
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("bilibili http %d from %s (rate-limited or blocked)", resp.StatusCode(), resp.Request.URL)
+	}
 	var br biliResp
 	if err := json.Unmarshal(resp.Body(), &br); err != nil {
+		body := bytes.TrimSpace(resp.Body())
+		if len(body) > 0 && body[0] == '<' {
+			// HTML 响应 = 风控/验证页（-412/滑块），非 JSON；截前缀便于诊断
+			prefix := string(body)
+			if len(prefix) > 160 {
+				prefix = prefix[:160]
+			}
+			return nil, fmt.Errorf("bilibili returned HTML instead of JSON from %s (risk-control/verify page), prefix: %q", resp.Request.URL, prefix)
+		}
 		return nil, fmt.Errorf("bad json from %s: %w", resp.Request.URL, err)
 	}
 	switch br.Code {

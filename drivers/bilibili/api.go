@@ -115,7 +115,16 @@ func (d *Bilibili) navInfo(ctx context.Context) (int64, string, error) {
 	return data.Mid, data.Uname, nil
 }
 
-// collectPages 通用分页聚合：fetch 返回一页 items 与 total；受 MaxListItems 与 pageDelay 约束
+// pageRetryBackoff: 单页拉取失败的重试退避序列（风控/限流通常数秒恢复）；
+// 包级变量便于测试覆盖为 0 延迟。
+var pageRetryBackoff = []time.Duration{time.Second, 2 * time.Second}
+
+// collectPages 通用分页聚合：fetch 返回一页 items 与 total；受 MaxListItems 约束。
+// 页失败先按 pageRetryBackoff 退避重试；重试耗尽后：
+//   - 首页即失败（无任何收集）→ 返回错误，调用方明确失败
+//   - 已有部分收集 → 保留部分结果 + Warn（emby/浏览场景"部分可见"好于"全不可见"，
+//     目录缓存过期后自然重试补全）
+//
 // 包级函数（Go 方法不允许类型参数）
 func collectPages[T any](d *Bilibili, ctx context.Context, pageSize int,
 	fetch func(pn int) ([]T, int, error), out *[]T) error {
@@ -126,9 +135,13 @@ func collectPages[T any](d *Bilibili, ctx context.Context, pageSize int,
 	}
 	pn := 1
 	for {
-		items, total, err := fetch(pn)
+		items, total, err := fetchWithRetry(d, ctx, fetch, pn)
 		if err != nil {
-			return err
+			if len(*out) == 0 {
+				return err
+			}
+			utils.Log.Warnf("bilibili: partial list (%d items collected) at pn=%d: %v", len(*out), pn, err)
+			return nil
 		}
 		for _, it := range items {
 			*out = append(*out, it)
@@ -143,14 +156,28 @@ func collectPages[T any](d *Bilibili, ctx context.Context, pageSize int,
 			return nil
 		}
 		pn++
-		if d.pageDelay > 0 {
+	}
+}
+
+// fetchWithRetry 单页拉取，失败按 pageRetryBackoff 退避重试
+func fetchWithRetry[T any](d *Bilibili, ctx context.Context,
+	fetch func(pn int) ([]T, int, error), pn int) ([]T, int, error) {
+	var lastErr error
+	for attempt := 0; attempt <= len(pageRetryBackoff); attempt++ {
+		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(d.pageDelay):
+				return nil, 0, ctx.Err()
+			case <-time.After(pageRetryBackoff[attempt-1]):
 			}
 		}
+		items, total, err := fetch(pn)
+		if err == nil {
+			return items, total, nil
+		}
+		lastErr = err
 	}
+	return nil, 0, lastErr
 }
 
 func (d *Bilibili) followings(ctx context.Context) ([]FollowItem, error) {

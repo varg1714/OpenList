@@ -1,8 +1,6 @@
 package bilibili
 
 import (
-	"time"
-
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -11,8 +9,11 @@ import (
 )
 
 type Addition struct {
-	Cookie       string `json:"cookie" type:"text" help:"auto-filled after QR code login; or paste browser cookie manually (must contain SESSDATA)"`
-	MaxListItems int    `json:"max_list_items" type:"number" default:"500" help:"max items per paged list (followings/videos/fav), 0 = unlimited"`
+	Cookie string `json:"cookie" type:"text" help:"auto-filled after QR code login; or paste browser cookie manually (must contain SESSDATA)"`
+	// LimitRate: 全局限速（115 同款模式）；≤0 回落到默认 2（老存储无此字段，
+	// 不能退化为不限流——bilibili 对高频连续请求会风控/返验证页）
+	LimitRate    float64 `json:"limit_rate" type:"float" default:"2" help:"limit all api request rate (requests/s); 0 = default (2); lower if risk-control (-412/verify page) kicks in"`
+	MaxListItems int     `json:"max_list_items" type:"number" default:"0" help:"max items per paged list (followings/videos/fav), 0 = unlimited"`
 	driver.RootPath
 }
 
@@ -32,9 +33,8 @@ type Bilibili struct {
 	Addition
 
 	// http client 层（Task 3+）：resty 复用池 + 全局限流 + 手动 cookie 串
-	client    *resty.Client
-	limiter   *rate.Limiter
-	pageDelay time.Duration // 分页间延迟（翻页过快会被风控）
+	client  *resty.Client
+	limiter *rate.Limiter
 
 	cookieStr   string // 手动维护的 cookie 串（种子来自 Addition.Cookie，随 Set-Cookie 合并）
 	mixinKey    string // wbi 签名 key（按日缓存）
