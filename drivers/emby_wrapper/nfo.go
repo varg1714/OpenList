@@ -5,6 +5,7 @@ import (
 	stdpath "path"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/virtual_file"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -60,18 +61,23 @@ func buildPlot(plot string, appendFlag *bool, fileName string) string {
 	return plot + "-" + name
 }
 
-// buildNFOWithRoot 构建指定根元素（movie/tvshow/episodedetails）的 nfo XML：title + plot + actor。
-func buildNFOWithRoot(root, title, plot string, setting *model.EmbyDirSetting) ([]byte, error) {
+// buildNFOWithRoot 构建指定根元素（movie/tvshow/episodedetails）的 nfo XML：title + plot + actor；
+// aired 非零时附加 <aired>YYYY-MM-DD</aired>（Emby 剧集 nfo 的首播日期字段）。
+func buildNFOWithRoot(root, title, plot string, aired time.Time, setting *model.EmbyDirSetting) ([]byte, error) {
 	actors := splitActors(setting.Actors)
 	actorInfos := make([]virtual_file.Actor, 0, len(actors))
 	for _, a := range actors {
 		actorInfos = append(actorInfos, virtual_file.Actor{Name: a})
 	}
-	return virtual_file.RenderNFO(root, &virtual_file.Media{
+	m := &virtual_file.Media{
 		Title: virtual_file.Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", title)},
 		Plot:  virtual_file.Inner{Inner: fmt.Sprintf("<![CDATA[%s]]>", plot)},
 		Actor: actorInfos,
-	})
+	}
+	if !aired.IsZero() {
+		m.Aired = aired.Format("2006-01-02")
+	}
+	return virtual_file.RenderNFO(root, m)
 }
 
 // buildNFOContent 构建与 javdb 格式一致的影片 nfo XML：title + actor + plot。
@@ -83,18 +89,19 @@ func buildNFOContent(title, fileName string, setting *model.EmbyDirSetting) ([]b
 	if setting.Plot != "" {
 		nfoTitle = plot
 	}
-	return buildNFOWithRoot("movie", nfoTitle, plot, setting)
+	return buildNFOWithRoot("movie", nfoTitle, plot, time.Time{}, setting)
 }
 
 // buildEpisodeNFO 构建剧集 nfo：title（原文件名去扩展名）+ plot（影片名称，
-// 2026-09-03 应需求与 title 同值写入简介）+ actor；不含剧集级简介（属于 tvshow.nfo）。
-func buildEpisodeNFO(title string, setting *model.EmbyDirSetting) ([]byte, error) {
-	return buildNFOWithRoot("episodedetails", title, title, setting)
+// 2026-09-03 应需求与 title 同值写入简介）+ actor；aired = 剧集首播日期
+// （源对象修改时间——bilibili 的 videoObj.Modified 即投稿时间），零值不输出。
+func buildEpisodeNFO(title string, aired time.Time, setting *model.EmbyDirSetting) ([]byte, error) {
+	return buildNFOWithRoot("episodedetails", title, title, aired, setting)
 }
 
 // buildTVShowNFO 构建剧集级 nfo：title（自定义剧名）+ plot（剧集介绍）+ actor。
 func buildTVShowNFO(showName, plot string, setting *model.EmbyDirSetting) ([]byte, error) {
-	return buildNFOWithRoot("tvshow", showName, plot, setting)
+	return buildNFOWithRoot("tvshow", showName, plot, time.Time{}, setting)
 }
 
 // buildSeasonNFO 构建季 nfo：<season><seasonnumber>N</seasonnumber>[<title>]</season>。

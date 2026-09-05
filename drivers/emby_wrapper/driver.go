@@ -304,7 +304,7 @@ func (d *EmbyWrapper) tvNFOForPath(ctx context.Context, path, parentDir, base, r
 	if setting == nil {
 		setting = &model.EmbyDirSetting{}
 	}
-	content, err := buildEpisodeNFO(strings.TrimSuffix(e.real.GetName(), stdpath.Ext(e.real.GetName())), setting)
+	content, err := buildEpisodeNFO(strings.TrimSuffix(e.real.GetName(), stdpath.Ext(e.real.GetName())), e.real.ModTime(), setting)
 	if err != nil {
 		return nil, false, err
 	}

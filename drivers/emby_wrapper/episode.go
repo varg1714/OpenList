@@ -436,7 +436,7 @@ func (d *EmbyWrapper) emitTVRootView(pc *tvPathContext, idx *tvIndex, setting *m
 		if realNFO[strings.ToLower(nfoName)] || addedNFO[nfoName] {
 			continue
 		}
-		content, err := buildEpisodeNFO(strings.TrimSuffix(name, stdpath.Ext(name)), setting)
+		content, err := buildEpisodeNFO(strings.TrimSuffix(name, stdpath.Ext(name)), o.ModTime(), setting)
 		if err != nil {
 			utils.Log.Warnf("emby wrapper: build episode nfo %s: %+v", nfoName, err)
 			continue
@@ -540,7 +540,7 @@ func (d *EmbyWrapper) emitTVSeasonView(pc *tvPathContext, idx *tvIndex, setting 
 			if realNFO[strings.ToLower(nfoName)] || addedNFO[nfoName] {
 				continue
 			}
-			content, err := buildEpisodeNFO(strings.TrimSuffix(e.real.GetName(), stdpath.Ext(e.real.GetName())), setting)
+			content, err := buildEpisodeNFO(strings.TrimSuffix(e.real.GetName(), stdpath.Ext(e.real.GetName())), e.real.ModTime(), setting)
 			if err != nil {
 				utils.Log.Warnf("emby wrapper: build episode nfo %s: %+v", nfoName, err)
 				continue
@@ -566,7 +566,7 @@ func (d *EmbyWrapper) emitTVSeasonView(pc *tvPathContext, idx *tvIndex, setting 
 		if realNFO[strings.ToLower(nfoName)] || addedNFO[nfoName] {
 			continue
 		}
-		content, err := buildEpisodeNFO(strings.TrimSuffix(e.real.GetName(), stdpath.Ext(e.real.GetName())), setting)
+		content, err := buildEpisodeNFO(strings.TrimSuffix(e.real.GetName(), stdpath.Ext(e.real.GetName())), e.real.ModTime(), setting)
 		if err != nil {
 			utils.Log.Warnf("emby wrapper: build episode nfo %s: %+v", nfoName, err)
 			continue

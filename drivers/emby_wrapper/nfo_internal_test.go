@@ -3,6 +3,7 @@ package emby_wrapper
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
@@ -45,9 +46,10 @@ func TestBuildPlot(t *testing.T) {
 	}
 }
 
-// TestBuildEpisodeNFO：剧集 nfo 根元素 episodedetails，title=集名，保留 actors，无 plot 内容。
+// TestBuildEpisodeNFO：剧集 nfo 根元素 episodedetails，title=集名，保留 actors，无 plot 内容；
+// aired 零值时不输出 <aired>。
 func TestBuildEpisodeNFO(t *testing.T) {
-	content, err := buildEpisodeNFO("A", &model.EmbyDirSetting{Actors: "演员A"})
+	content, err := buildEpisodeNFO("A", time.Time{}, &model.EmbyDirSetting{Actors: "演员A"})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -64,9 +66,30 @@ func TestBuildEpisodeNFO(t *testing.T) {
 	if strings.Contains(got, "剧集介绍") {
 		t.Errorf("episode nfo must not contain show plot, got %s", got)
 	}
+	if strings.Contains(got, "<aired>") {
+		t.Errorf("zero aired must not render <aired>, got %s", got)
+	}
 }
 
-// TestBuildTVShowNFO：剧集级 nfo 根元素 tvshow，title=剧名，plot=剧集介绍，保留 actors。
+// TestBuildEpisodeNFOAired：设置 aired 时剧集 nfo 写入 <aired>YYYY-MM-DD</aired>
+// （Emby EpisodeNfoParser 识别为剧集首播日期）。
+func TestBuildEpisodeNFOAired(t *testing.T) {
+	aired := time.Date(2024, 3, 5, 22, 30, 0, 0, time.Local)
+	content, err := buildEpisodeNFO("A", aired, &model.EmbyDirSetting{Actors: "演员A"})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "<aired>2024-03-05</aired>") {
+		t.Errorf("episode nfo must carry aired date, got %s", got)
+	}
+	if !strings.Contains(got, "<![CDATA[A]]>") {
+		t.Errorf("missing title A, got %s", got)
+	}
+}
+
+// TestBuildTVShowNFO：剧集级 nfo 根元素 tvshow，title=剧名，plot=剧集介绍，保留 actors；
+// 不含 aired（剧级首播日期 <premiered> 未实现，零值不输出）。
 func TestBuildTVShowNFO(t *testing.T) {
 	content, err := buildTVShowNFO("测试剧", "剧集介绍", &model.EmbyDirSetting{Actors: "演员A"})
 	if err != nil {

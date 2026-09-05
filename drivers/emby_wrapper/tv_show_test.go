@@ -206,6 +206,33 @@ func TestTVShowNFOsContent(t *testing.T) {
 	}
 }
 
+// TestTVShowEpisodeNFOAired：剧集 nfo 写入 <aired> = 源文件修改时间（bilibili 的
+// videoObj.Modified 即投稿时间）；tvshow.nfo 不输出 aired（剧级日期未实现）。
+func TestTVShowEpisodeNFOAired(t *testing.T) {
+	d := setup(t)
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	// 固定文件修改时间：Chtimes 不影响 birth time，季内排序（创建时间）不变
+	full := filepath.Join(localRoot, "Movies", "2024年", "A1.mp4")
+	want := time.Date(2024, 1, 5, 12, 0, 0, 0, time.Local)
+	if err := os.Chtimes(full, want, want); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	ep := readNFOLink(t, d, "/Movies/S02/S02E01.nfo")
+	if !strings.Contains(ep, "<aired>"+want.Format("2006-01-02")+"</aired>") {
+		t.Errorf("episode nfo must carry aired date %s, got %s", want.Format("2006-01-02"), ep)
+	}
+	show := readNFOLink(t, d, "/Movies/tvshow.nfo")
+	if strings.Contains(show, "<aired>") {
+		t.Errorf("tvshow.nfo must not contain aired, got %s", show)
+	}
+}
+
 // TestTVShowNameFallbackFolder：未设置剧名时回退文件夹名。
 func TestTVShowNameFallbackFolder(t *testing.T) {
 	d := setup(t)
