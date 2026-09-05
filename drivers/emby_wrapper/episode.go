@@ -70,6 +70,7 @@ type tvIndex struct {
 	seasonNo    map[string]int     // 真实季文件夹路径 → 季号
 	seasonAlias map[string]string  // 真实季文件夹路径 → 虚拟季路径（/A/2024年 → /A/S02）
 	last        model.Obj          // 最后登记的条目对象（tvshow.nfo 时间戳参考），无条目时为 nil
+	order       []tvEntry          // 登记顺序（根视频在前、季按分配顺序）；剧根封面（poster/fanart）候选按此前 N 个
 }
 
 // addEpisode 登记一条文件条目。virtualDir 为展示目录（剧集根或季别名路径）；
@@ -122,11 +123,12 @@ func (idx *tvIndex) addDisambiguated(real model.Obj, realPath, virtualDir, virtu
 	}
 }
 
-// setEntry 登记条目（byVirtual/nfoBases/byReal/last）。
+// setEntry 登记条目（byVirtual/nfoBases/byReal/order/last）。
 func (idx *tvIndex) setEntry(real model.Obj, realPath, virtualPath, virtualName string) {
 	idx.byVirtual[strings.ToLower(virtualPath)] = tvEntry{real: real, name: virtualName, path: realPath}
 	idx.nfoBases[strings.ToLower(strings.TrimSuffix(virtualPath, stdpath.Ext(virtualName)))] = virtualName
 	idx.byReal[realPath] = virtualName
+	idx.order = append(idx.order, tvEntry{real: real, name: virtualName, path: realPath})
 	idx.last = real
 }
 
@@ -452,6 +454,17 @@ func (d *EmbyWrapper) emitTVRootView(pc *tvPathContext, idx *tvIndex, setting *m
 			},
 			content: content,
 		})
+	}
+	// 剧集根多图（fanart_count>0 时）：poster.jpg + fanart1..N.jpg，候选 = 剧集顺序前 N 个带缩略图的视频；
+	// 真实同名文件占用槽位时跳过（真实优先，不后移）。图片字节在 Link 时惰性下载（同剧集封面）。
+	for i, e := range d.showImageCandidates(idx, d.FanartCount) {
+		name := showImageName(i)
+		if realFiles[strings.ToLower(name)] {
+			continue
+		}
+		if url, ok := thumbOfEntry(e); ok {
+			out = append(out, newVirtualThumb(stdpath.Join(pc.viewDir, name), url, e.real.ModTime()))
+		}
 	}
 	// tvshow.nfo（真实同名 nfo 优先）
 	if !realNFO["tvshow.nfo"] {

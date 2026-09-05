@@ -36,3 +36,30 @@ func TestThumbContentDownloadAndCache(t *testing.T) {
 		t.Errorf("error must carry status, got %v", err)
 	}
 }
+
+// TestShowImageNameIndex：剧根封面占位命名（pornhub fanart 同款：poster.jpg +
+// fanart1..N.jpg）与 Get 反查的序号解析互为逆运算。
+func TestShowImageNameIndex(t *testing.T) {
+	cases := []struct {
+		i    int
+		name string
+	}{
+		{0, "poster.jpg"},
+		{1, "fanart1.jpg"},
+		{2, "fanart2.jpg"},
+		{10, "fanart10.jpg"},
+	}
+	for _, c := range cases {
+		if got := showImageName(c.i); got != c.name {
+			t.Errorf("showImageName(%d) = %q, want %q", c.i, got, c.name)
+		}
+		if got, ok := showImageIndex(c.name); !ok || got != c.i {
+			t.Errorf("showImageIndex(%q) = %d,%v want %d,true", c.name, got, ok, c.i)
+		}
+	}
+	for _, bad := range []string{"poster.png", "fanart0.jpg", "fanart.jpg", "folder.jpg", "backdrop1.jpg", "thumb.jpg", "fanart1.png"} {
+		if _, ok := showImageIndex(bad); ok {
+			t.Errorf("showImageIndex(%q) must not match", bad)
+		}
+	}
+}

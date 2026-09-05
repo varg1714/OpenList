@@ -343,6 +343,17 @@ func (d *EmbyWrapper) resolveVirtualPath(ctx context.Context, path string) (mode
 			}
 		}
 	}
+	// 剧集根多图占位（poster.jpg / fanart{N}.jpg，仅剧集根目录）：按候选序号映射
+	// 到对应视频缩略图（与 List 发射同一候选序，真实同名文件已在 op.Get 优先返回）
+	if i, ok := showImageIndex(stdpath.Base(path)); ok && utils.PathEqual(parentDir, rootPath) {
+		cands := d.showImageCandidates(idx, d.FanartCount)
+		if i < len(cands) {
+			if url, tok := thumbOfEntry(cands[i]); tok {
+				return newVirtualThumb(path, url, cands[i].real.ModTime()), true, nil
+			}
+		}
+		return nil, false, nil
+	}
 	// 季别名目录
 	if seasonReal, ok := idx.seasonRealOf(path); ok {
 		remoteStorage, remoteActualPath, err := d.remote()
