@@ -52,8 +52,8 @@ func parseYearDirID(id, prefix string) (int64, int, bool) {
 	if err != nil {
 		return 0, 0, false
 	}
-	year, err := strconv.Atoi(rest[i+1:])
-	if err != nil {
+	year, ok := parseYearSeg(rest[i+1:])
+	if !ok {
 		return 0, 0, false
 	}
 	return base, year, true

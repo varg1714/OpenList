@@ -146,7 +146,7 @@ func parsePrefixedID(id, prefix string) (int64, bool) {
 }
 
 // ---- 快照门面接线：List 数据经 listWithSnapshot（snapshot.go）——
-// 快照 DirKey = 目录 obj.ID；keyOf = 条目稳定 ID；build = 展示层重建（下同）
+// 快照 DirKey = 目录展示路径（dir.GetPath()）；keyOf = 条目稳定 ID；build = 展示层重建（下同）
 
 func (d *Bilibili) listFollowings(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
 	return listWithSnapshot(d, ctx, dir, dir.GetPath(),

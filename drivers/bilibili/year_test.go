@@ -52,7 +52,7 @@ func TestParseYearDirID(t *testing.T) {
 	}
 	for _, bad := range []struct{ id, prefix string }{
 		{"up_42", upFolderPrefix}, {"up_42_", upFolderPrefix}, {"up_42_x", upFolderPrefix},
-		{"up__2023", upFolderPrefix}, {"up_42_2023", favFolderPrefix},
+		{"up_42_202", upFolderPrefix}, {"up__2023", upFolderPrefix}, {"up_42_2023", favFolderPrefix},
 	} {
 		if _, _, ok := parseYearDirID(bad.id, bad.prefix); ok {
 			t.Fatalf("parseYearDirID(%q,%q) should fail", bad.id, bad.prefix)
@@ -302,6 +302,26 @@ func TestGetYearVsVideoNameAmbiguity(t *testing.T) {
 	}
 	if vo, ok := v.(*videoObj); !ok || vo.bvid != "BV1a" {
 		t.Fatalf("obj = %T %+v", v, v)
+	}
+}
+
+func TestGetYearShapedEmptySegFallsBackToVideo(t *testing.T) {
+	// 纯 "20xx" 形状段但该年份无内容（视频标题恰为 "2012"、2023 年发布）：
+	// 不返回年份目录，回退旧式无扩展名视频名匹配（spec §2 顺序：年份目录优先且该年有内容）
+	d := seedUpWithYears(t, `{"code":0,"data":{"list":{"vlist":[
+		{"bvid":"BV1a","title":"2012","created":`+strconv.FormatInt(ts2023, 10)+`},
+		{"bvid":"BV1b","title":"别的视频","created":`+strconv.FormatInt(ts2024, 10)+`}
+	]},"page":{"count":2}}}`)
+	v, err := d.Get(context.Background(), "/我的关注/测试UP/2012")
+	if err != nil {
+		t.Fatalf("legacy extensionless Get: %v", err)
+	}
+	if vo, ok := v.(*videoObj); !ok || vo.bvid != "BV1a" {
+		t.Fatalf("obj = %T %+v, want video BV1a", v, v)
+	}
+	// 4 段年份路径：2012 年无内容 → 404（非年份目录，年份下无视频）
+	if _, err := d.Get(context.Background(), "/我的关注/测试UP/2012/2012.mp4"); !errs.IsObjectNotFound(err) {
+		t.Fatalf("year-2012 4-seg Get should 404: %v", err)
 	}
 }
 
