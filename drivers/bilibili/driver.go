@@ -111,11 +111,17 @@ func (d *Bilibili) List(ctx context.Context, dir model.Obj, args model.ListArgs)
 		case dirFavID:
 			return d.listFavFolders(ctx, dir)
 		default:
-			if _, ok := parsePrefixedID(key, upFolderPrefix); ok {
-				return d.listUpVideos(ctx, dir)
+			if mid, ok := parsePrefixedID(key, upFolderPrefix); ok {
+				return d.listUpVideos(ctx, dir, mid)
 			}
-			if _, ok := parsePrefixedID(key, favFolderPrefix); ok {
-				return d.listFavVideos(ctx, dir)
+			if _, year, ok := parseYearDirID(key, upFolderPrefix); ok {
+				return d.listYearVideos(ctx, dir, year)
+			}
+			if mediaID, ok := parsePrefixedID(key, favFolderPrefix); ok {
+				return d.listFavVideos(ctx, dir, mediaID)
+			}
+			if _, year, ok := parseYearDirID(key, favFolderPrefix); ok {
+				return d.listYearVideos(ctx, dir, year)
 			}
 		}
 		return nil, errs.ObjectNotFound
@@ -164,30 +170,14 @@ func buildFollowings(dir model.Obj, items []FollowItem) ([]model.Obj, error) {
 	return objs, nil
 }
 
-func (d *Bilibili) listUpVideos(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
-	mid, ok := parsePrefixedID(dir.GetID(), upFolderPrefix)
-	if !ok {
-		return nil, errs.ObjectNotFound
-	}
+func (d *Bilibili) listUpVideos(ctx context.Context, dir model.Obj, mid int64) ([]model.Obj, error) {
+	// key 不变：UP 目录展示路径（master 行唯一事实源；年份目录为内存投影）
 	return listWithSnapshot(d, ctx, dir, dir.GetPath(),
 		fetchUpVideosPage(d, ctx, mid),
 		func(v VideoItem) string { return v.Bvid },
-		buildUpVideos)
-}
-
-func buildUpVideos(dir model.Obj, items []VideoItem) ([]model.Obj, error) {
-	displays := make([]string, len(items))
-	suffixes := make([]string, len(items))
-	for i, v := range items {
-		displays[i] = sanitizeName(v.Title, 150)
-		suffixes[i] = v.Bvid
-	}
-	names := disambiguate(displays, suffixes)
-	objs := make([]model.Obj, 0, len(items))
-	for i := range items {
-		objs = append(objs, newVideoObj(dir, items[i], names[i]))
-	}
-	return objs, nil
+		func(parent model.Obj, items []VideoItem) ([]model.Obj, error) {
+			return buildYearDirs(parent, upFolderPrefix+strconv.FormatInt(mid, 10), items)
+		})
 }
 
 func (d *Bilibili) listFavFolders(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
@@ -212,30 +202,34 @@ func buildFavFolders(dir model.Obj, items []FavFolder) ([]model.Obj, error) {
 	return objs, nil
 }
 
-func (d *Bilibili) listFavVideos(ctx context.Context, dir model.Obj) ([]model.Obj, error) {
-	mediaID, ok := parsePrefixedID(dir.GetID(), favFolderPrefix)
-	if !ok {
-		return nil, errs.ObjectNotFound
-	}
+func (d *Bilibili) listFavVideos(ctx context.Context, dir model.Obj, mediaID int64) ([]model.Obj, error) {
 	return listWithSnapshot(d, ctx, dir, dir.GetPath(),
 		fetchFavVideosPage(d, ctx, mediaID),
 		func(v VideoItem) string { return v.Bvid },
-		buildFavVideos)
+		func(parent model.Obj, items []VideoItem) ([]model.Obj, error) {
+			return buildYearDirs(parent, favFolderPrefix+strconv.FormatInt(mediaID, 10), items)
+		})
 }
 
-func buildFavVideos(dir model.Obj, items []VideoItem) ([]model.Obj, error) {
-	displays := make([]string, len(items))
-	suffixes := make([]string, len(items))
-	for i, v := range items {
-		displays[i] = sanitizeName(v.Title, 150)
-		suffixes[i] = v.Bvid
+// listYearVideos 年份目录 List：纯内存投影（M1，spec 2026-09-07）——
+// 父 master 行 key = 本目录路径去末段；无 API、无写库；行缺失 → ObjectNotFound
+// （数据同步只由父目录 List 负责，decision A）。
+func (d *Bilibili) listYearVideos(ctx context.Context, dir model.Obj, year int) ([]model.Obj, error) {
+	parentKey := filepath.Dir(dir.GetPath())
+	env, ok, err := loadSnapshot[VideoItem](d, parentKey)
+	if err != nil {
+		return nil, err
 	}
-	names := disambiguate(displays, suffixes)
-	objs := make([]model.Obj, 0, len(items))
-	for i := range items {
-		objs = append(objs, newVideoObj(dir, items[i], names[i]))
+	if !ok {
+		return nil, errs.ObjectNotFound
 	}
-	return objs, nil
+	items := make([]VideoItem, 0, len(env.Items))
+	for _, it := range env.Items {
+		if videoYearOf(it) == year {
+			items = append(items, it)
+		}
+	}
+	return buildVideoObjs(dir, items)
 }
 
 // Get 浅路径直接构造；深路径纯查库定位（快照 key = 展示路径，见 listXxx）。

@@ -1,10 +1,13 @@
 package bilibili
 
 import (
+	"context"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
 
@@ -133,5 +136,48 @@ func TestBuildVideoObjsKeepsOrder(t *testing.T) {
 		if names[i] != want[i] {
 			t.Fatalf("names = %v, want %v", names, want)
 		}
+	}
+}
+
+func TestListYearDirProjectionAndMiss(t *testing.T) {
+	// 跨年同名：各年份目录内名字干净（不互消歧）
+	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/x/space/wbi/arc/search" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		w.Write([]byte(`{"code":0,"data":{"list":{"vlist":[
+			{"bvid":"BV1a","title":"第1集","created":` + strconv.FormatInt(ts2023, 10) + `},
+			{"bvid":"BV1b","title":"第1集","created":` + strconv.FormatInt(ts2024, 10) + `}
+		]},"page":{"count":2}}}`))
+	})
+	d.mixinKey = "ea1db124af3c7062474693fa704f4ff8"
+	if _, err := d.List(context.Background(), dirObj(t, "/我的关注/某UP", upFolderPrefix+"42"), model.ListArgs{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	y23, y24 := y(t, ts2023), y(t, ts2024)
+	for _, yy := range []int{y23, y24} {
+		objs, err := d.List(context.Background(),
+			dirObj(t, "/我的关注/某UP/"+strconv.Itoa(yy), "up_42_"+strconv.Itoa(yy)), model.ListArgs{})
+		if err != nil {
+			t.Fatalf("List %d: %v", yy, err)
+		}
+		if len(objs) != 1 || objs[0].GetName() != "第1集.mp4" {
+			t.Fatalf("year %d objs = %+v", yy, objs)
+		}
+	}
+	// 无该年份 → 空列表（父目录不会展示的目录；不报错）
+	objs, err := d.List(context.Background(), dirObj(t, "/我的关注/某UP/2029", "up_42_2029"), model.ListArgs{})
+	if err != nil || len(objs) != 0 {
+		t.Fatalf("empty year List = %v %v", objs, err)
+	}
+}
+
+func TestListYearDirNoParentSnapshot(t *testing.T) {
+	// 父行缺失（未同步/被清）：ObjectNotFound，零 API
+	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("year-dir List must not call api")
+	})
+	if _, err := d.List(context.Background(), dirObj(t, "/我的关注/某UP/2023", "up_42_2023"), model.ListArgs{}); !errs.IsObjectNotFound(err) {
+		t.Fatalf("err = %v, want ObjectNotFound", err)
 	}
 }
