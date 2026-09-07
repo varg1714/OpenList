@@ -246,10 +246,10 @@ func (d *Bilibili) Get(ctx context.Context, path string) (model.Obj, error) {
 	case "/" + dirFav:
 		return &model.Object{ID: dirFavID, Name: dirFav, Path: "/" + dirFav, IsFolder: true}, nil
 	}
-	// 深路径：/我的关注/{UP}[/{视频}] 或 /我的收藏/{收藏夹}[/{视频}]
+	// 深路径：/我的关注/{UP}[/{年份|视频}][/{视频}] 或 /我的收藏/{收藏夹}[…]（同构）
 	segs := strings.Split(strings.Trim(path, "/"), "/")
-	if len(segs) < 2 || len(segs) > 3 || (segs[0] != dirFollow && segs[0] != dirFav) {
-		return nil, errs.ObjectNotFound // 结构固定 3 层以内，顶层只能是关注/收藏
+	if len(segs) < 2 || len(segs) > 4 || (segs[0] != dirFollow && segs[0] != dirFav) {
+		return nil, errs.ObjectNotFound // 结构固定 4 层以内，顶层只能是关注/收藏
 	}
 	parent, err := d.Get(ctx, "/"+segs[0])
 	if err != nil {
@@ -261,7 +261,8 @@ func (d *Bilibili) Get(ctx context.Context, path string) (model.Obj, error) {
 	return d.getFavPath(ctx, parent, segs[1:])
 }
 
-// getFollowPath 在关注子树内定位：{UP名}（2 段）或 {UP名}/{视频名}（3 段）
+// getFollowPath 在关注子树内定位：{UP}（1 段）| {UP}/{年份|旧视频名}（2 段）|
+// {UP}/{年份}/{视频}（3 段，年份与条目 pubdate 校验；spec 2026-09-07）
 func (d *Bilibili) getFollowPath(ctx context.Context, parent model.Obj, segs []string) (model.Obj, error) {
 	items, ok, err := loadSnapshot[FollowItem](d, parent.GetPath())
 	if err != nil {
@@ -285,7 +286,7 @@ func (d *Bilibili) getFollowPath(ctx context.Context, parent model.Obj, segs []s
 	if len(segs) == 1 { // segs 已去掉顶层：仅 UP 目录段
 		return upDir, nil
 	}
-	// 视频层：读该 UP 投稿快照按文件名匹配
+	// 视频/年份层：读该 UP master 行（key = UP 展示路径；年份为内存投影）
 	vitems, ok, err := loadSnapshot[VideoItem](d, upDir.GetPath())
 	if err != nil {
 		return nil, err
@@ -293,14 +294,13 @@ func (d *Bilibili) getFollowPath(ctx context.Context, parent model.Obj, segs []s
 	if !ok {
 		return nil, errs.ObjectNotFound
 	}
-	item := matchVideoItem(vitems.Items, segs[1])
-	if item == nil {
-		return nil, errs.ObjectNotFound
+	if len(segs) == 2 { // 叶段：年份目录或旧式视频路径
+		return resolveVideoLeaf(upDir, upFolderPrefix+strconv.FormatInt(mid, 10), segs[1], vitems.Items)
 	}
-	return newVideoObj(upDir, *item, strings.TrimSuffix(segs[1], ".mp4")), nil
+	return resolveYearVideo(upDir, upFolderPrefix+strconv.FormatInt(mid, 10), segs[1], segs[2], vitems.Items)
 }
 
-// getFavPath 在收藏子树内定位：{收藏夹名}（2 段）或 {收藏夹名}/{视频名}（3 段）
+// getFavPath 在收藏子树内定位（与 getFollowPath 同构；收藏夹年份 = FavTime）
 func (d *Bilibili) getFavPath(ctx context.Context, parent model.Obj, segs []string) (model.Obj, error) {
 	items, ok, err := loadSnapshot[FavFolder](d, parent.GetPath())
 	if err != nil {
@@ -330,11 +330,10 @@ func (d *Bilibili) getFavPath(ctx context.Context, parent model.Obj, segs []stri
 	if !ok {
 		return nil, errs.ObjectNotFound
 	}
-	item := matchVideoItem(vitems.Items, segs[1])
-	if item == nil {
-		return nil, errs.ObjectNotFound
+	if len(segs) == 2 {
+		return resolveVideoLeaf(favDir, favFolderPrefix+strconv.FormatInt(mediaID, 10), segs[1], vitems.Items)
 	}
-	return newVideoObj(favDir, *item, strings.TrimSuffix(segs[1], ".mp4")), nil
+	return resolveYearVideo(favDir, favFolderPrefix+strconv.FormatInt(mediaID, 10), segs[1], segs[2], vitems.Items)
 }
 
 // splitFolderName 解析 "{名字}_{id}" 段名（按最后一个 _ 且其后全数字），

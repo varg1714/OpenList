@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,5 +180,170 @@ func TestListYearDirNoParentSnapshot(t *testing.T) {
 	})
 	if _, err := d.List(context.Background(), dirObj(t, "/我的关注/某UP/2023", "up_42_2023"), model.ListArgs{}); !errs.IsObjectNotFound(err) {
 		t.Fatalf("err = %v, want ObjectNotFound", err)
+	}
+}
+
+// seedUpWithYears：关注 1 个 UP、投稿跨两年含跨年同名；返回已落库 driver
+func seedUpWithYears(t *testing.T, vlist string) *Bilibili {
+	t.Helper()
+	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/x/relation/followings":
+			w.Write([]byte(`{"code":0,"data":{"list":[{"mid":42,"uname":"测试UP"}],"total":1}}`))
+		case "/x/space/wbi/arc/search":
+			w.Write([]byte(vlist))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+	d.mixinKey = "ea1db124af3c7062474693fa704f4ff8"
+	for _, dir := range []model.Obj{
+		dirObj(t, "/我的关注", dirFollowID),
+		dirObj(t, "/我的关注/测试UP", upFolderPrefix+"42"),
+	} {
+		if _, err := d.List(context.Background(), dir, model.ListArgs{}); err != nil {
+			t.Fatalf("seed List %s: %v", dir.GetPath(), err)
+		}
+	}
+	return d
+}
+
+func TestGetYearDirAndYearScopedVideo(t *testing.T) {
+	d := seedUpWithYears(t, `{"code":0,"data":{"list":{"vlist":[
+		{"bvid":"BV1c","title":"最新视频","created":`+strconv.FormatInt(ts2024, 10)+`},
+		{"bvid":"BV1a","title":"第1集","created":`+strconv.FormatInt(ts2023, 10)+`},
+		{"bvid":"BV1b","title":"第1集","created":`+strconv.FormatInt(ts2024, 10)+`}
+	]},"page":{"count":3}}}`)
+	y23, y24 := y(t, ts2023), y(t, ts2024)
+
+	// 3 段年份目录（纯查库；obj 与 List 输出同构）
+	obj, err := d.Get(context.Background(), "/我的关注/测试UP/"+strconv.Itoa(y23))
+	if err != nil {
+		t.Fatalf("Get year dir: %v", err)
+	}
+	if !obj.IsDir() || obj.GetID() != "up_42_"+strconv.Itoa(y23) || obj.GetName() != strconv.Itoa(y23) {
+		t.Fatalf("year dir obj = %+v", obj)
+	}
+	if !obj.CreateTime().Equal(time.Date(y23, 1, 1, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("year Ctime = %v", obj.CreateTime())
+	}
+	// 4 段：跨年同名各自命中（年份范围匹配）
+	v, err := d.Get(context.Background(), "/我的关注/测试UP/"+strconv.Itoa(y23)+"/第1集.mp4")
+	if err != nil {
+		t.Fatalf("Get y23 video: %v", err)
+	}
+	if vo, ok := v.(*videoObj); !ok || vo.bvid != "BV1a" {
+		t.Fatalf("y23 video = %T %+v", v, v)
+	}
+	v, err = d.Get(context.Background(), "/我的关注/测试UP/"+strconv.Itoa(y24)+"/第1集.mp4")
+	if err != nil {
+		t.Fatalf("Get y24 video: %v", err)
+	}
+	if vo, ok := v.(*videoObj); !ok || vo.bvid != "BV1b" {
+		t.Fatalf("y24 video = %T %+v", v, v)
+	}
+	// 4 段 obj.Path 含年份段
+	if !strings.HasSuffix(v.GetPath(), "/"+strconv.Itoa(y24)+"/第1集.mp4") {
+		t.Fatalf("video path = %s", v.GetPath())
+	}
+	// 年份校验：最新视频(2024) 挂在 2023 下 → 404
+	if _, err := d.Get(context.Background(), "/我的关注/测试UP/"+strconv.Itoa(y23)+"/最新视频.mp4"); !errs.IsObjectNotFound(err) {
+		t.Fatalf("wrong-year Get should 404: %v", err)
+	}
+	// 不存在的年份 → 404
+	if _, err := d.Get(context.Background(), "/我的关注/测试UP/2029/第1集.mp4"); !errs.IsObjectNotFound(err) {
+		t.Fatalf("missing year Get should 404: %v", err)
+	}
+}
+
+func TestGetLegacyThreeSegCompat(t *testing.T) {
+	d := seedUpWithYears(t, `{"code":0,"data":{"list":{"vlist":[
+		{"bvid":"BV1c","title":"最新视频","created":`+strconv.FormatInt(ts2024, 10)+`},
+		{"bvid":"BV1a","title":"第1集","created":`+strconv.FormatInt(ts2023, 10)+`},
+		{"bvid":"BV1b","title":"第1集","created":`+strconv.FormatInt(ts2024, 10)+`}
+	]},"page":{"count":3}}}`)
+	// 旧 3 段：消歧后缀名（跨年同名平铺时代必有后缀）→ 任意年份命中
+	v, err := d.Get(context.Background(), "/我的关注/测试UP/第1集_BV1b.mp4")
+	if err != nil {
+		t.Fatalf("legacy suffixed Get: %v", err)
+	}
+	if vo, ok := v.(*videoObj); !ok || vo.bvid != "BV1b" {
+		t.Fatalf("obj = %T %+v", v, v)
+	}
+	// 旧 3 段：跨年同名干净名 → 行级歧义 404（与旧平铺语义一致）
+	if _, err := d.Get(context.Background(), "/我的关注/测试UP/第1集.mp4"); !errs.IsObjectNotFound(err) {
+		t.Fatalf("row-ambiguous clean name should 404: %v", err)
+	}
+	// 旧 3 段：无扩展名回退（唯一名）
+	v, err = d.Get(context.Background(), "/我的关注/测试UP/最新视频")
+	if err != nil {
+		t.Fatalf("extensionless legacy Get: %v", err)
+	}
+	if vo, ok := v.(*videoObj); !ok || vo.bvid != "BV1c" {
+		t.Fatalf("obj = %T %+v", v, v)
+	}
+}
+
+func TestGetYearVsVideoNameAmbiguity(t *testing.T) {
+	// 视频标题恰好是 "2024"（2023 年发布）：Get(…/2024) → 年份目录（该年有内容）；
+	// Get(…/2024.mp4) → 视频文件（.mp4 消歧规则，spec §2）
+	d := seedUpWithYears(t, `{"code":0,"data":{"list":{"vlist":[
+		{"bvid":"BV1a","title":"2024","created":`+strconv.FormatInt(ts2023, 10)+`},
+		{"bvid":"BV1b","title":"别的视频","created":`+strconv.FormatInt(ts2024, 10)+`}
+	]},"page":{"count":2}}}`)
+	y24 := y(t, ts2024)
+	obj, err := d.Get(context.Background(), "/我的关注/测试UP/"+strconv.Itoa(y24))
+	if err != nil || !obj.IsDir() || obj.GetID() != "up_42_"+strconv.Itoa(y24) {
+		t.Fatalf("year seg should win: %v %+v", err, obj)
+	}
+	v, err := d.Get(context.Background(), "/我的关注/测试UP/"+strconv.Itoa(y24)+".mp4")
+	if err != nil {
+		t.Fatalf("video name Get: %v", err)
+	}
+	if vo, ok := v.(*videoObj); !ok || vo.bvid != "BV1a" {
+		t.Fatalf("obj = %T %+v", v, v)
+	}
+}
+
+func TestGetFavYearDirAndMismatch(t *testing.T) {
+	// 收藏夹年份 = FavTime
+	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/x/v3/fav/folder/created/list-all":
+			w.Write([]byte(`{"code":0,"data":{"list":[{"id":999,"title":"我的收藏夹"}]}}`))
+		case "/x/v3/fav/resource/list":
+			w.Write([]byte(`{"code":0,"data":{"info":{"media_count":2},"medias":[
+				{"bvid":"BV1a","title":"旧收藏","cover":"","fav_time":` + strconv.FormatInt(ts2023, 10) + `,"ugc":{"first_cid":1}},
+				{"bvid":"BV1b","title":"新收藏","cover":"","fav_time":` + strconv.FormatInt(ts2024, 10) + `,"ugc":{"first_cid":2}}]}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+	for _, dir := range []model.Obj{
+		dirObj(t, "/我的收藏", dirFavID),
+		dirObj(t, "/我的收藏/我的收藏夹", favFolderPrefix+"999"),
+	} {
+		if _, err := d.List(context.Background(), dir, model.ListArgs{}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	y23, y24 := y(t, ts2023), y(t, ts2024)
+	obj, err := d.Get(context.Background(), "/我的收藏/我的收藏夹/"+strconv.Itoa(y23))
+	if err != nil || !obj.IsDir() || obj.GetID() != "fav_999_"+strconv.Itoa(y23) {
+		t.Fatalf("fav year dir = %v %+v", err, obj)
+	}
+	v, err := d.Get(context.Background(), "/我的收藏/我的收藏夹/"+strconv.Itoa(y23)+"/旧收藏.mp4")
+	if err != nil {
+		t.Fatalf("fav year video: %v", err)
+	}
+	if vo, ok := v.(*videoObj); !ok || vo.bvid != "BV1a" || vo.cid != 1 {
+		t.Fatalf("obj = %T %+v", v, v)
+	}
+	// FavTime 年份校验不匹配 → 404
+	if _, err := d.Get(context.Background(), "/我的收藏/我的收藏夹/"+strconv.Itoa(y23)+"/新收藏.mp4"); !errs.IsObjectNotFound(err) {
+		t.Fatalf("wrong-year fav Get should 404: %v", err)
+	}
+	if _, err := d.Get(context.Background(), "/我的收藏/我的收藏夹/"+strconv.Itoa(y24)+"/旧收藏.mp4"); !errs.IsObjectNotFound(err) {
+		t.Fatalf("wrong-year fav Get should 404: %v", err)
 	}
 }
