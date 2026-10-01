@@ -32,6 +32,7 @@ type Media struct {
 	Release   string   `xml:"release"`
 	Premiered string   `xml:"premiered"`
 	Year      string   `xml:"year"`
+	Aired     string   `xml:"aired,omitempty"` // 单集首播/发布日期（episodedetails）；仅剧集 nfo 设置
 	Plot      Inner    `xml:"plot"`
 	Outline   Inner    `xml:"outline"`
 	RunTime   string   `xml:"runtime"`

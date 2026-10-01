@@ -42,3 +42,6 @@ opencode.jsonc
 .codegraph/
 openlist
 migrate-media
+
+# git worktrees
+.worktrees/

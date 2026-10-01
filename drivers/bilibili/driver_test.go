@@ -3,6 +3,7 @@ package bilibili
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -113,13 +114,31 @@ func TestListUpperVideos(t *testing.T) {
 		}
 		t.Fatalf("unexpected path %s", r.URL.Path)
 	})
-	d.mixinKey = "ea1db124af3c7062474693fa704f4ff8" // arc/search 走 wbi 签名，注入避免 nav 前置请求
+	d.mixinKey = "ea1db124af3c7062474693fa704f4ff8"
+	wantYear := y(t, 1700000100)
 	objs, err := d.List(context.Background(), dirObj(t, "/我的关注/测试UP", upFolderPrefix+"42"), model.ListArgs{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+	// 父目录 List → 年份目录（不再是视频文件）
 	if len(objs) != 1 {
-		t.Fatalf("objs = %d", len(objs))
+		t.Fatalf("objs = %d, want 1 year folder", len(objs))
+	}
+	yf := objs[0]
+	if !yf.IsDir() || yf.GetName() != strconv.Itoa(wantYear) || yf.GetID() != "up_42_"+strconv.Itoa(wantYear) {
+		t.Fatalf("year folder = %q id=%q", yf.GetName(), yf.GetID())
+	}
+	if !yf.CreateTime().Equal(time.Date(wantYear, 1, 1, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("year Ctime = %v", yf.CreateTime())
+	}
+	// 年份目录：纯投影 List（该 mock 对额外 API 请求会 t.Fatal → 零 API 由测试结构保证）
+	objs, err = d.List(context.Background(),
+		dirObj(t, "/我的关注/测试UP/"+strconv.Itoa(wantYear), "up_42_"+strconv.Itoa(wantYear)), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("List year dir: %v", err)
+	}
+	if len(objs) != 1 {
+		t.Fatalf("year objs = %d", len(objs))
 	}
 	vo, ok := objs[0].(*videoObj)
 	if !ok {
@@ -168,9 +187,18 @@ func TestListFavVideos(t *testing.T) {
 		w.Write([]byte(`{"code":0,"data":{"info":{"media_count":1},"medias":[
 			{"bvid":"BV1b","title":"收藏的教程","cover":"http://i0.hdslb.com/c.jpg","fav_time":1700000200,"ugc":{"first_cid":555}}]}}`))
 	})
+	wantYear := y(t, 1700000200) // 收藏夹年份 = FavTime
 	objs, err := d.List(context.Background(), dirObj(t, "/我的收藏/我的收藏夹", favFolderPrefix+"999"), model.ListArgs{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if len(objs) != 1 || objs[0].GetName() != strconv.Itoa(wantYear) || objs[0].GetID() != "fav_999_"+strconv.Itoa(wantYear) {
+		t.Fatalf("year folder objs = %+v", objs)
+	}
+	objs, err = d.List(context.Background(),
+		dirObj(t, "/我的收藏/我的收藏夹/"+strconv.Itoa(wantYear), "fav_999_"+strconv.Itoa(wantYear)), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("List year dir: %v", err)
 	}
 	vo, ok := objs[0].(*videoObj)
 	if !ok {
@@ -182,7 +210,7 @@ func TestListFavVideos(t *testing.T) {
 }
 
 func TestListVideosDupTitles(t *testing.T) {
-	// 同 UP 下重复标题：追加 bvid 消歧
+	// 同 UP 同年重复标题：年份目录内追加 bvid 消歧
 	d := listDriver(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"code":0,"data":{"list":{"vlist":[
 			{"bvid":"BV1a","title":"第1集","created":1700000100},
@@ -191,9 +219,17 @@ func TestListVideosDupTitles(t *testing.T) {
 		]},"page":{"count":3}}}`))
 	})
 	d.mixinKey = "ea1db124af3c7062474693fa704f4ff8"
+	wantYear := y(t, 1700000100)
 	objs, err := d.List(context.Background(), dirObj(t, "/我的关注/某UP", upFolderPrefix+"42"), model.ListArgs{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if len(objs) != 1 || objs[0].GetID() != "up_42_"+strconv.Itoa(wantYear) {
+		t.Fatalf("objs = %+v", objs)
+	}
+	objs, err = d.List(context.Background(), dirObj(t, "/我的关注/某UP/"+strconv.Itoa(wantYear), objs[0].GetID()), model.ListArgs{})
+	if err != nil {
+		t.Fatalf("List year dir: %v", err)
 	}
 	if len(objs) != 3 {
 		t.Fatalf("objs = %d", len(objs))

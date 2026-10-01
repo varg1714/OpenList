@@ -93,6 +93,119 @@ func TestTVShowEpisodeThumb(t *testing.T) {
 	}
 }
 
+// TestTVShowShowImagesListing：fanart_count>0 且剧集带 thumb 时，剧根视图附加
+// poster.jpg（第 1 个候选）+ fanart1..N.jpg（后续候选，按剧集编号顺序）；
+// 季视图不附加；候选不足时不输出多余占位。
+func TestTVShowShowImagesListing(t *testing.T) {
+	d := setupWithThumb(t)
+	d.FanartCount = 3
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/B1.mp4", "b1"); err != nil {
+		t.Fatalf("write B1: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	// 剧根视图：候选 = 根视频 AAA.mkv（第 1 集）→ poster.jpg；季内 A1/B1 → fanart1/2.jpg
+	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list root: %+v", err)
+	}
+	got := sortedNames(objs)
+	for _, want := range []string{"poster.jpg", "fanart1.jpg", "fanart2.jpg"} {
+		if !containsStr(got, want) {
+			t.Errorf("root view must attach %s, got %v", want, got)
+		}
+	}
+	if containsStr(got, "fanart3.jpg") {
+		t.Errorf("no extra image beyond candidates, got %v", got)
+	}
+	// 季视图不附加剧根封面
+	objs, err = d.List(context.Background(), &model.Object{Name: "S02", Path: "/Movies/S02", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list season: %+v", err)
+	}
+	if got := sortedNames(objs); containsStr(got, "poster.jpg") || containsStr(got, "fanart1.jpg") {
+		t.Errorf("season view must not attach show images, got %v", got)
+	}
+}
+
+// TestTVShowShowImagesGet：poster/fanart 占位可经 Get 反查（编号 ↔ 候选序号一致）。
+func TestTVShowShowImagesGet(t *testing.T) {
+	d := setupWithThumb(t)
+	d.FanartCount = 3
+	if err := writeDirOrdered(t, "/Movies/2024年"); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeEpisodeFile(t, "/Movies/2024年/A1.mp4", "a1"); err != nil {
+		t.Fatalf("write A1: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	for _, name := range []string{"poster.jpg", "fanart1.jpg"} {
+		obj, err := d.Get(context.Background(), "/Movies/"+name)
+		if err != nil {
+			t.Fatalf("get %s: %+v", name, err)
+		}
+		if obj.GetName() != name {
+			t.Errorf("image object name mismatch for %s, got %q", name, obj.GetName())
+		}
+	}
+	// 候选只有 2 个（AAA + A1），fanart2 越界 → 404
+	if _, err := d.Get(context.Background(), "/Movies/fanart2.jpg"); err == nil {
+		t.Error("fanart beyond candidates must not be served")
+	}
+	// 非剧根目录（季视图）下不提供
+	if _, err := d.Get(context.Background(), "/Movies/S02/poster.jpg"); err == nil {
+		t.Error("poster inside season view must not be served")
+	}
+}
+
+// TestTVShowShowImagesRealFileWins：真实同名 poster.jpg 存在时展示真实文件、
+// 不附加虚拟占位（候选槽位直接跳过，不后移占用其它名字）。
+func TestTVShowShowImagesRealFileWins(t *testing.T) {
+	d := setupWithThumb(t)
+	d.FanartCount = 3
+	if err := writeDownstreamFile(t, "/Movies/poster.jpg", "real-poster"); err != nil {
+		t.Fatalf("write real poster: %v", err)
+	}
+	markTVShow(t, d, `{"tv_show":true}`)
+	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list root: %+v", err)
+	}
+	if got := sortedNames(objs); !containsStr(got, "poster.jpg") || containsStr(got, "fanart1.jpg") {
+		t.Errorf("real poster wins and sole candidate slot skipped (no fanart1), got %v", got)
+	}
+	if got := readNFOLink(t, d, "/Movies/poster.jpg"); got != "real-poster" {
+		t.Errorf("real poster file must be served, got %q", got)
+	}
+}
+
+// TestTVShowShowImagesDisabled：fanart_count=0（默认）不附加任何剧根封面。
+func TestTVShowShowImagesDisabled(t *testing.T) {
+	d := setupWithThumb(t)
+	markTVShow(t, d, `{"tv_show":true}`)
+	objs, err := d.List(context.Background(), &model.Object{Name: "Movies", Path: "/Movies", IsFolder: true}, model.ListArgs{Refresh: true})
+	if err != nil {
+		t.Fatalf("list root: %+v", err)
+	}
+	if got := sortedNames(objs); containsStr(got, "poster.jpg") || containsStr(got, "fanart1.jpg") {
+		t.Errorf("fanart_count=0 must attach nothing, got %v", got)
+	}
+}
+
+func containsStr(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // TestTVShowEpisodeThumbRealFileWins：真实目录存在同名 -thumb.jpg 时展示真实文件，
 // 不附加虚拟对象。
 func TestTVShowEpisodeThumbRealFileWins(t *testing.T) {
