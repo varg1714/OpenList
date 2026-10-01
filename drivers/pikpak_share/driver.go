@@ -24,10 +24,6 @@ type PikPakShare struct {
 	PassCodeToken string
 }
 
-func (d *PikPakShare) Config() driver.Config {
-	return config
-}
-
 func (d *PikPakShare) GetAddition() driver.Additional {
 	return &d.Addition
 }

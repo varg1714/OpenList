@@ -231,7 +231,7 @@ func GetMkdirConfig() []driver.Item {
 		{
 			Name:     "dirType",
 			Type:     conf.TypeSelect,
-			Default:  "1",
+			Default:  "0",
 			Options:  "0,1",
 			Help:     "0:订阅文件夹;1:虚拟文件夹",
 			Required: true,
