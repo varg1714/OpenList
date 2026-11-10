@@ -127,7 +127,7 @@ func (p *Cloud115) Status(task *tool.DownloadTask) (*tool.Status, error) {
 			s.Completed = t.IsDone()
 			s.TotalBytes = t.Size
 			s.FileInfo = tool.FileInfo{
-				FileId: t.FileId,
+				FileId: offlineFileID(t.FileId, t.DelFileId),
 			}
 			if t.IsFailed() {
 				s.Err = fmt.Errorf(t.GetStatus())
@@ -137,6 +137,16 @@ func (p *Cloud115) Status(task *tool.DownloadTask) (*tool.Status, error) {
 	}
 	s.Err = fmt.Errorf("the task has been deleted")
 	return nil, nil
+}
+
+// offlineFileID returns the actual file created by an offline task.
+// For ed2k tasks 115 reports the save directory in FileId and the single
+// downloaded file in DelFileId, so the latter must win when they differ.
+func offlineFileID(fileID, delFileID string) string {
+	if delFileID != "" && delFileID != fileID {
+		return delFileID
+	}
+	return fileID
 }
 
 var _ tool.Tool = (*Cloud115)(nil)

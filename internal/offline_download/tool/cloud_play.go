@@ -15,6 +15,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -74,6 +75,40 @@ func downloadMagnet(ctx context.Context, driverType string, driverPath string, m
 
 }
 
+var ed2kFileSizeRegexp = regexp.MustCompile(`^ed2k://\|file\|[^|]+\|(\d+)\|`)
+
+// ed2kFileSize returns the file size encoded in an ed2k URI, or 0 when the
+// URI is not a valid ed2k file link.
+func ed2kFileSize(magnet string) int64 {
+	matches := ed2kFileSizeRegexp.FindStringSubmatch(magnet)
+	if len(matches) != 2 {
+		return 0
+	}
+	size, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil || size <= 0 {
+		return 0
+	}
+	return size
+}
+
+// filterEd2kFile narrows the files to the one described by an ed2k magnet.
+// 115 reports the save directory as the offline task's file ID, so the
+// directory listing may contain other works. Matching the exact ed2k size
+// prevents caching a different file from the same directory.
+func filterEd2kFile(magnet string, files []model.Obj) []model.Obj {
+	size := ed2kFileSize(magnet)
+	if size <= 0 {
+		return files
+	}
+	matched := utils.SliceFilter(files, func(f model.Obj) bool {
+		return f.GetSize() == size
+	})
+	if len(matched) != 1 {
+		return files
+	}
+	return matched
+}
+
 func cacheFiles(driverType, magnet, lookingFileName string, files []model.Obj, cacheOptionFunc func(obj model.Obj) map[string]string) model.Obj {
 
 	// 仅包含100M大小以上的文件
@@ -85,6 +120,7 @@ func cacheFiles(driverType, magnet, lookingFileName string, files []model.Obj, c
 	slices.SortFunc(validFiles, func(a, b model.Obj) int {
 		return cmp.Compare(a.GetName(), b.GetName())
 	})
+	validFiles = filterEd2kFile(magnet, validFiles)
 
 	if len(validFiles) == 0 {
 		return nil
