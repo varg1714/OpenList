@@ -109,6 +109,22 @@ func filterEd2kFile(magnet string, files []model.Obj) []model.Obj {
 	return matched
 }
 
+// filterActualFile narrows the listing to the concrete file reported by the
+// offline task (115 ed2k exposes it as delete_file_id). If the listing does
+// not contain that ID, keep the full list so cacheFiles can still fall back.
+func filterActualFile(actualFileID string, files []model.Obj) []model.Obj {
+	if actualFileID == "" {
+		return files
+	}
+	matched := utils.SliceFilter(files, func(f model.Obj) bool {
+		return f.GetID() == actualFileID
+	})
+	if len(matched) == 0 {
+		return files
+	}
+	return matched
+}
+
 func cacheFiles(driverType, magnet, lookingFileName string, files []model.Obj, cacheOptionFunc func(obj model.Obj) map[string]string) model.Obj {
 
 	// 仅包含100M大小以上的文件

@@ -2,7 +2,7 @@ package _115
 
 import "testing"
 
-func TestOfflineFileID(t *testing.T) {
+func TestOfflineActualFileID(t *testing.T) {
 	tests := []struct {
 		name      string
 		fileID    string
@@ -10,22 +10,22 @@ func TestOfflineFileID(t *testing.T) {
 		want      string
 	}{
 		{
-			name:      "ed2k task uses delete file id",
+			name:      "ed2k task exposes the concrete file",
 			fileID:    "3137916453630508845",
 			delFileID: "3559332724521043416",
 			want:      "3559332724521043416",
 		},
 		{
-			name:      "torrent task keeps file id",
+			name:      "torrent task has no separate file",
 			fileID:    "3559332724521043416",
 			delFileID: "3559332724521043416",
-			want:      "3559332724521043416",
+			want:      "",
 		},
 		{
-			name:      "empty delete file id falls back",
+			name:      "empty delete file id",
 			fileID:    "3559332724521043416",
 			delFileID: "",
-			want:      "3559332724521043416",
+			want:      "",
 		},
 		{
 			name:      "both empty",
@@ -37,8 +37,8 @@ func TestOfflineFileID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := offlineFileID(tt.fileID, tt.delFileID); got != tt.want {
-				t.Fatalf("offlineFileID(%q, %q) = %q, want %q", tt.fileID, tt.delFileID, got, tt.want)
+			if got := offlineActualFileID(tt.fileID, tt.delFileID); got != tt.want {
+				t.Fatalf("offlineActualFileID(%q, %q) = %q, want %q", tt.fileID, tt.delFileID, got, tt.want)
 			}
 		})
 	}

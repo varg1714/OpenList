@@ -129,6 +129,7 @@ func playSingleMagnet(ctx context.Context, session cloudPlaySession, magnet mode
 	if err != nil {
 		return nil, err
 	}
+	fileList = filterActualFile(status.FileInfo.ActualFileId, fileList)
 
 	switch session.driverType {
 	case "PikPak":

@@ -24,6 +24,9 @@ type Status struct {
 type FileInfo struct {
 	FileId string
 	Kind   string
+	// ActualFileId is the concrete file created by a task when FileId refers to
+	// a container directory (115 ed2k reports the save directory in FileId).
+	ActualFileId string
 }
 
 type Tool interface {

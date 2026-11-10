@@ -89,3 +89,37 @@ func TestFilterEd2kFileKeepsAllWhenSizeIsAmbiguous(t *testing.T) {
 
 	require.Len(t, got, 2)
 }
+
+func TestFilterActualFileMatchesByID(t *testing.T) {
+	files := []model.Obj{
+		&model.Object{ID: "first", Name: "first.mp4", Size: 100},
+		&model.Object{ID: "second", Name: "second.mp4", Size: 200},
+	}
+
+	got := filterActualFile("second", files)
+
+	require.Len(t, got, 1)
+	require.Equal(t, "second", got[0].GetID())
+}
+
+func TestFilterActualFileKeepsAllWhenIDMissing(t *testing.T) {
+	files := []model.Obj{
+		&model.Object{ID: "first", Name: "first.mp4", Size: 100},
+		&model.Object{ID: "second", Name: "second.mp4", Size: 200},
+	}
+
+	got := filterActualFile("missing", files)
+
+	require.Len(t, got, 2)
+}
+
+func TestFilterActualFileKeepsAllWhenEmpty(t *testing.T) {
+	files := []model.Obj{
+		&model.Object{ID: "first", Name: "first.mp4", Size: 100},
+		&model.Object{ID: "second", Name: "second.mp4", Size: 200},
+	}
+
+	got := filterActualFile("", files)
+
+	require.Len(t, got, 2)
+}
