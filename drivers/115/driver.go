@@ -236,6 +236,27 @@ func (d *Pan115) OfflineList(ctx context.Context) ([]*driver115.OfflineTask, err
 	return resp.Tasks, nil
 }
 
+// OfflineListPage returns one page of offline tasks, the cursor for the next
+// page and whether the provider reported more rows.
+func (d *Pan115) OfflineListPage(ctx context.Context, page int64) ([]*driver115.OfflineTask, int64, bool, error) {
+	resp, err := d.client.ListOfflineTask(page)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	next, more := offlinePageCursor(resp)
+	return resp.Tasks, next, more, nil
+}
+
+// offlinePageCursor derives the next page cursor from the provider response.
+// 115 echoes the page it served, so using that value works whether the provider
+// counts pages from 0 or 1. A page shorter than page_row is the last page;
+// page_count is not used because its base is not guaranteed.
+func offlinePageCursor(resp driver115.OfflineTaskResp) (int64, bool) {
+	next := resp.Page + 1
+	more := resp.PageRow > 0 && int64(len(resp.Tasks)) >= resp.PageRow
+	return next, more
+}
+
 func (d *Pan115) OfflineDownload(ctx context.Context, uris []string, dstDir model.Obj) ([]string, error) {
 	return d.client.AddOfflineTaskURIs(uris, dstDir.GetID(), driver115.WithAppVer(appVer))
 }

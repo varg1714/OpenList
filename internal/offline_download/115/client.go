@@ -2,7 +2,12 @@ package _115
 
 import (
 	"context"
+	"encoding/base32"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
@@ -12,6 +17,8 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/offline_download/tool"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	sdk115 "github.com/SheltonZhu/115driver/pkg/driver"
 )
 
 type Cloud115 struct {
@@ -75,7 +82,17 @@ func (p *Cloud115) AddURL(args *tool.AddUrlArgs) (string, error) {
 
 	hashs, err := driver115.OfflineDownload(ctx, []string{args.Url}, parentDir)
 	if err != nil || len(hashs) < 1 {
-		return "", fmt.Errorf("failed to add offline download task: %w", err)
+		// 115 rejects a duplicate submission with errcode 10008 ("任务已存在").
+		// The existing task is still the right one to poll, so reuse it instead
+		// of treating an idempotent add as a playback failure.
+		if hash, recovered := recoverExistingOfflineTask(ctx, driver115, args.Url); recovered {
+			utils.Log.Infof("reusing existing 115 offline task %s for %s", hash, args.Url)
+			return hash, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to add offline download task: %w", err)
+		}
+		return "", errors.New("failed to add offline download task: 115 returned no task hash")
 	}
 
 	return hashs[0], nil
@@ -149,6 +166,91 @@ func offlineActualFileID(fileID, delFileID string) string {
 		return delFileID
 	}
 	return ""
+}
+
+// magnetInfoHash extracts the BitTorrent info hash from a magnet URI as
+// lowercase hex. Both the 40-character hex and 32-character base32 forms of
+// the btih parameter are accepted.
+func magnetInfoHash(magnetURI string) (string, bool) {
+	parsed, err := url.Parse(magnetURI)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "magnet") {
+		return "", false
+	}
+	const prefix = "urn:btih:"
+	for _, xt := range parsed.Query()["xt"] {
+		if !strings.HasPrefix(strings.ToLower(xt), prefix) {
+			continue
+		}
+		raw := xt[len(prefix):]
+		switch len(raw) {
+		case 40:
+			decoded, decodeErr := hex.DecodeString(raw)
+			if decodeErr == nil && len(decoded) == 20 {
+				return hex.EncodeToString(decoded), true
+			}
+		case 32:
+			decoded, decodeErr := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(raw))
+			if decodeErr == nil && len(decoded) == 20 {
+				return hex.EncodeToString(decoded), true
+			}
+		}
+	}
+	return "", false
+}
+
+func findOfflineTaskHash(infoHash string, tasks []*sdk115.OfflineTask) (string, bool) {
+	if infoHash == "" {
+		return "", false
+	}
+	for _, task := range tasks {
+		if task != nil && strings.EqualFold(task.InfoHash, infoHash) {
+			return task.InfoHash, true
+		}
+	}
+	return "", false
+}
+
+// maxOfflineTaskPages bounds the duplicate-task search so a broken pagination
+// cursor can never turn playback into an unbounded request loop.
+const maxOfflineTaskPages = 20
+
+var listOfflineTasksPage = func(ctx context.Context, client *_115.Pan115, page int64) ([]*sdk115.OfflineTask, int64, bool, error) {
+	return client.OfflineListPage(ctx, page)
+}
+
+// recoverExistingOfflineTask reuses the offline task 115 already holds for the
+// same magnet. Submitting a duplicate returns errcode 10008 ("任务已存在"),
+// which the driver surfaces as a generic error, but the existing task is still
+// the correct one to poll.
+func recoverExistingOfflineTask(ctx context.Context, client *_115.Pan115, magnetURI string) (string, bool) {
+	infoHash, ok := magnetInfoHash(magnetURI)
+	if !ok {
+		return "", false
+	}
+	return findOfflineTaskHashAcrossPages(infoHash, func(page int64) ([]*sdk115.OfflineTask, int64, bool, error) {
+		return listOfflineTasksPage(ctx, client, page)
+	})
+}
+
+// findOfflineTaskHashAcrossPages walks the paginated offline task list until it
+// finds the info hash. The provider echoes the page it served, so the cursor is
+// taken from the response rather than assumed to be 0- or 1-based.
+func findOfflineTaskHashAcrossPages(infoHash string, fetch func(page int64) ([]*sdk115.OfflineTask, int64, bool, error)) (string, bool) {
+	page := int64(0)
+	for requests := 0; requests < maxOfflineTaskPages; requests++ {
+		tasks, next, more, err := fetch(page)
+		if err != nil || len(tasks) == 0 {
+			return "", false
+		}
+		if hash, ok := findOfflineTaskHash(infoHash, tasks); ok {
+			return hash, true
+		}
+		if !more || next <= page {
+			return "", false
+		}
+		page = next
+	}
+	return "", false
 }
 
 var _ tool.Tool = (*Cloud115)(nil)
