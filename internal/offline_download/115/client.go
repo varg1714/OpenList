@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
@@ -23,6 +25,7 @@ import (
 
 type Cloud115 struct {
 	refreshTaskCache bool
+	recoveredTasks   sync.Map
 }
 
 func (p *Cloud115) Name() string {
@@ -85,9 +88,10 @@ func (p *Cloud115) AddURL(args *tool.AddUrlArgs) (string, error) {
 		// 115 rejects a duplicate submission with errcode 10008 ("任务已存在").
 		// The existing task is still the right one to poll, so reuse it instead
 		// of treating an idempotent add as a playback failure.
-		if hash, recovered := recoverExistingOfflineTask(ctx, driver115, args.Url); recovered {
-			utils.Log.Infof("reusing existing 115 offline task %s for %s", hash, args.Url)
-			return hash, nil
+		if task, recovered := recoverExistingOfflineTask(ctx, driver115, args.Url); recovered {
+			utils.Log.Infof("reusing existing 115 offline task %s for %s", task.InfoHash, args.Url)
+			p.storeRecoveredTask(task)
+			return task.InfoHash, nil
 		}
 		if err != nil {
 			return "", fmt.Errorf("failed to add offline download task: %w", err)
@@ -116,6 +120,9 @@ func (p *Cloud115) Remove(task *tool.DownloadTask) error {
 }
 
 func (p *Cloud115) Status(task *tool.DownloadTask) (*tool.Status, error) {
+	if recovered, ok := p.recoveredTask(task.GID); ok {
+		return offlineTaskStatus(recovered), nil
+	}
 	storage, _, err := op.GetStorageAndActualPath(task.TempDir)
 	if err != nil {
 		return nil, err
@@ -130,28 +137,17 @@ func (p *Cloud115) Status(task *tool.DownloadTask) (*tool.Status, error) {
 		return nil, err
 	}
 
+	for _, t := range tasks {
+		if t.InfoHash == task.GID {
+			return offlineTaskStatus(t), nil
+		}
+	}
 	s := &tool.Status{
 		Progress:  0,
 		NewGID:    "",
 		Completed: false,
 		Status:    "the task has been deleted",
 		Err:       nil,
-	}
-	for _, t := range tasks {
-		if t.InfoHash == task.GID {
-			s.Progress = t.Percent
-			s.Status = t.GetStatus()
-			s.Completed = t.IsDone()
-			s.TotalBytes = t.Size
-			s.FileInfo = tool.FileInfo{
-				FileId:       t.FileId,
-				ActualFileId: offlineActualFileID(t.FileId, t.DelFileId),
-			}
-			if t.IsFailed() {
-				s.Err = fmt.Errorf(t.GetStatus())
-			}
-			return s, nil
-		}
 	}
 	s.Err = fmt.Errorf("the task has been deleted")
 	return nil, nil
@@ -198,16 +194,48 @@ func magnetInfoHash(magnetURI string) (string, bool) {
 	return "", false
 }
 
-func findOfflineTaskHash(infoHash string, tasks []*sdk115.OfflineTask) (string, bool) {
+func findOfflineTask(infoHash string, tasks []*sdk115.OfflineTask) (*sdk115.OfflineTask, bool) {
 	if infoHash == "" {
-		return "", false
+		return nil, false
 	}
 	for _, task := range tasks {
 		if task != nil && strings.EqualFold(task.InfoHash, infoHash) {
-			return task.InfoHash, true
+			return task, true
 		}
 	}
-	return "", false
+	return nil, false
+}
+
+func findOfflineTaskHash(infoHash string, tasks []*sdk115.OfflineTask) (string, bool) {
+	task, ok := findOfflineTask(infoHash, tasks)
+	if !ok {
+		return "", false
+	}
+	return task.InfoHash, true
+}
+
+// ed2kInfoHash extracts the ed2k file hash from an ed2k URI as lowercase hex.
+func ed2kInfoHash(ed2kURI string) (string, bool) {
+	parts := strings.Split(ed2kURI, "|")
+	if len(parts) < 6 || !strings.EqualFold(parts[0], "ed2k://") || !strings.EqualFold(parts[1], "file") {
+		return "", false
+	}
+	raw := parts[4]
+	if len(raw) != 32 {
+		return "", false
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil || len(decoded) != 16 {
+		return "", false
+	}
+	return hex.EncodeToString(decoded), true
+}
+
+func linkInfoHash(link string) (string, bool) {
+	if hash, ok := magnetInfoHash(link); ok {
+		return hash, true
+	}
+	return ed2kInfoHash(link)
 }
 
 // maxOfflineTaskPages bounds the duplicate-task search so a broken pagination
@@ -219,38 +247,90 @@ var listOfflineTasksPage = func(ctx context.Context, client *_115.Pan115, page i
 }
 
 // recoverExistingOfflineTask reuses the offline task 115 already holds for the
-// same magnet. Submitting a duplicate returns errcode 10008 ("任务已存在"),
-// which the driver surfaces as a generic error, but the existing task is still
-// the correct one to poll.
-func recoverExistingOfflineTask(ctx context.Context, client *_115.Pan115, magnetURI string) (string, bool) {
-	infoHash, ok := magnetInfoHash(magnetURI)
+// same magnet or ed2k link. Submitting a duplicate returns errcode 10008
+// ("任务已存在"), which the driver surfaces as a generic error, but the existing
+// task is still the correct one to poll.
+func recoverExistingOfflineTask(ctx context.Context, client *_115.Pan115, link string) (*sdk115.OfflineTask, bool) {
+	infoHash, ok := linkInfoHash(link)
 	if !ok {
-		return "", false
+		return nil, false
 	}
-	return findOfflineTaskHashAcrossPages(infoHash, func(page int64) ([]*sdk115.OfflineTask, int64, bool, error) {
+	return findOfflineTaskAcrossPages(infoHash, func(page int64) ([]*sdk115.OfflineTask, int64, bool, error) {
 		return listOfflineTasksPage(ctx, client, page)
 	})
 }
 
-// findOfflineTaskHashAcrossPages walks the paginated offline task list until it
+// findOfflineTaskAcrossPages walks the paginated offline task list until it
 // finds the info hash. The provider echoes the page it served, so the cursor is
 // taken from the response rather than assumed to be 0- or 1-based.
-func findOfflineTaskHashAcrossPages(infoHash string, fetch func(page int64) ([]*sdk115.OfflineTask, int64, bool, error)) (string, bool) {
+func findOfflineTaskAcrossPages(infoHash string, fetch func(page int64) ([]*sdk115.OfflineTask, int64, bool, error)) (*sdk115.OfflineTask, bool) {
 	page := int64(0)
 	for requests := 0; requests < maxOfflineTaskPages; requests++ {
 		tasks, next, more, err := fetch(page)
 		if err != nil || len(tasks) == 0 {
-			return "", false
+			return nil, false
 		}
-		if hash, ok := findOfflineTaskHash(infoHash, tasks); ok {
-			return hash, true
+		if task, ok := findOfflineTask(infoHash, tasks); ok {
+			return task, true
 		}
 		if !more || next <= page {
-			return "", false
+			return nil, false
 		}
 		page = next
 	}
-	return "", false
+	return nil, false
+}
+
+// recoveredTaskTTL bounds how long a reused task snapshot may answer status
+// polls. A snapshot is only a shortcut for the playback that reused it.
+const recoveredTaskTTL = 5 * time.Minute
+
+type recoveredTaskSnapshot struct {
+	task *sdk115.OfflineTask
+	at   time.Time
+}
+
+func (p *Cloud115) storeRecoveredTask(task *sdk115.OfflineTask) {
+	if task == nil || task.InfoHash == "" {
+		return
+	}
+	p.recoveredTasks.Store(task.InfoHash, recoveredTaskSnapshot{task: task, at: time.Now()})
+}
+
+// recoveredTask returns a reused task only when the snapshot can already answer
+// the status poll. In-progress snapshots are stale and must not mask the live
+// task list, or the poll would loop until the download timeout.
+func (p *Cloud115) recoveredTask(gid string) (*sdk115.OfflineTask, bool) {
+	value, ok := p.recoveredTasks.Load(gid)
+	if !ok {
+		return nil, false
+	}
+	snapshot, ok := value.(recoveredTaskSnapshot)
+	if !ok || snapshot.task == nil || time.Since(snapshot.at) > recoveredTaskTTL {
+		p.recoveredTasks.Delete(gid)
+		return nil, false
+	}
+	if !snapshot.task.IsDone() && !snapshot.task.IsFailed() {
+		return nil, false
+	}
+	return snapshot.task, true
+}
+
+func offlineTaskStatus(t *sdk115.OfflineTask) *tool.Status {
+	s := &tool.Status{
+		Progress:   t.Percent,
+		Completed:  t.IsDone(),
+		Status:     t.GetStatus(),
+		TotalBytes: t.Size,
+		FileInfo: tool.FileInfo{
+			FileId:       t.FileId,
+			ActualFileId: offlineActualFileID(t.FileId, t.DelFileId),
+		},
+	}
+	if t.IsFailed() {
+		s.Err = errors.New(t.GetStatus())
+	}
+	return s
 }
 
 var _ tool.Tool = (*Cloud115)(nil)
